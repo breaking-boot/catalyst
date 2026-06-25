@@ -1,2 +1,5 @@
 # Zip files
 *.zip
+
+# Reference files
+reference_data/

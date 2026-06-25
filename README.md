@@ -2,7 +2,7 @@
 
 A Manifest V3 Chrome extension that augments boot.dev with a few quality-of-life additions:
 
-1. **All-time XP leaderboard** — shows the all-time league XP leaders that boot.dev already fetches but does not display as a dedicated section.
+1. **All-time XP leaderboard** — adds a global all-time XP section to the leaderboard page.
 2. **Cumulative profile XP** — adds lifetime XP to public user profile pages.
 3. **Boss-event tracker** — tracks current/event-high/all-time-high Boots Aura, boss damage, chest progress, and shows an in-page toast when the current aura is near the event high.
 
@@ -36,12 +36,15 @@ To pick up local code changes, return to `chrome://extensions` and click the rel
 
 The extension runs automatically on `www.boot.dev`.
 
-- On `https://www.boot.dev/leaderboard`, it injects an all-time league XP section near the leaderboard content.
-- On public profile pages like `https://www.boot.dev/u/<username>`, it adds `Total XP` near the profile header.
-- When boot.dev fetches `/v1/boss_events_progress`, it shows a fixed boss tracker panel in the bottom-right corner.
+- On `https://www.boot.dev/leaderboard`, it adds **Top All-Time Learners** below the native **Top Daily Learners** section using `/v1/leaderboard_xp/alltime`.
+- On public profile pages like `https://www.boot.dev/u/<username>`, it adds `Total XP` below the native level line in the profile header.
+- On boot.dev pages, it shows the boss tracker once boss-event data has been loaded.
+- Drag the boss tracker header to reposition it. The position persists across pages.
+- Use the `-` / `+` boss tracker button to minimize or expand it. The minimized view still shows `Boss event - Current Aura: <aura>%`.
 - Use the boss tracker **reset** button to clear the current event stats while keeping the all-time aura high.
+- Boss-event data refreshes in the background about every 30 seconds. Navigating within boot.dev resets that 30-second timer and triggers a fresh fetch.
 
-No extra sign-in flow is required. The extension only reads JSON responses that the boot.dev page already fetches.
+No extra sign-in flow is required. The extension reads JSON responses that the boot.dev page fetches, and it can ask the page context to refresh the boss-event and all-time leaderboard endpoints with the existing boot.dev session.
 
 ## How It Works
 
@@ -51,7 +54,7 @@ boot.dev is a Nuxt/Vue single-page app with rebuilt CSS class names, so the exte
 page fetch/XHR -> injected.js clone -> window.postMessage -> content.js router -> UI/storage
 ```
 
-`injected.js` runs in the page context and wraps `fetch` plus `XMLHttpRequest`. It clones JSON responses from `api.boot.dev` and relays them to `content.js`. `content.js` runs as the content script, routes each response by URL, injects UI, and stores boss-event state in `chrome.storage.local`.
+`injected.js` runs in the page context and wraps `fetch` plus `XMLHttpRequest`. It clones JSON responses from `api.boot.dev` and relays them to `content.js`. `content.js` runs as the content script, routes each response by URL, injects UI, stores boss-event state in `chrome.storage.local`, and requests route-specific refreshes through the page-context script when needed.
 
 ## Development
 
@@ -67,6 +70,7 @@ node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); consol
 The reference captures and API docs live outside the Chrome load target:
 
 - `reference_data/http_responses_from_api_endpoints/`
+- `reference_data/har_files/`
 - `reference_data/webpage_raw_html/`
 - `reference_data/bootdev_api_info/bootdev_openapi.yaml`
 - `reference_data/bootdev_api_info/old_openapi.yaml`
@@ -74,11 +78,13 @@ The reference captures and API docs live outside the Chrome load target:
 ## Completed
 
 - Replaced placeholder response-field guesses with fields from captured JSON.
-- Confirmed all-time league XP arrives via `/v1/league_leaderboard_xp/alltime`.
-- Kept support for `/v1/leaderboard_xp/alltime` in the router.
+- Moved the custom leaderboard section to global `/v1/leaderboard_xp/alltime`.
+- Scoped the all-time leaderboard UI to `/leaderboard` only.
 - Switched cumulative profile XP to the public profile response, where `data.XP` is present.
+- Moved cumulative profile XP into the native-looking profile header area below the level line.
 - Confirmed boss new-event detection can key off `Event.UUID`.
 - Mapped boss progress fields: `XPBonus`, `XPTotal`, `XPUser`, `Event.HealthPoints`, and `Rewards`.
+- Added boss tracker background refresh, SPA route refresh resets, minimization, and drag-position persistence.
 - Added semantic/text-landmark injection anchors instead of relying on hashed CSS classes.
 - Updated `bootdev_openapi.yaml` with response schemas from the captured data and useful challenge schema details from `old_openapi.yaml`.
 - Moved reference data out of the Chrome extension load directory.

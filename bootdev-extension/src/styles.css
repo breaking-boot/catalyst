@@ -1,80 +1,189 @@
 /* styles.css — injected UI. Prefixed with be- to avoid clashing with the site. */
 
-.be-card {
-  margin: 16px 0;
-  padding: 16px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.04);
-  color: #e8e8e8;
+.be-profile-total-xp {
+  margin-top: 4px;
+  color: #d1d5db;
+  font-family: inherit;
+  font-size: 14px;
+  line-height: 1.35;
+}
+.be-profile-total-xp strong {
+  color: #fff;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.be-native-leaderboard {
+  width: 100%;
+  margin: 18px 0 22px;
+  color: #fff;
   font-family: inherit;
 }
-.be-title {
+.be-native-title {
   margin: 0 0 12px;
-  font-size: 16px;
-  font-weight: 500;
+  color: #fff;
+  font-family: inherit;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.25;
 }
-.be-list {
-  list-style: none;
-  margin: 0;
-  padding: 0;
+.be-native-grid-wrap {
+  width: 100%;
 }
-.be-row {
+.be-native-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.be-leader-card {
+  display: block;
+  width: 100%;
+  height: 72px;
+  border: 1px solid #4b5563;
+  background: transparent;
+  color: inherit;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.be-leader-card:hover {
+  border-color: #d6ad55;
+  background: rgba(255, 255, 255, 0.03);
+}
+.be-leader-link {
   display: flex;
+  height: 100%;
   align-items: center;
-  gap: 12px;
-  padding: 6px 0;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  gap: 10px;
+  padding: 8px;
+  color: inherit;
+  text-decoration: none;
 }
-.be-rank {
-  width: 28px;
-  text-align: right;
-  opacity: 0.6;
+.be-leader-rank {
+  width: 32px;
+  flex: 0 0 32px;
+  color: #9ca3af;
+  font-size: 14px;
+  text-align: center;
   font-variant-numeric: tabular-nums;
 }
-.be-name {
-  flex: 1;
+.be-leader-avatar {
+  position: relative;
+  display: inline-flex;
+  width: 40px;
+  height: 40px;
+  flex: 0 0 40px;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  border: 1px solid #4b5563;
+  border-radius: 50%;
+  background: #1f2937;
 }
-.be-xp {
-  font-variant-numeric: tabular-nums;
-  opacity: 0.85;
+.be-leader-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
-
-.be-badge {
-  display: inline-block;
-  margin: 12px 0;
-  padding: 6px 12px;
-  border-radius: 8px;
-  background: rgba(120, 180, 255, 0.15);
-  color: #cfe3ff;
+.be-leader-avatar-fallback {
+  color: #f3f4f6;
+  font-size: 15px;
+  font-weight: 600;
+}
+.be-leader-copy {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  flex-direction: column;
+}
+.be-leader-name {
+  margin-bottom: 4px;
+  overflow: hidden;
+  color: #fff;
+  font-size: 15px;
   font-weight: 500;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.be-leader-xp {
+  overflow: hidden;
+  color: #d1d5db;
+  font-size: 14px;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 
-/* Boss panel — fixed, draggable-free, bottom-right */
+@media (min-width: 1280px) {
+  .be-native-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (min-width: 1536px) {
+  .be-native-grid {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+
+/* Boss panel */
 .be-boss-panel {
   position: fixed;
   right: 16px;
   bottom: 16px;
   z-index: 99999;
-  width: 280px;
+  width: min(320px, calc(100vw - 24px));
   padding: 12px 14px;
-  border-radius: 12px;
+  border-radius: 8px;
   border: 1px solid rgba(255, 255, 255, 0.14);
   background: rgba(20, 20, 24, 0.92);
   color: #eee;
   font-family: inherit;
   font-size: 13px;
   backdrop-filter: blur(6px);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.36);
+}
+.be-boss-panel.be-positioned {
+  right: auto;
+  bottom: auto;
+}
+.be-boss-panel.be-dragging {
+  user-select: none;
+}
+.be-boss-panel.be-boss-minimized {
+  width: min(340px, calc(100vw - 24px));
+  padding: 9px 10px;
 }
 .be-boss-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
+  justify-content: space-between;
+  gap: 10px;
   margin-bottom: 10px;
   font-weight: 500;
 }
+.be-boss-minimized .be-boss-head {
+  margin-bottom: 0;
+}
+.be-boss-drag-handle {
+  cursor: move;
+  touch-action: none;
+}
+.be-boss-min-title {
+  min-width: 0;
+  overflow: hidden;
+  line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.be-boss-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  gap: 6px;
+}
 .be-boss-head button {
   font-size: 11px;
+  min-width: 26px;
+  min-height: 24px;
   padding: 2px 8px;
   border-radius: 6px;
   border: 1px solid rgba(255, 255, 255, 0.2);
@@ -101,6 +210,10 @@
 .be-boss-grid span {
   font-size: 11px;
   opacity: 0.6;
+}
+.be-boss-drag-active {
+  cursor: move;
+  user-select: none;
 }
 
 /* Toast */
