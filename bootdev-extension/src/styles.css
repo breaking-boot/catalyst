@@ -1,4 +1,4 @@
-/* styles.css — injected UI. Prefixed with be- to avoid clashing with the site. */
+/* styles.css - injected UI. Prefixed with be- to avoid clashing with the site. */
 
 .be-profile-total-xp {
   margin-top: 4px;
@@ -12,23 +12,76 @@
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+.be-profile-level-xp {
+  margin-top: 2px;
+  color: #e5e7eb;
+  font-variant-numeric: tabular-nums;
+}
+.be-profile-remaining-xp {
+  margin-top: 1px;
+  color: #9ca3af;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.be-next-lesson-nav {
+  position: relative;
+  display: flex;
+  min-height: 50px;
+  align-items: center;
+  justify-content: center;
+  padding: 16px 12px;
+  border-radius: 2px;
+  color: #fde9b0;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.be-next-lesson-nav:hover {
+  color: #fff;
+}
+.be-next-lesson-nav::after {
+  content: "";
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  left: 12px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #e5ae3c, transparent);
+  opacity: 0.55;
+}
+#mobile-menu .be-next-lesson-nav {
+  display: block;
+  min-height: 0;
+  padding: 12px;
+  color: #fde9b0;
+  font-size: 16px;
+}
+#mobile-menu .be-next-lesson-nav::after {
+  display: none;
+}
 
 .be-native-leaderboard {
   width: 100%;
-  margin: 18px 0 22px;
+  margin: 16px 0 22px;
   color: #fff;
   font-family: inherit;
 }
 .be-native-title {
-  margin: 0 0 12px;
+  margin: 0 0 8px;
+  padding-left: 16px;
   color: #fff;
-  font-family: inherit;
-  font-size: 20px;
-  font-weight: 600;
+  font-family: Arcuata, serif;
+  font-size: 18px;
+  font-weight: 700;
   line-height: 1.25;
 }
 .be-native-grid-wrap {
   width: 100%;
+  padding: 0 16px;
 }
 .be-native-grid {
   display: grid;
@@ -42,17 +95,21 @@
   border: 1px solid #4b5563;
   background: transparent;
   color: inherit;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
 .be-leader-card:hover {
-  border-color: #d6ad55;
-  background: rgba(255, 255, 255, 0.03);
+  border-color: #e5ae3c;
+}
+.be-leader-card.be-current-user {
+  border-color: #dca336;
+  background: radial-gradient(ellipse at center, rgba(229, 174, 60, 0.18), rgba(229, 174, 60, 0.04) 60%, transparent 100%);
+  box-shadow: 0 0 24px rgba(229, 174, 60, 0.55);
 }
 .be-leader-link {
   display: flex;
   height: 100%;
   align-items: center;
-  gap: 10px;
+  gap: 0.65rem;
   padding: 8px;
   color: inherit;
   text-decoration: none;
@@ -73,17 +130,42 @@
   flex: 0 0 40px;
   align-items: center;
   justify-content: center;
+  overflow: visible;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+}
+.be-leader-avatar-inner {
+  position: absolute;
+  top: 25%;
+  left: 25%;
+  width: 50%;
+  height: 50%;
   overflow: hidden;
-  border: 1px solid #4b5563;
   border-radius: 50%;
   background: #1f2937;
+  transform: scale(1.25);
 }
 .be-leader-avatar-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
+.be-leader-frame {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  transform: scale(1.25);
+}
 .be-leader-avatar-fallback {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  align-items: center;
+  justify-content: center;
   color: #f3f4f6;
   font-size: 15px;
   font-weight: 600;
@@ -134,13 +216,16 @@
   width: min(320px, calc(100vw - 24px));
   padding: 12px 14px;
   border-radius: 8px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  background: rgba(20, 20, 24, 0.92);
-  color: #eee;
+  border: 1px solid rgba(229, 174, 60, 0.35);
+  background:
+    url("https://www.boot.dev/img/maptexture2.webp") 50% / cover no-repeat,
+    linear-gradient(180deg, rgba(18, 22, 32, 0.97), rgba(24, 27, 38, 0.95));
+  background-blend-mode: overlay;
+  color: #e8ecf1;
   font-family: inherit;
   font-size: 13px;
   backdrop-filter: blur(6px);
-  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.36);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38), 0 0 18px rgba(229, 174, 60, 0.16);
 }
 .be-boss-panel.be-positioned {
   right: auto;
@@ -159,7 +244,9 @@
   justify-content: space-between;
   gap: 10px;
   margin-bottom: 10px;
-  font-weight: 500;
+  color: #fef4d1;
+  font-family: Arcuata, serif;
+  font-weight: 700;
 }
 .be-boss-minimized .be-boss-head {
   margin-bottom: 0;
@@ -186,13 +273,14 @@
   min-height: 24px;
   padding: 2px 8px;
   border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: transparent;
-  color: #ddd;
+  border: 1px solid rgba(229, 174, 60, 0.38);
+  background: rgba(18, 22, 32, 0.7);
+  color: #fde9b0;
   cursor: pointer;
 }
 .be-boss-head button:hover {
-  background: rgba(255, 255, 255, 0.1);
+  border-color: #e5ae3c;
+  background: rgba(229, 174, 60, 0.12);
 }
 .be-boss-grid {
   display: grid;
@@ -204,12 +292,61 @@
   flex-direction: column;
 }
 .be-boss-grid b {
+  color: #fff;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 .be-boss-grid span {
   font-size: 11px;
-  opacity: 0.6;
+  color: #a3b3c7;
+}
+.be-boss-manual {
+  display: grid;
+  grid-template-columns: 1fr 1fr auto;
+  gap: 8px;
+  align-items: end;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(229, 174, 60, 0.18);
+}
+.be-boss-manual label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  color: #a3b3c7;
+  font-size: 11px;
+}
+.be-boss-manual input {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+  border: 1px solid rgba(145, 157, 171, 0.6);
+  border-radius: 6px;
+  background: rgba(18, 22, 32, 0.82);
+  color: #fff;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  padding: 5px 7px;
+}
+.be-boss-manual input:focus {
+  border-color: #e5ae3c;
+  outline: none;
+}
+.be-boss-manual button {
+  min-height: 31px;
+  border: 1px solid rgba(229, 174, 60, 0.45);
+  border-radius: 6px;
+  background: rgba(229, 174, 60, 0.14);
+  color: #fde9b0;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.be-boss-manual button:hover {
+  border-color: #e5ae3c;
+  background: rgba(229, 174, 60, 0.22);
 }
 .be-boss-drag-active {
   cursor: move;
