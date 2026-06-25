@@ -6,6 +6,7 @@ A Manifest V3 Chrome extension that augments boot.dev with a few quality-of-life
 2. **Cumulative profile XP** - adds lifetime XP and current-level XP progress to public user profile pages.
 3. **Boss-event tracker** - tracks current, event-high, and all-time-high Boots Aura, boss damage, and chest progress.
 4. **Next Lesson nav button** - adds a top-nav shortcut to the current next lesson when the extension can infer it.
+5. **Personal leaderboards** - lets you save boot.dev handles and compare them in custom daily XP, all-time XP, and all-time karma boards.
 
 ## Project Layout
 
@@ -43,10 +44,13 @@ The extension runs automatically on `www.boot.dev`.
 - On boot.dev pages, it shows the boss tracker once boss-event data has been loaded.
 - Drag the boss tracker header to reposition it. The position persists across pages.
 - Use the `-` / `+` boss tracker button to minimize or expand it. The minimized view still shows `Boss event - Current Aura: <aura>%`.
-- In the expanded boss tracker, manually edit event high and all-time high percentages if you learn about a missed high while the extension was not watching the page. Saving an event high above the all-time high also raises the all-time high.
+- In the expanded boss tracker, use the gear button to open or close high settings. Manually edit event high and all-time high percentages there if you learn about a missed high while the extension was not watching the page. Saving an event high above the all-time high also raises the all-time high.
 - Use the boss tracker **reset** button to clear the current event stats while keeping the all-time aura high.
 - Boss-event data refreshes in the background about every 30 seconds. Navigating within boot.dev resets that 30-second timer and triggers a fresh fetch.
-- The **Next Lesson** top-nav link is learned from `/v1/dashboard_content` when possible, with DOM fallbacks from the dashboard **Continue Learning** button and the lesson page's **Next** arrow.
+- The **Next Lesson** top-nav link is learned from `/v1/dashboard_content`, specifically `CurrentLessonUUID`. Lesson progress responses trigger a delayed dashboard refresh so the link updates after completions. The dashboard **Continue Learning** button is also used as a same-page fallback.
+- Press `Alt+N` to open the saved **Next Lesson** link from any boot.dev page. The shortcut is ignored while typing in inputs or editors.
+- On `https://www.boot.dev/leaderboard`, the **Personal Leaderboards** section lets you add and remove handles. Handles are stored in `chrome.storage.local`.
+- Personal **Top Daily Learners** uses `/v1/leaderboard_xp/day` when a saved handle appears there. Otherwise it shows observed XP gained today from the saved public profile snapshots. **Top All-Time Learners** uses public profile XP, and **Top Community Members** uses public stats karma.
 
 No extra sign-in flow is required. The extension reads JSON responses that the boot.dev page fetches, and it can ask the page context to refresh selected endpoints with the existing boot.dev session.
 
@@ -59,6 +63,8 @@ page fetch/XHR -> injected.js clone -> window.postMessage -> content.js router -
 ```
 
 `injected.js` runs in the page context and wraps `fetch` plus `XMLHttpRequest`. It clones JSON responses from `api.boot.dev` and relays them to `content.js`. `content.js` runs as the content script, routes each response by URL, injects UI, stores boss-event state in `chrome.storage.local`, and requests route-specific refreshes through the page-context script when needed.
+
+For Next Lesson, `/v1/dashboard_content` is treated as the authoritative source because its `CurrentLessonUUID` matches the dashboard Continue Learning target. Lesson-page APIs such as `/v1/users/lessons/{lessonId}` and `/v1/course_progress_by_lesson/{lessonId}` are used only as signals to refresh dashboard content.
 
 ## Development
 
@@ -92,9 +98,12 @@ The reference captures and API docs live outside the Chrome load target:
 - Mapped boss progress fields: `XPBonus`, `XPTotal`, `XPUser`, `Event.HealthPoints`, and `Rewards`.
 - Added boss tracker background refresh, SPA route refresh resets, minimization, and drag-position persistence.
 - Added manual boss event-high and all-time-high editing.
-- Added the top-nav Next Lesson shortcut.
+- Added a collapsible boss high-settings section.
+- Added the top-nav Next Lesson shortcut and `Alt+N` keyboard shortcut.
+- Added manual Personal Leaderboards for saved handles on the leaderboard page.
 - Added semantic/text-landmark injection anchors instead of relying on hashed CSS classes.
 - Updated `bootdev_openapi.yaml` with response schemas from the captured data and useful challenge schema details from `old_openapi.yaml`.
+- Documented `/v1/dashboard_content` as the Next Lesson source and corrected karma leaderboard periods to `alltime`.
 - Moved reference data out of the Chrome extension load directory.
 
 ## Notes

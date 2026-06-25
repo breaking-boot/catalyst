@@ -13,18 +13,24 @@ const BOSS_KEY = "be_boss_state";
 const BOSS_UI_KEY = "be_boss_ui_state";
 const LEADERBOARD_CACHE_KEY = "be_alltime_leaderboard_cache";
 const NEXT_LESSON_KEY = "be_next_lesson_href";
+const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
+const PERSONAL_CACHE_KEY = "be_personal_leaderboard_cache";
 const BOSS_PROGRESS_URL = "https://api.boot.dev/v1/boss_events_progress";
 const ALL_TIME_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/alltime";
+const DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/day";
 const DASHBOARD_CONTENT_URL = "https://api.boot.dev/v1/dashboard_content";
 const ARCHMAGE_FRAME_URL = "https://www.boot.dev/_nuxt/9.Cmx5X891.png";
 const BOSS_REFRESH_MS = 30_000;
 const NEAR_HIGH_THRESHOLD = 0.95; // notify when current >= 95% of event high
 
 let bossRefreshTimer = null;
-let bossUiState = { minimized: false, x: null, y: null };
+let bossUiState = { minimized: false, settingsOpen: false, x: null, y: null };
 let bossUiLoaded = false;
 let cachedAllTimeEntries = [];
 let nextLessonHref = null;
+let nextLessonRefreshRequestedAt = 0;
+let personalHandles = [];
+let personalRecords = {};
 let lastPath = location.pathname;
 
 // ---------------------------------------------------------------------------
@@ -58,19 +64,21 @@ function routeResponse({ url, status, json }) {
   if (status < 200 || status >= 300) return;
   try {
     const path = new URL(url, window.location.origin).pathname;
+    const publicUserMatch = /^\/v1\/users\/public\/([^/]+)(\/stats)?$/.exec(path);
 
     if (path === "/v1/leaderboard_xp/alltime") {
       handleAllTimeLeaderboard(json);
-    } else if (/\/v1\/users\/public\/[^/]+$/.test(path) ||
-        /\/v1\/users\/public\/[^/]+\/stats$/.test(path)) {
-      handleProfileStats(json);
+    } else if (path === "/v1/leaderboard_xp/day") {
+      handleDailyXpLeaderboard(json);
+    } else if (publicUserMatch) {
+      handlePublicUserResponse(decodeURIComponent(publicUserMatch[1]), Boolean(publicUserMatch[2]), json);
     } else if (path === "/v1/boss_events_progress") {
       handleBossProgress(json);
     } else if (path === "/v1/dashboard_content") {
-      handleNextLessonData(json);
-    } else if (/\/v1\/course_progress_by_lesson\/[^/]+$/.test(path) ||
-        /\/v1\/lessons\/[^/]+\/?$/.test(path)) {
-      handleNextLessonData(json);
+      handleDashboardContent(json);
+    } else if (/\/v1\/users\/lessons\/[^/]+$/.test(path) ||
+        /\/v1\/course_progress_by_lesson\/[^/]+$/.test(path)) {
+      refreshNextLessonFromDashboardSoon();
     }
   } catch (e) {
     console.warn("[Boot.dev Enhancer] routing error", e);
@@ -81,10 +89,12 @@ async function initEnhancer() {
   await loadBossUiState();
   await loadCachedAllTimeLeaderboard();
   await loadNextLessonHref();
+  await loadPersonalLeaderboard();
   restoreBossPanel();
   syncRouteScopedUi();
   resetBossRefreshTimer(true);
   requestApiJson(DASHBOARD_CONTENT_URL);
+  bindNextLessonShortcut();
   startDomScan();
 
   setInterval(() => {
@@ -107,9 +117,12 @@ function syncRouteScopedUi() {
 
   if (isLeaderboardPage()) {
     if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
+    renderPersonalLeaderboards();
     setTimeout(() => requestApiJson(ALL_TIME_LEADERBOARD_URL), 50);
+    setTimeout(() => requestPersonalLeaderboardData(), 100);
   } else {
     removeAllTimeLeaderboard();
+    removePersonalLeaderboards();
   }
 
   if (!isProfilePage()) {
@@ -173,8 +186,8 @@ function renderAllTimeLeaderboard(entries) {
         host.append(panel);
       }
     }
-    const visibleEntries = getVisibleAllTimeEntries(entries);
-    const currentHandle = getCurrentUserHandle();
+    const currentIdentity = getCurrentUserIdentity();
+    const visibleEntries = getVisibleAllTimeEntries(entries, currentIdentity);
     const cards = visibleEntries
       .map((e, i) => {
         const handle = getHandle(e);
@@ -182,7 +195,7 @@ function renderAllTimeLeaderboard(entries) {
         const xp = e.XP ?? e.TotalXP ?? e.XPEarned ?? 0;
         const avatar = getAvatarUrl(e);
         const rank = e.Position ?? e.Rank ?? i + 1;
-        const isCurrentUser = isCurrentLeaderboardEntry(e, currentHandle);
+        const isCurrentUser = isCurrentLeaderboardEntry(e, currentIdentity);
         const href = handle ? `/u/${encodeURIComponent(handle)}` : "#";
         const avatarMarkup = avatar
           ? `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(displayName)} avatar" class="be-leader-avatar-img">`
@@ -212,18 +225,17 @@ function renderAllTimeLeaderboard(entries) {
   });
 }
 
-function getVisibleAllTimeEntries(entries) {
-  const currentHandle = getCurrentUserHandle();
+function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdentity()) {
   const top25 = entries.slice(0, 25);
-  if (!currentHandle) return top25;
+  if (!currentIdentity.handle && !currentIdentity.avatarUrl && !currentIdentity.name) return top25;
 
-  const current = entries.find((entry) => isCurrentLeaderboardEntry(entry, currentHandle));
+  const current = entries.find((entry) => isCurrentLeaderboardEntry(entry, currentIdentity));
   if (!current) return top25;
 
   const currentRank = num(current.Position ?? current.Rank);
   if (currentRank != null && currentRank > 25) {
     const top24 = entries
-      .filter((entry) => !isCurrentLeaderboardEntry(entry, currentHandle))
+      .filter((entry) => !isCurrentLeaderboardEntry(entry, currentIdentity))
       .slice(0, 24);
     return [...top24, current];
   }
@@ -234,6 +246,13 @@ function getVisibleAllTimeEntries(entries) {
 // ===========================================================================
 // FEATURE 2: Cumulative XP on profiles
 // ===========================================================================
+function handlePublicUserResponse(username, isStats, json) {
+  updatePersonalUserData(username, isStats, json);
+  if (!isStats) {
+    handleProfileStats(json);
+  }
+}
+
 function handleProfileStats(json) {
   if (!isProfilePage()) return;
 
@@ -252,20 +271,29 @@ function handleProfileStats(json) {
     }
     const progress = getLevelProgress(profile);
     const progressMarkup = progress
-      ? `<div class="be-profile-level-xp"><strong>${fmtNum(progress.current)}</strong> / ${fmtNum(progress.total)} XP</div>
-         <div class="be-profile-remaining-xp">Remaining: ${fmtNum(progress.remaining)} XP</div>`
+      ? `<div class="be-profile-level-xp">${fmtNum(progress.current)} / ${fmtNum(progress.total)} XP</div>
+         <div class="be-profile-remaining-xp">Remaining: <strong>${fmtNum(progress.remaining)} XP</strong></div>`
       : "";
     badge.innerHTML = `<div>Total XP: <strong>${fmtNum(totalXp)}</strong></div>${progressMarkup}`;
     anchor.insertAdjacentElement("afterend", badge);
+    if (progress) removeNativeProfileLevelXp(anchor, progress.current);
   });
 }
 
 // ===========================================================================
 // FEATURE 3: Next Lesson button in the top navigation
 // ===========================================================================
-function handleNextLessonData(json) {
-  const href = findLessonHrefInData(json);
+function handleDashboardContent(json) {
+  const href = getDashboardLessonHref(json);
   if (href) rememberNextLessonHref(href);
+}
+
+function refreshNextLessonFromDashboardSoon() {
+  const now = Date.now();
+  if (now - nextLessonRefreshRequestedAt < 1200) return;
+  nextLessonRefreshRequestedAt = now;
+  setTimeout(() => requestApiJson(DASHBOARD_CONTENT_URL), 700);
+  setTimeout(() => requestApiJson(DASHBOARD_CONTENT_URL), 3000);
 }
 
 async function rememberNextLessonHref(href) {
@@ -297,6 +325,8 @@ function renderNextLessonNav() {
     }
 
     link.setAttribute("href", nextLessonHref);
+    link.setAttribute("title", "Next Lesson (Alt+N)");
+    link.setAttribute("aria-label", "Next Lesson (Alt+N)");
     if (link.previousElementSibling !== target || link.parentElement !== target.parentElement) {
       target.insertAdjacentElement("afterend", link);
     }
@@ -304,8 +334,16 @@ function renderNextLessonNav() {
 }
 
 function captureNextLessonFromDom() {
-  const href = findDashboardContinueHref() || findLessonNextHref();
-  if (href) rememberNextLessonHref(href);
+  const dashboardHref = findDashboardContinueHref();
+  if (dashboardHref) {
+    rememberNextLessonHref(dashboardHref);
+    return;
+  }
+
+  if (!nextLessonHref) {
+    const lessonHref = findLessonNextHref();
+    if (lessonHref) rememberNextLessonHref(lessonHref);
+  }
 }
 
 function findDashboardContinueHref() {
@@ -328,14 +366,314 @@ function findLessonNextHref() {
     if (text === "next") return true;
 
     const tooltip = a.closest(".tooltip-box")?.textContent || a.parentElement?.textContent || "";
-    return normalizeText(tooltip).toLowerCase().includes("next");
+    const tooltipText = normalizeText(tooltip).toLowerCase();
+    return tooltipText.includes("next") && (a.querySelector(".sr-only") || a.querySelector("svg"));
   });
 
   return nextLink?.getAttribute("href") || null;
 }
 
+function getDashboardLessonHref(json) {
+  const data = json?.data ?? json;
+  const explicit = normalizeLessonHref(data?.CurrentLessonUUID);
+  if (explicit) return explicit;
+
+  const incomplete = findFirstIncompleteLesson(data?.CurrentCourseProgress);
+  if (incomplete?.UUID) return normalizeLessonHref(incomplete.UUID);
+
+  const courseLesson = findFirstIncompleteLesson(data?.CurrentCourse);
+  if (courseLesson?.UUID) return normalizeLessonHref(courseLesson.UUID);
+
+  return null;
+}
+
+function findFirstIncompleteLesson(progress) {
+  const chapters = Array.isArray(progress?.Chapters) ? progress.Chapters : [];
+  for (const chapter of chapters) {
+    const lessons = Array.isArray(chapter?.Lessons) ? chapter.Lessons : [];
+    const lesson = lessons.find((l) => l?.IsRequired !== false && l?.IsComplete === false && l?.IsReset !== true);
+    if (lesson) return lesson;
+  }
+  return null;
+}
+
+function bindNextLessonShortcut() {
+  document.addEventListener("keydown", (event) => {
+    if (!nextLessonHref || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+    if (event.key.toLowerCase() !== "n") return;
+    if (isEditableTarget(event.target)) return;
+
+    event.preventDefault();
+    location.href = nextLessonHref;
+  });
+}
+
 // ===========================================================================
-// FEATURE 4: Boss-event tracker
+// FEATURE 4: Manual personal leaderboards
+// ===========================================================================
+function handleDailyXpLeaderboard(json) {
+  const entries = getLeaderboardEntries(json);
+  let changed = false;
+
+  for (const entry of entries) {
+    const handle = normalizeHandle(getHandle(entry));
+    if (!handle || !isPersonalHandle(handle)) continue;
+
+    const dailyXp = num(entry?.XPEarned ?? entry?.XP ?? entry?.TotalXP);
+    if (dailyXp == null) continue;
+
+    const record = ensurePersonalRecord(handle);
+    record.dailyXp = dailyXp;
+    record.updatedAt = Date.now();
+    changed = true;
+  }
+
+  if (changed) {
+    savePersonalCache();
+    renderPersonalLeaderboards();
+  }
+}
+
+function updatePersonalUserData(username, isStats, json) {
+  const requestedHandle = normalizeHandle(username);
+  const data = json?.data ?? json;
+  const responseHandle = normalizeHandle(data?.Handle);
+  const handle = isPersonalHandle(responseHandle) ? responseHandle : requestedHandle;
+  if (!handle || !isPersonalHandle(handle)) return;
+
+  const record = ensurePersonalRecord(handle);
+  record.handle = data?.Handle || record.handle || handle;
+  if (isStats) {
+    record.stats = data;
+  } else {
+    record.profile = data;
+    updateObservedDailyXp(record, data);
+  }
+  record.updatedAt = Date.now();
+
+  savePersonalCache();
+  renderPersonalLeaderboards();
+}
+
+async function loadPersonalLeaderboard() {
+  const storedHandles = (await chromeGet(PERSONAL_HANDLES_KEY)) || {};
+  const storedCache = (await chromeGet(PERSONAL_CACHE_KEY)) || {};
+  const rawHandles = Array.isArray(storedHandles)
+    ? storedHandles
+    : Array.isArray(storedHandles.handles)
+      ? storedHandles.handles
+      : [];
+
+  personalHandles = uniqueHandles(rawHandles);
+  personalRecords = isPlainObject(storedCache.records) ? storedCache.records : {};
+  for (const handle of personalHandles) ensurePersonalRecord(handle);
+}
+
+function requestPersonalLeaderboardData() {
+  if (!isLeaderboardPage() || !personalHandles.length) return;
+
+  requestApiJson(DAILY_LEADERBOARD_URL);
+  for (const handle of personalHandles) {
+    requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(handle)}`);
+    requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(handle)}/stats`);
+  }
+}
+
+function renderPersonalLeaderboards() {
+  if (!isLeaderboardPage()) return;
+
+  waitFor(() => document.getElementById("be-alltime-leaderboard") || findAllTimeLeaderboardInsertionPoint() || document.querySelector("main") || document.body).then((host) => {
+    if (!isLeaderboardPage()) return;
+
+    let panel = document.getElementById("be-personal-leaderboards");
+    if (!panel) {
+      panel = document.createElement("section");
+      panel.id = "be-personal-leaderboards";
+      panel.className = "be-personal-leaderboards";
+    }
+
+    const allTime = document.getElementById("be-alltime-leaderboard");
+    if (allTime && panel.previousElementSibling !== allTime) {
+      allTime.insertAdjacentElement("afterend", panel);
+    } else if (!panel.parentElement) {
+      if (host?.matches?.("h1,h2,h3,[role='heading']")) {
+        host.insertAdjacentElement("beforebegin", panel);
+      } else if (host?.parentElement && !["MAIN", "BODY"].includes(host.tagName)) {
+        host.insertAdjacentElement("afterend", panel);
+      } else {
+        (host || document.body).append(panel);
+      }
+    }
+
+    const chips = personalHandles
+      .map((handle) => `<button type="button" class="be-personal-chip" data-be-remove-handle="${escapeHtml(handle)}">@${escapeHtml(getPersonalDisplayHandle(handle))}<span aria-hidden="true">&times;</span></button>`)
+      .join("");
+
+    panel.innerHTML = `
+      <h3 class="be-native-title">Personal Leaderboards</h3>
+      <div class="be-personal-shell">
+        <form id="be-personal-form" class="be-personal-form">
+          <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="boot.dev handle or profile URL" aria-label="boot.dev handle or profile URL">
+          <button type="submit">Add</button>
+        </form>
+        <div class="be-personal-chips">${chips || '<span class="be-personal-empty">Add handles to compare friends, guild members, or rivals.</span>'}</div>
+        <div class="be-personal-grid">
+          ${renderPersonalBoard("Top Daily Learners", getPersonalRows("daily"), "xp today")}
+          ${renderPersonalBoard("Top All-Time Learners", getPersonalRows("xp"), "xp")}
+          ${renderPersonalBoard("Top Community Members", getPersonalRows("karma"), "karma")}
+        </div>
+      </div>`;
+
+    bindPersonalLeaderboardControls(panel);
+  });
+}
+
+function renderPersonalBoard(title, rows, unit) {
+  const body = rows.length
+    ? rows.map((row, index) => renderPersonalRow(row, index + 1, unit)).join("")
+    : '<div class="be-personal-board-empty">No handles added yet.</div>';
+
+  return `
+    <section class="be-personal-board">
+      <h4>${escapeHtml(title)}</h4>
+      <div class="be-personal-rows">${body}</div>
+    </section>`;
+}
+
+function renderPersonalRow(row, rank, unit) {
+  const avatar = row.avatar
+    ? `<img src="${escapeHtml(row.avatar)}" alt="${escapeHtml(row.name)} avatar">`
+    : `<span>${escapeHtml(row.name.slice(0, 1).toUpperCase() || "?")}</span>`;
+  const value = row.value == null ? "loading" : `${fmtNum(row.value)} ${unit}`;
+
+  return `
+    <a class="be-personal-row" href="/u/${encodeURIComponent(row.handle)}">
+      <span class="be-personal-rank">${rank}</span>
+      <span class="be-personal-avatar">${avatar}</span>
+      <span class="be-personal-copy">
+        <span class="be-personal-name">${escapeHtml(row.name)}</span>
+        <span class="be-personal-handle">@${escapeHtml(row.displayHandle)}</span>
+      </span>
+      <span class="be-personal-value">${escapeHtml(value)}</span>
+    </a>`;
+}
+
+function bindPersonalLeaderboardControls(panel) {
+  const form = panel.querySelector("#be-personal-form");
+  const input = panel.querySelector("#be-personal-handle");
+  if (form && input) {
+    form.onsubmit = (event) => {
+      event.preventDefault();
+      const handle = normalizeHandle(input.value);
+      if (!handle) return;
+      input.value = "";
+      addPersonalHandle(handle);
+    };
+  }
+
+  panel.querySelectorAll("[data-be-remove-handle]").forEach((button) => {
+    button.onclick = () => removePersonalHandle(button.getAttribute("data-be-remove-handle"));
+  });
+}
+
+async function addPersonalHandle(handle) {
+  const normalized = normalizeHandle(handle);
+  if (!normalized || isPersonalHandle(normalized)) return;
+
+  personalHandles = uniqueHandles([...personalHandles, normalized]);
+  ensurePersonalRecord(normalized);
+  await savePersonalHandles();
+  savePersonalCache();
+  renderPersonalLeaderboards();
+  requestPersonalLeaderboardData();
+}
+
+async function removePersonalHandle(handle) {
+  const normalized = normalizeHandle(handle);
+  if (!normalized) return;
+
+  personalHandles = personalHandles.filter((h) => h !== normalized);
+  delete personalRecords[normalized];
+  await savePersonalHandles();
+  savePersonalCache();
+  renderPersonalLeaderboards();
+}
+
+function getPersonalRows(kind) {
+  return personalHandles
+    .map((handle) => {
+      const record = ensurePersonalRecord(handle);
+      const profile = record.profile || {};
+      const value = getPersonalValue(record, kind);
+      return {
+        handle,
+        displayHandle: getPersonalDisplayHandle(handle),
+        name: getDisplayName(profile, getPersonalDisplayHandle(handle)),
+        avatar: getAvatarUrl(profile),
+        value,
+      };
+    })
+    .sort((a, b) => (b.value ?? -1) - (a.value ?? -1) || a.displayHandle.localeCompare(b.displayHandle));
+}
+
+function getPersonalValue(record, kind) {
+  if (kind === "daily") return record.dailyXp ?? record.dailyObservedXp ?? null;
+  if (kind === "karma") return num(record.stats?.Karma ?? record.profile?.Karma);
+  return num(record.profile?.XP);
+}
+
+function updateObservedDailyXp(record, profile) {
+  const xp = num(profile?.XP);
+  if (xp == null) return;
+
+  const today = localDateKey();
+  if (record.dailyBaselineDate !== today || record.dailyBaselineXp == null || record.dailyBaselineXp > xp) {
+    record.dailyBaselineDate = today;
+    record.dailyBaselineXp = xp;
+    record.dailyObservedXp = 0;
+    return;
+  }
+
+  record.dailyObservedXp = Math.max(record.dailyObservedXp || 0, xp - record.dailyBaselineXp);
+}
+
+function ensurePersonalRecord(handle) {
+  const normalized = normalizeHandle(handle);
+  if (!normalized) return {};
+
+  if (!isPlainObject(personalRecords[normalized])) {
+    personalRecords[normalized] = { handle: normalized };
+  }
+  return personalRecords[normalized];
+}
+
+function getPersonalDisplayHandle(handle) {
+  const record = personalRecords[normalizeHandle(handle)] || {};
+  return record.handle || handle;
+}
+
+function isPersonalHandle(handle) {
+  return personalHandles.includes(normalizeHandle(handle));
+}
+
+function uniqueHandles(handles) {
+  return Array.from(new Set(handles.map(normalizeHandle).filter(Boolean)));
+}
+
+async function savePersonalHandles() {
+  await chromeSet(PERSONAL_HANDLES_KEY, { handles: personalHandles });
+}
+
+function savePersonalCache() {
+  chromeSet(PERSONAL_CACHE_KEY, { records: personalRecords, updatedAt: Date.now() });
+}
+
+function removePersonalLeaderboards() {
+  document.getElementById("be-personal-leaderboards")?.remove();
+}
+
+// ===========================================================================
+// FEATURE 5: Boss-event tracker
 // ===========================================================================
 async function handleBossProgress(json) {
   const rewards = getBossRewards(json);
@@ -424,6 +762,19 @@ async function renderBossPanel(s) {
       s.nextChestAt > 0 ? Math.max(0, s.nextChestAt - s.damage) : "?";
     const toDefeat =
       s.bossMaxHp > 0 ? Math.max(0, s.bossMaxHp - s.damage) : "?";
+    const settingsMarkup = bossUiState.settingsOpen
+      ? `<div class="be-boss-manual">
+          <label>
+            <span>Event high %</span>
+            <input id="be-boss-event-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.eventHigh || 0))}">
+          </label>
+          <label>
+            <span>All-time high %</span>
+            <input id="be-boss-alltime-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.allTimeHigh || 0))}">
+          </label>
+          <button id="be-boss-save-highs" type="button">save highs</button>
+        </div>`
+      : "";
 
     panel.innerHTML = `
       <div class="be-boss-head be-boss-drag-handle">
@@ -443,17 +794,13 @@ async function renderBossPanel(s) {
         <div><b>${fmtNum(toDefeat)}</b><span>to defeat boss</span></div>
         <div><b>${s.lastChestTier ?? "-"} &rarr; ${s.nextChestTier ?? "-"}</b><span>chest tier</span></div>
       </div>
-      <div class="be-boss-manual">
-        <label>
-          <span>Event high %</span>
-          <input id="be-boss-event-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.eventHigh || 0))}">
-        </label>
-        <label>
-          <span>All-time high %</span>
-          <input id="be-boss-alltime-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.allTimeHigh || 0))}">
-        </label>
-        <button id="be-boss-save-highs" type="button">save highs</button>
-      </div>`;
+      <div class="be-boss-settings-row">
+        <button id="be-boss-settings-toggle" type="button" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}" title="Toggle boss high settings">
+          <span aria-hidden="true">&#9881;</span>
+          <span>High settings</span>
+        </button>
+      </div>
+      ${settingsMarkup}`;
 
     applyBossPanelPosition(panel);
     bindBossPanelControls(panel, s);
@@ -478,6 +825,14 @@ function bindBossPanelControls(panel, state) {
       fresh.allTimeHigh = state.allTimeHigh; // keep the all-time record
       await chromeSet(BOSS_KEY, { state: fresh });
       renderBossPanel(fresh);
+    };
+  }
+
+  const settingsToggle = panel.querySelector("#be-boss-settings-toggle");
+  if (settingsToggle) {
+    settingsToggle.onclick = async () => {
+      await saveBossUiState({ settingsOpen: !bossUiState.settingsOpen });
+      renderBossPanel(state);
     };
   }
 
@@ -570,6 +925,7 @@ async function loadBossUiState() {
   const stored = (await chromeGet(BOSS_UI_KEY)) || {};
   bossUiState = {
     minimized: Boolean(stored.minimized),
+    settingsOpen: Boolean(stored.settingsOpen),
     x: Number.isFinite(Number(stored.x)) ? Number(stored.x) : null,
     y: Number.isFinite(Number(stored.y)) ? Number(stored.y) : null,
   };
@@ -622,6 +978,18 @@ function removeProfileXpBadge() {
   document.getElementById("be-total-xp")?.remove();
 }
 
+function removeNativeProfileLevelXp(anchor, currentXp) {
+  const target = `${fmtNum(currentXp)} XP`.toLowerCase();
+  const scope = findProfileSummaryScope({}) || anchor.parentElement || document;
+  const duplicate = Array.from(scope.querySelectorAll("*"))
+    .filter((el) => !el.closest("#be-total-xp"))
+    .map((el) => ({ el, text: normalizeText(el.textContent).toLowerCase() }))
+    .filter(({ text }) => text === target)
+    .sort((a, b) => a.el.children.length - b.el.children.length)[0]?.el;
+
+  duplicate?.remove();
+}
+
 async function loadCachedAllTimeLeaderboard() {
   const stored = (await chromeGet(LEADERBOARD_CACHE_KEY)) || {};
   cachedAllTimeEntries = Array.isArray(stored.entries) ? stored.entries : [];
@@ -650,18 +1018,49 @@ function getLeaderboardEntries(json) {
   return [];
 }
 
-function isCurrentLeaderboardEntry(entry, currentHandle) {
+function isCurrentLeaderboardEntry(entry, currentIdentity) {
   if (entry?.IsCurrentUser || entry?.IsSelf || entry?.IsMe) return true;
-  if (!currentHandle) return false;
-  return getHandle(entry).toLowerCase() === currentHandle.toLowerCase();
+
+  const identity = typeof currentIdentity === "string"
+    ? { handle: currentIdentity }
+    : currentIdentity || {};
+  const handle = normalizeHandle(identity.handle);
+  if (handle && normalizeHandle(getHandle(entry)) === handle) return true;
+
+  const identityAvatar = normalizeImageUrl(identity.avatarUrl);
+  const entryAvatar = normalizeImageUrl(getAvatarUrl(entry));
+  if (identityAvatar && entryAvatar && identityAvatar === entryAvatar) return true;
+
+  return false;
 }
 
-function getCurrentUserHandle() {
-  const profileMatch = /^\/u\/([^/]+)\/?$/.exec(location.pathname);
+function getCurrentUserIdentity() {
   const navLink = findCurrentUserProfileLink();
+  return {
+    handle: getCurrentUserHandle(navLink),
+    avatarUrl: getCurrentUserAvatarUrl(navLink),
+    name: getCurrentUserDisplayName(navLink),
+  };
+}
+
+function getCurrentUserHandle(navLink = findCurrentUserProfileLink()) {
+  const profileMatch = /^\/u\/([^/]+)\/?$/.exec(location.pathname);
   const href = navLink?.getAttribute("href") || "";
   const navMatch = /^\/u\/([^/]+)\/?$/.exec(href);
   return decodeURIComponent(navMatch?.[1] || profileMatch?.[1] || "");
+}
+
+function getCurrentUserAvatarUrl(navLink) {
+  const img = navLink?.querySelector?.("img[src]") || findTopNavAvatarImage();
+  return img?.currentSrc || img?.src || img?.getAttribute?.("src") || "";
+}
+
+function getCurrentUserDisplayName(navLink) {
+  const text = normalizeText(navLink?.textContent || "");
+  return text
+    .replace(/\bLevel\s+\d+\b/gi, "")
+    .replace(/\bArchmage\b/gi, "")
+    .trim();
 }
 
 function findCurrentUserProfileLink() {
@@ -672,6 +1071,19 @@ function findCurrentUserProfileLink() {
     .sort((a, b) => b.rect.right - a.rect.right);
 
   return topLinks[0]?.link || null;
+}
+
+function findTopNavAvatarImage() {
+  const images = Array.from(document.querySelectorAll("img[src]"))
+    .filter(isVisible)
+    .map((img) => ({ img, rect: img.getBoundingClientRect(), src: img.currentSrc || img.src || img.getAttribute("src") || "" }))
+    .filter(({ rect, src }) => {
+      if (rect.top < 0 || rect.top > 90 || rect.right < window.innerWidth / 2) return false;
+      return !/bootdev-logo|\/_nuxt\/9\.|role|frame/i.test(src);
+    })
+    .sort((a, b) => b.rect.right - a.rect.right);
+
+  return images[0]?.img || null;
 }
 
 function getLevelProgress(profile) {
@@ -716,56 +1128,36 @@ function normalizeLessonHref(value) {
   }
 }
 
-function findLessonHrefInData(value, keyPath = []) {
-  if (value == null) return null;
+function normalizeHandle(value) {
+  const raw = String(value || "")
+    .trim()
+    .replace(/^https?:\/\/(?:www\.)?boot\.dev\/u\//i, "")
+    .replace(/^\/u\//i, "")
+    .replace(/^@/, "");
+  return raw.split(/[/?#\s]/)[0].toLowerCase();
+}
 
-  if (typeof value === "string") {
-    const lastKey = keyPath[keyPath.length - 1] || "";
-    const href = normalizeLessonHref(value);
-    if (!href) return null;
-    if (value.includes("/lessons/")) return href;
-    return /lesson.*(uuid|id)$|^(next|current|continue).*lesson/i.test(lastKey) ? href : null;
+function normalizeImageUrl(value) {
+  if (!value) return "";
+  try {
+    const parsed = new URL(value, location.origin);
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch (_) {
+    return String(value).split("?")[0];
   }
+}
 
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const href = findLessonHrefInData(item, keyPath);
-      if (href) return href;
-    }
-    return null;
-  }
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
-  if (typeof value !== "object") return null;
+function localDateKey() {
+  return new Date().toLocaleDateString("en-CA");
+}
 
-  const priorityKeys = [
-    "ContinueLearningURL",
-    "ContinueLearningHref",
-    "ContinueLessonURL",
-    "ContinueLessonHref",
-    "CurrentLessonURL",
-    "NextLessonURL",
-    "NextLessonHref",
-    "LessonURL",
-    "LessonHref",
-    "ContinueLessonUUID",
-    "CurrentLessonUUID",
-    "NextLessonUUID",
-    "LessonUUID",
-  ];
-
-  for (const key of priorityKeys) {
-    if (key in value) {
-      const href = normalizeLessonHref(value[key]);
-      if (href) return href;
-    }
-  }
-
-  for (const [key, child] of Object.entries(value)) {
-    const href = findLessonHrefInData(child, [...keyPath, key]);
-    if (href) return href;
-  }
-
-  return null;
+function isEditableTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']"));
 }
 
 function getDisplayName(entry, handle) {

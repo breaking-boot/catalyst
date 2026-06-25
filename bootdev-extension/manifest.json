@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Boot.dev Enhancer",
   "version": "0.1.0",
-  "description": "Surfaces all-time XP leaderboards, cumulative profile XP, and a boss-event tracker on boot.dev.",
+  "description": "Adds Boot.dev leaderboards, profile XP, boss tracking, and a next-lesson shortcut.",
   "permissions": ["storage"],
   "host_permissions": ["https://www.boot.dev/*"],
   "content_scripts": [
