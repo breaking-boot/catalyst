@@ -21,50 +21,78 @@ const DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/day";
 const DASHBOARD_CONTENT_URL = "https://api.boot.dev/v1/dashboard_content";
 const ARCHMAGE_FRAME_URL = "https://www.boot.dev/_nuxt/9.Cmx5X891.png";
 const BOSS_REFRESH_MS = 30_000;
+const API_REQUEST_TIMEOUT_MS = 10_000;
+const AUTH_RETRY_MS = 5 * 60_000;
 const NEAR_HIGH_THRESHOLD = 0.95; // notify when current >= 95% of event high
 
 let bossRefreshTimer = null;
+let routeScanTimer = null;
+let domScanTimer = null;
+let enhancerStopped = false;
 let bossUiState = { minimized: false, settingsOpen: false, x: null, y: null };
 let bossUiLoaded = false;
 let cachedAllTimeEntries = [];
 let nextLessonHref = null;
 let nextLessonRefreshRequestedAt = 0;
+let dashboardAuthUnavailableUntil = 0;
+let bossAuthUnavailableUntil = 0;
 let personalHandles = [];
 let personalRecords = {};
+let personalFeedback = null;
+let personalPendingHandle = null;
+let pendingApiRequests = new Map();
+let trackedTimeouts = new Set();
 let lastPath = location.pathname;
 
 // ---------------------------------------------------------------------------
 // 1. Inject the page-context interceptor.
 // ---------------------------------------------------------------------------
 (function injectPageScript() {
-  const s = document.createElement("script");
-  s.src = chrome.runtime.getURL("src/injected.js");
-  s.onload = () => s.remove();
-  (document.head || document.documentElement).appendChild(s);
+  try {
+    const s = document.createElement("script");
+    s.src = chrome.runtime.getURL("src/injected.js");
+    s.onload = () => s.remove();
+    (document.head || document.documentElement).appendChild(s);
+  } catch (err) {
+    handleAsyncError(err, "inject");
+  }
 })();
 
 // ---------------------------------------------------------------------------
 // 2. Listen for relayed responses.
 // ---------------------------------------------------------------------------
-window.addEventListener("message", (event) => {
+window.addEventListener("message", handleWindowMessage);
+
+function handleWindowMessage(event) {
+  if (enhancerStopped) return;
   if (event.source !== window) return;
   const msg = event.data;
   if (!msg || msg.source !== TAG || !msg.payload || !("json" in msg.payload)) {
     return;
   }
-  routeResponse(msg.payload);
-});
+  resolveApiRequest(msg.payload);
+  Promise.resolve(routeResponse(msg.payload)).catch((err) => handleAsyncError(err, "route"));
+}
 
-initEnhancer();
+initEnhancer().catch((err) => handleAsyncError(err, "init"));
 
 // ---------------------------------------------------------------------------
 // 3. Route responses to handlers by URL.
 // ---------------------------------------------------------------------------
-function routeResponse({ url, status, json }) {
-  if (status < 200 || status >= 300) return;
+async function routeResponse({ url, status, json }) {
   try {
     const path = new URL(url, window.location.origin).pathname;
     const publicUserMatch = /^\/v1\/users\/public\/([^/]+)(\/stats)?$/.exec(path);
+
+    if (status === 0 && json?.error === "auth_headers_unavailable") {
+      handleAuthUnavailable(path);
+      return;
+    }
+    if (status === 401) {
+      handleUnauthorizedApi(path);
+      return;
+    }
+    if (status < 200 || status >= 300) return;
 
     if (path === "/v1/leaderboard_xp/alltime") {
       handleAllTimeLeaderboard(json);
@@ -73,15 +101,15 @@ function routeResponse({ url, status, json }) {
     } else if (publicUserMatch) {
       handlePublicUserResponse(decodeURIComponent(publicUserMatch[1]), Boolean(publicUserMatch[2]), json);
     } else if (path === "/v1/boss_events_progress") {
-      handleBossProgress(json);
+      await handleBossProgress(json);
     } else if (path === "/v1/dashboard_content") {
-      handleDashboardContent(json);
+      await handleDashboardContent(json);
     } else if (/\/v1\/users\/lessons\/[^/]+$/.test(path) ||
         /\/v1\/course_progress_by_lesson\/[^/]+$/.test(path)) {
       refreshNextLessonFromDashboardSoon();
     }
   } catch (e) {
-    console.warn("[Boot.dev Enhancer] routing error", e);
+    handleAsyncError(e, "routing");
   }
 }
 
@@ -90,24 +118,26 @@ async function initEnhancer() {
   await loadCachedAllTimeLeaderboard();
   await loadNextLessonHref();
   await loadPersonalLeaderboard();
+  if (enhancerStopped) return;
   restoreBossPanel();
   syncRouteScopedUi();
   resetBossRefreshTimer(true);
-  requestApiJson(DASHBOARD_CONTENT_URL);
+  requestDashboardContentIfUseful(900);
   bindNextLessonShortcut();
   startDomScan();
 
-  setInterval(() => {
+  routeScanTimer = setTrackedInterval(() => {
     if (location.pathname === lastPath) return;
     lastPath = location.pathname;
     syncRouteScopedUi();
     resetBossRefreshTimer(true);
-    requestApiJson(DASHBOARD_CONTENT_URL);
+    requestDashboardContentIfUseful(900);
   }, 350);
 }
 
 async function restoreBossPanel() {
   const stored = (await chromeGet(BOSS_KEY)) || {};
+  if (enhancerStopped) return;
   if (stored.state) renderBossPanel(stored.state);
 }
 
@@ -118,8 +148,8 @@ function syncRouteScopedUi() {
   if (isLeaderboardPage()) {
     if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
     renderPersonalLeaderboards();
-    setTimeout(() => requestApiJson(ALL_TIME_LEADERBOARD_URL), 50);
-    setTimeout(() => requestPersonalLeaderboardData(), 100);
+    setTrackedTimeout(() => requestApiJson(ALL_TIME_LEADERBOARD_URL), 50);
+    setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
   } else {
     removeAllTimeLeaderboard();
     removePersonalLeaderboards();
@@ -131,27 +161,106 @@ function syncRouteScopedUi() {
 }
 
 function startDomScan() {
-  setInterval(() => {
+  domScanTimer = setTrackedInterval(() => {
     renderNextLessonNav();
     captureNextLessonFromDom();
   }, 2000);
 }
 
 function resetBossRefreshTimer(fetchNow = false) {
-  if (bossRefreshTimer) clearInterval(bossRefreshTimer);
+  clearBossRefreshTimer();
+  if (Date.now() < bossAuthUnavailableUntil) return;
   if (fetchNow) {
-    setTimeout(() => requestApiJson(BOSS_PROGRESS_URL), 250);
+    setTrackedTimeout(requestBossProgress, 1200);
   }
-  bossRefreshTimer = setInterval(() => {
-    requestApiJson(BOSS_PROGRESS_URL);
-  }, BOSS_REFRESH_MS);
+  bossRefreshTimer = setTrackedInterval(requestBossProgress, BOSS_REFRESH_MS);
 }
 
-function requestApiJson(url) {
+function requestBossProgress() {
+  if (Date.now() < bossAuthUnavailableUntil) {
+    clearBossRefreshTimer();
+    return;
+  }
+  requestApiJson(BOSS_PROGRESS_URL);
+}
+
+function requestDashboardContentIfUseful(delay = 0) {
+  if (!shouldRefreshDashboardContent()) return false;
+  if (Date.now() < dashboardAuthUnavailableUntil) return false;
+
+  if (delay > 0) {
+    setTrackedTimeout(() => requestDashboardContentIfUseful(0), delay);
+    return true;
+  }
+  return requestApiJson(DASHBOARD_CONTENT_URL);
+}
+
+function shouldRefreshDashboardContent() {
+  return isDashboardPage() || isLessonPage();
+}
+
+function requestApiJson(url, requestId = null) {
+  if (enhancerStopped) return false;
   window.postMessage(
-    { source: TAG, command: "BE_FETCH_JSON", payload: { url } },
+    { source: TAG, command: "BE_FETCH_JSON", payload: { url, requestId } },
     window.location.origin
   );
+  return true;
+}
+
+function fetchApiJson(url, timeoutMs = API_REQUEST_TIMEOUT_MS) {
+  return new Promise((resolve) => {
+    if (enhancerStopped) {
+      resolve({ url, status: 0, json: { error: "extension_stopped" } });
+      return;
+    }
+
+    const requestId = createRequestId();
+    const timeoutId = setTrackedTimeout(() => {
+      pendingApiRequests.delete(requestId);
+      resolve({ url, status: 0, json: { error: "timeout" }, timedOut: true });
+    }, timeoutMs);
+
+    pendingApiRequests.set(requestId, { resolve, timeoutId });
+    if (!requestApiJson(url, requestId)) {
+      clearTrackedTimeout(timeoutId);
+      pendingApiRequests.delete(requestId);
+      resolve({ url, status: 0, json: { error: "request_not_sent" } });
+    }
+  });
+}
+
+function resolveApiRequest(payload) {
+  const requestId = payload?.requestId;
+  if (!requestId || !pendingApiRequests.has(requestId)) return;
+
+  const pending = pendingApiRequests.get(requestId);
+  pendingApiRequests.delete(requestId);
+  clearTrackedTimeout(pending.timeoutId);
+  pending.resolve(payload);
+}
+
+function createRequestId() {
+  return `be_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+}
+
+function handleAuthUnavailable(path) {
+  if (path === "/v1/dashboard_content") {
+    dashboardAuthUnavailableUntil = Date.now() + 15_000;
+  } else if (path === "/v1/boss_events_progress") {
+    bossAuthUnavailableUntil = Date.now() + 15_000;
+    clearBossRefreshTimer();
+    setTrackedTimeout(() => resetBossRefreshTimer(true), 15_000);
+  }
+}
+
+function handleUnauthorizedApi(path) {
+  if (path === "/v1/dashboard_content") {
+    dashboardAuthUnavailableUntil = Date.now() + AUTH_RETRY_MS;
+  } else if (path === "/v1/boss_events_progress") {
+    bossAuthUnavailableUntil = Date.now() + AUTH_RETRY_MS;
+    clearBossRefreshTimer();
+  }
 }
 
 // ===========================================================================
@@ -283,17 +392,17 @@ function handleProfileStats(json) {
 // ===========================================================================
 // FEATURE 3: Next Lesson button in the top navigation
 // ===========================================================================
-function handleDashboardContent(json) {
+async function handleDashboardContent(json) {
   const href = getDashboardLessonHref(json);
-  if (href) rememberNextLessonHref(href);
+  if (href) await rememberNextLessonHref(href);
 }
 
 function refreshNextLessonFromDashboardSoon() {
   const now = Date.now();
   if (now - nextLessonRefreshRequestedAt < 1200) return;
   nextLessonRefreshRequestedAt = now;
-  setTimeout(() => requestApiJson(DASHBOARD_CONTENT_URL), 700);
-  setTimeout(() => requestApiJson(DASHBOARD_CONTENT_URL), 3000);
+  setTrackedTimeout(() => requestDashboardContentIfUseful(0), 700);
+  setTrackedTimeout(() => requestDashboardContentIfUseful(0), 3000);
 }
 
 async function rememberNextLessonHref(href) {
@@ -458,15 +567,20 @@ function updatePersonalUserData(username, isStats, json) {
 async function loadPersonalLeaderboard() {
   const storedHandles = (await chromeGet(PERSONAL_HANDLES_KEY)) || {};
   const storedCache = (await chromeGet(PERSONAL_CACHE_KEY)) || {};
+  if (enhancerStopped) return;
   const rawHandles = Array.isArray(storedHandles)
     ? storedHandles
     : Array.isArray(storedHandles.handles)
       ? storedHandles.handles
       : [];
 
-  personalHandles = uniqueHandles(rawHandles);
+  personalHandles = uniqueHandles(rawHandles).filter(isValidHandle);
   personalRecords = isPlainObject(storedCache.records) ? storedCache.records : {};
   for (const handle of personalHandles) ensurePersonalRecord(handle);
+  if (personalHandles.length !== rawHandles.length) {
+    savePersonalHandles();
+    savePersonalCache();
+  }
 }
 
 function requestPersonalLeaderboardData() {
@@ -474,8 +588,7 @@ function requestPersonalLeaderboardData() {
 
   requestApiJson(DAILY_LEADERBOARD_URL);
   for (const handle of personalHandles) {
-    requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(handle)}`);
-    requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(handle)}/stats`);
+    void refreshPersonalHandle(handle);
   }
 }
 
@@ -508,6 +621,12 @@ function renderPersonalLeaderboards() {
     const chips = personalHandles
       .map((handle) => `<button type="button" class="be-personal-chip" data-be-remove-handle="${escapeHtml(handle)}">@${escapeHtml(getPersonalDisplayHandle(handle))}<span aria-hidden="true">&times;</span></button>`)
       .join("");
+    const messageMarkup = personalFeedback?.text
+      ? `<div class="be-personal-message be-personal-message-${escapeHtml(personalFeedback.type || "info")}">${escapeHtml(personalFeedback.text)}</div>`
+      : "";
+    const pendingMarkup = personalPendingHandle
+      ? `<div class="be-personal-message be-personal-message-info">Checking @${escapeHtml(personalPendingHandle)}...</div>`
+      : "";
 
     panel.innerHTML = `
       <h3 class="be-native-title">Personal Leaderboards</h3>
@@ -516,6 +635,7 @@ function renderPersonalLeaderboards() {
           <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="boot.dev handle or profile URL" aria-label="boot.dev handle or profile URL">
           <button type="submit">Add</button>
         </form>
+        ${messageMarkup || pendingMarkup}
         <div class="be-personal-chips">${chips || '<span class="be-personal-empty">Add handles to compare friends, guild members, or rivals.</span>'}</div>
         <div class="be-personal-grid">
           ${renderPersonalBoard("Top Daily Learners", getPersonalRows("daily"), "xp today")}
@@ -544,7 +664,9 @@ function renderPersonalRow(row, rank, unit) {
   const avatar = row.avatar
     ? `<img src="${escapeHtml(row.avatar)}" alt="${escapeHtml(row.name)} avatar">`
     : `<span>${escapeHtml(row.name.slice(0, 1).toUpperCase() || "?")}</span>`;
-  const value = row.value == null ? "loading" : `${fmtNum(row.value)} ${unit}`;
+  const value = row.value == null
+    ? row.loading ? "loading" : "unavailable"
+    : `${fmtNum(row.value)} ${unit}`;
 
   return `
     <a class="be-personal-row" href="/u/${encodeURIComponent(row.handle)}">
@@ -564,10 +686,17 @@ function bindPersonalLeaderboardControls(panel) {
   if (form && input) {
     form.onsubmit = (event) => {
       event.preventDefault();
-      const handle = normalizeHandle(input.value);
-      if (!handle) return;
+      const parsed = parsePersonalHandleInput(input.value);
+      if (parsed.error) {
+        setPersonalFeedback(parsed.error, "error");
+        return;
+      }
+      if (isPersonalHandle(parsed.handle)) {
+        setPersonalFeedback("User already added", "error");
+        return;
+      }
       input.value = "";
-      addPersonalHandle(handle);
+      addPersonalHandle(parsed.handle);
     };
   }
 
@@ -578,14 +707,55 @@ function bindPersonalLeaderboardControls(panel) {
 
 async function addPersonalHandle(handle) {
   const normalized = normalizeHandle(handle);
-  if (!normalized || isPersonalHandle(normalized)) return;
+  if (!isValidHandle(normalized)) {
+    setPersonalFeedback("Invalid username", "error");
+    return;
+  }
+  if (isPersonalHandle(normalized)) {
+    setPersonalFeedback("User already added", "error");
+    return;
+  }
 
-  personalHandles = uniqueHandles([...personalHandles, normalized]);
-  ensurePersonalRecord(normalized);
-  await savePersonalHandles();
-  savePersonalCache();
+  clearPersonalFeedback();
+  personalPendingHandle = normalized;
   renderPersonalLeaderboards();
-  requestPersonalLeaderboardData();
+
+  const profile = await loadPublicUserProfile(normalized);
+  if (!profile) {
+    personalPendingHandle = null;
+    renderPersonalLeaderboards();
+    return;
+  }
+
+  const canonical = normalizeHandle(profile.Handle || normalized);
+  if (!isValidHandle(canonical)) {
+    personalPendingHandle = null;
+    setPersonalFeedback("Invalid username", "error");
+    return;
+  }
+  if (isPersonalHandle(canonical)) {
+    personalPendingHandle = null;
+    setPersonalFeedback("User already added", "error");
+    return;
+  }
+
+  personalHandles = uniqueHandles([...personalHandles, canonical]);
+  const record = ensurePersonalRecord(canonical);
+  record.handle = profile.Handle || canonical;
+  record.profile = profile;
+  record.profileError = null;
+  updateObservedDailyXp(record, profile);
+
+  if (await savePersonalHandles()) {
+    savePersonalCache();
+    setPersonalFeedback(`Added @${record.handle}`, "success");
+  } else {
+    setPersonalFeedback("Could not save user", "error");
+  }
+
+  personalPendingHandle = null;
+  renderPersonalLeaderboards();
+  void refreshPersonalStats(canonical);
 }
 
 async function removePersonalHandle(handle) {
@@ -611,6 +781,7 @@ function getPersonalRows(kind) {
         name: getDisplayName(profile, getPersonalDisplayHandle(handle)),
         avatar: getAvatarUrl(profile),
         value,
+        loading: personalPendingHandle === handle,
       };
     })
     .sort((a, b) => (b.value ?? -1) - (a.value ?? -1) || a.displayHandle.localeCompare(b.displayHandle));
@@ -620,6 +791,80 @@ function getPersonalValue(record, kind) {
   if (kind === "daily") return record.dailyXp ?? record.dailyObservedXp ?? null;
   if (kind === "karma") return num(record.stats?.Karma ?? record.profile?.Karma);
   return num(record.profile?.XP);
+}
+
+async function refreshPersonalHandle(handle) {
+  const normalized = normalizeHandle(handle);
+  if (!isValidHandle(normalized) || !isPersonalHandle(normalized)) return;
+
+  const profile = await loadPublicUserProfile(normalized, { removeMissing: true });
+  if (!profile || !isPersonalHandle(normalized)) return;
+
+  const record = ensurePersonalRecord(normalized);
+  record.handle = profile.Handle || record.handle || normalized;
+  record.profile = profile;
+  record.profileError = null;
+  updateObservedDailyXp(record, profile);
+  savePersonalCache();
+  renderPersonalLeaderboards();
+
+  await refreshPersonalStats(normalized);
+}
+
+async function refreshPersonalStats(handle) {
+  const normalized = normalizeHandle(handle);
+  if (!isValidHandle(normalized) || !isPersonalHandle(normalized)) return;
+
+  const result = await fetchApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(normalized)}/stats`);
+  if (result.status >= 200 && result.status < 300) {
+    const record = ensurePersonalRecord(normalized);
+    record.stats = result.json?.data ?? result.json;
+    record.statsError = null;
+    record.updatedAt = Date.now();
+    savePersonalCache();
+    renderPersonalLeaderboards();
+    return;
+  }
+
+  if (result.status !== 404) {
+    const record = ensurePersonalRecord(normalized);
+    record.statsError = "unavailable";
+    record.updatedAt = Date.now();
+    savePersonalCache();
+    renderPersonalLeaderboards();
+  }
+}
+
+async function loadPublicUserProfile(handle, options = {}) {
+  const normalized = normalizeHandle(handle);
+  if (!isValidHandle(normalized)) {
+    setPersonalFeedback("Invalid username", "error");
+    return null;
+  }
+
+  const result = await fetchApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(normalized)}`);
+  if (result.status === 404) {
+    if (options.removeMissing && isPersonalHandle(normalized)) {
+      await removePersonalHandle(normalized);
+      setPersonalFeedback(`Removed @${normalized}: user not found`, "error");
+    } else {
+      setPersonalFeedback("User not found", "error");
+    }
+    return null;
+  }
+
+  if (result.status < 200 || result.status >= 300) {
+    setPersonalFeedback(result.timedOut ? "Request timed out. Try again." : "Could not check user. Try again.", "error");
+    return null;
+  }
+
+  const profile = result.json?.data ?? result.json;
+  if (!isPlainObject(profile) || !isValidHandle(profile.Handle || normalized)) {
+    setPersonalFeedback("Invalid username", "error");
+    return null;
+  }
+
+  return profile;
 }
 
 function updateObservedDailyXp(record, profile) {
@@ -660,12 +905,43 @@ function uniqueHandles(handles) {
   return Array.from(new Set(handles.map(normalizeHandle).filter(Boolean)));
 }
 
+function parsePersonalHandleInput(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return { error: "Enter a username" };
+  if (/\s/.test(raw)) return { error: "Invalid username" };
+
+  const handle = normalizeHandle(raw);
+  if (!isValidHandle(handle)) return { error: "Invalid username" };
+  return { handle };
+}
+
+function isValidHandle(handle) {
+  return /^[a-z0-9][a-z0-9_-]{0,39}$/i.test(String(handle || ""));
+}
+
+function setPersonalFeedback(text, type = "info") {
+  personalFeedback = text ? { text, type } : null;
+  renderPersonalLeaderboards();
+}
+
+function clearPersonalFeedback() {
+  personalFeedback = null;
+}
+
 async function savePersonalHandles() {
-  await chromeSet(PERSONAL_HANDLES_KEY, { handles: personalHandles });
+  const validHandles = uniqueHandles(personalHandles).filter(isValidHandle);
+  if (validHandles.length !== personalHandles.length) {
+    personalHandles = validHandles;
+  }
+  return chromeSet(PERSONAL_HANDLES_KEY, { handles: validHandles });
 }
 
 function savePersonalCache() {
-  chromeSet(PERSONAL_CACHE_KEY, { records: personalRecords, updatedAt: Date.now() });
+  const records = {};
+  for (const handle of personalHandles.filter(isValidHandle)) {
+    if (isPlainObject(personalRecords[handle])) records[handle] = personalRecords[handle];
+  }
+  chromeSet(PERSONAL_CACHE_KEY, { records, updatedAt: Date.now() });
 }
 
 function removePersonalLeaderboards() {
@@ -688,6 +964,7 @@ async function handleBossProgress(json) {
   };
 
   const stored = (await chromeGet(BOSS_KEY)) || {};
+  if (enhancerStopped) return;
   let state = stored.state || newEventState(cur.eventId);
 
   // Auto-detect a new event. Event stats reset, all-time high persists.
@@ -711,6 +988,7 @@ async function handleBossProgress(json) {
   state.updatedAt = Date.now();
 
   await chromeSet(BOSS_KEY, { state });
+  if (enhancerStopped) return;
   renderBossPanel(state);
   maybeNotifyNearHigh(state);
 }
@@ -733,7 +1011,9 @@ function newEventState(eventId) {
 
 async function renderBossPanel(s) {
   await loadBossUiState();
+  if (enhancerStopped) return;
   waitFor(() => document.body).then(() => {
+    if (enhancerStopped) return;
     let panel = document.getElementById("be-boss-panel");
     if (!panel) {
       panel = document.createElement("div");
@@ -923,6 +1203,7 @@ function toast(text) {
 async function loadBossUiState() {
   if (bossUiLoaded) return;
   const stored = (await chromeGet(BOSS_UI_KEY)) || {};
+  if (enhancerStopped) return;
   bossUiState = {
     minimized: Boolean(stored.minimized),
     settingsOpen: Boolean(stored.settingsOpen),
@@ -966,6 +1247,14 @@ function isLeaderboardPage() {
   return /^\/leaderboard\/?$/.test(location.pathname);
 }
 
+function isDashboardPage() {
+  return /^\/dashboard\/?$/.test(location.pathname);
+}
+
+function isLessonPage() {
+  return /^\/lessons\//.test(location.pathname);
+}
+
 function isProfilePage() {
   return /^\/u\/[^/]+\/?$/.test(location.pathname);
 }
@@ -992,11 +1281,13 @@ function removeNativeProfileLevelXp(anchor, currentXp) {
 
 async function loadCachedAllTimeLeaderboard() {
   const stored = (await chromeGet(LEADERBOARD_CACHE_KEY)) || {};
+  if (enhancerStopped) return;
   cachedAllTimeEntries = Array.isArray(stored.entries) ? stored.entries : [];
 }
 
 async function loadNextLessonHref() {
   const stored = (await chromeGet(NEXT_LESSON_KEY)) || {};
+  if (enhancerStopped) return;
   nextLessonHref = normalizeLessonHref(stored.href || stored);
 }
 
@@ -1235,11 +1526,141 @@ function escapeHtml(s) {
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
   );
 }
+
+function setTrackedInterval(fn, ms) {
+  const id = setInterval(() => {
+    if (enhancerStopped) {
+      clearInterval(id);
+      return;
+    }
+    try {
+      fn();
+    } catch (err) {
+      handleAsyncError(err, "interval");
+    }
+  }, ms);
+  return id;
+}
+
+function setTrackedTimeout(fn, ms) {
+  const id = setTimeout(() => {
+    trackedTimeouts.delete(id);
+    if (enhancerStopped) return;
+    try {
+      fn();
+    } catch (err) {
+      handleAsyncError(err, "timeout");
+    }
+  }, ms);
+  trackedTimeouts.add(id);
+  return id;
+}
+
+function clearTrackedTimeout(id) {
+  if (!id) return;
+  clearTimeout(id);
+  trackedTimeouts.delete(id);
+}
+
+function clearBossRefreshTimer() {
+  if (!bossRefreshTimer) return;
+  clearInterval(bossRefreshTimer);
+  bossRefreshTimer = null;
+}
+
+function stopEnhancer() {
+  if (enhancerStopped) return;
+  enhancerStopped = true;
+  window.removeEventListener("message", handleWindowMessage);
+  clearBossRefreshTimer();
+  if (routeScanTimer) clearInterval(routeScanTimer);
+  if (domScanTimer) clearInterval(domScanTimer);
+  routeScanTimer = null;
+  domScanTimer = null;
+  for (const timeoutId of trackedTimeouts) clearTimeout(timeoutId);
+  trackedTimeouts.clear();
+  for (const pending of pendingApiRequests.values()) {
+    clearTimeout(pending.timeoutId);
+    pending.resolve({ status: 0, json: { error: "extension_stopped" } });
+  }
+  pendingApiRequests.clear();
+}
+
+function handleAsyncError(err, scope = "runtime") {
+  if (isExtensionContextInvalidatedError(err)) {
+    stopEnhancer();
+    return;
+  }
+  console.warn(`[Boot.dev Enhancer] ${scope} error`, safeErrorMessage(err));
+}
+
+function safeErrorMessage(err) {
+  return err?.message || String(err || "unknown error");
+}
+
+function isExtensionContextInvalidatedError(err) {
+  return /extension context invalidated/i.test(safeErrorMessage(err));
+}
+
+function getChromeLastError() {
+  try {
+    return chrome.runtime?.lastError || null;
+  } catch (err) {
+    return err;
+  }
+}
+
+function handleChromeApiError(err) {
+  if (isExtensionContextInvalidatedError(err)) {
+    stopEnhancer();
+    return;
+  }
+  console.warn("[Boot.dev Enhancer] Chrome API error", safeErrorMessage(err));
+}
+
 function chromeGet(key) {
-  return new Promise((res) => chrome.storage.local.get(key, (o) => res(o[key])));
+  return new Promise((resolve) => {
+    if (enhancerStopped || !key) {
+      resolve(undefined);
+      return;
+    }
+    try {
+      chrome.storage.local.get(key, (o) => {
+        const err = getChromeLastError();
+        if (err) {
+          handleChromeApiError(err);
+          resolve(undefined);
+          return;
+        }
+        resolve(o?.[key]);
+      });
+    } catch (err) {
+      handleChromeApiError(err);
+      resolve(undefined);
+    }
+  });
 }
 function chromeSet(key, val) {
-  return new Promise((res) => chrome.storage.local.set({ [key]: val }, res));
+  return new Promise((resolve) => {
+    if (enhancerStopped || !key || val === undefined) {
+      resolve(false);
+      return;
+    }
+    try {
+      chrome.storage.local.set({ [key]: val }, () => {
+        const err = getChromeLastError();
+        if (err) {
+          handleChromeApiError(err);
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      });
+    } catch (err) {
+      handleChromeApiError(err);
+      resolve(false);
+    }
+  });
 }
 function findAllTimeLeaderboardInsertionPoint() {
   const globalHeading = findHeadingByText("Global Leaderboards");

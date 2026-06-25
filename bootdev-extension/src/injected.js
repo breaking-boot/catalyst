@@ -5,8 +5,16 @@
 // via window.postMessage. It never blocks or alters the real request.
 
 (function () {
+  if (window.__BOOTDEV_ENHANCER_INSTALLED__) return;
+  window.__BOOTDEV_ENHANCER_INSTALLED__ = true;
+
   const TAG = "BOOTDEV_ENHANCER";
   const API = "api.boot.dev";
+  const DEBUG = false;
+  const AUTH_REQUIRED_PATHS = new Set([
+    "/v1/boss_events_progress",
+    "/v1/dashboard_content",
+  ]);
   const HEADER_ALLOWLIST = new Set([
     "accept",
     "authorization",
@@ -15,8 +23,9 @@
     "x-xsrf-token",
   ]);
   let lastApiHeaders = {};
+  const pendingAuthFetches = new Map();
 
-  function relay(url, method, status, bodyText) {
+  function relay(url, method, status, bodyText, requestId = null) {
     let json = null;
     try {
       json = JSON.parse(bodyText);
@@ -24,7 +33,7 @@
       return; // not JSON, ignore
     }
     window.postMessage(
-      { source: TAG, payload: { url, method, status, json } },
+      { source: TAG, payload: { url, method, status, json, requestId } },
       window.location.origin
     );
   }
@@ -38,6 +47,61 @@
           if (HEADER_ALLOWLIST.has(lowered)) lastApiHeaders[lowered] = value;
         });
       } catch (_) {}
+    }
+    if (hasAuthHeaders()) flushPendingAuthFetches();
+  }
+
+  function hasAuthHeaders() {
+    return Boolean(lastApiHeaders.authorization);
+  }
+
+  function requiresAuth(pathname) {
+    return AUTH_REQUIRED_PATHS.has(pathname);
+  }
+
+  function queueAuthFetch(url, requestId) {
+    const entry = pendingAuthFetches.get(url) || { requestIds: new Set(), broadcast: false };
+    if (requestId) {
+      entry.requestIds.add(requestId);
+    } else {
+      entry.broadcast = true;
+    }
+    pendingAuthFetches.set(url, entry);
+  }
+
+  function flushPendingAuthFetches() {
+    for (const [url, entry] of pendingAuthFetches.entries()) {
+      pendingAuthFetches.delete(url);
+      const requestIds = Array.from(entry.requestIds);
+      if (entry.broadcast || !requestIds.length) requestIds.push(null);
+      fetchAndRelay(url, requestIds);
+    }
+  }
+
+  async function fetchAndRelay(url, requestIds) {
+    try {
+      const parsed = new URL(url, window.location.origin);
+      if (parsed.hostname !== API) return;
+
+      const res = await origFetch(parsed.href, {
+        method: "GET",
+        credentials: "include",
+        cache: "no-store",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+          ...lastApiHeaders,
+        },
+      });
+
+      const text = await res.clone().text();
+      for (const requestId of requestIds) {
+        relay(parsed.href, "GET", res.status, text, requestId);
+      }
+    } catch (_) {
+      for (const requestId of requestIds) {
+        relay(url, "GET", 0, JSON.stringify({ error: "request_failed" }), requestId);
+      }
     }
   }
 
@@ -100,27 +164,22 @@
     if (!msg || msg.source !== TAG || msg.command !== "BE_FETCH_JSON") return;
 
     const url = String(msg.payload?.url || "");
+    const requestId = msg.payload?.requestId || null;
     if (!url.includes(API)) return;
 
     try {
       const parsed = new URL(url, window.location.origin);
       if (parsed.hostname !== API) return;
 
-      const res = await origFetch(parsed.href, {
-        method: "GET",
-        credentials: "include",
-        cache: "no-store",
-        headers: {
-          accept: "application/json",
-          "content-type": "application/json",
-          ...lastApiHeaders,
-        },
-      });
+      if (requiresAuth(parsed.pathname) && !hasAuthHeaders()) {
+        queueAuthFetch(parsed.href, requestId);
+        relay(parsed.href, "GET", 0, JSON.stringify({ error: "auth_headers_unavailable" }), requestId);
+        return;
+      }
 
-      const text = await res.clone().text();
-      relay(parsed.href, "GET", res.status, text);
+      await fetchAndRelay(parsed.href, [requestId]);
     } catch (_) {}
   });
 
-  console.debug("[Boot.dev Enhancer] interceptor installed");
+  if (DEBUG) console.debug("[Boot.dev Enhancer] interceptor installed");
 })();

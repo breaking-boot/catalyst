@@ -18,21 +18,52 @@ catalyst/
       content.js
       injected.js
       styles.css
+  scripts/
+    package-extension.sh   Creates bootdev-extension.zip
   reference_data/          API captures, rendered HTML, and OpenAPI docs
+  CHANGELOG.md
   README.md
 ```
 
 Only `bootdev-extension/` is needed by Chrome. The `reference_data/` directory is for development and documentation only.
 
-## Install
+## TL;DR
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Click **Load unpacked**.
-4. Select `/home/aaron/boot.dev/breaking_boot/catalyst/bootdev-extension`.
-5. Visit `https://www.boot.dev`.
+1. Download `bootdev-extension.zip`.
+2. Unzip it.
+3. In Chrome, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the unzipped `bootdev-extension` folder.
+4. Visit `https://www.boot.dev`.
 
-To pick up local code changes, return to `chrome://extensions` and click the reload button on **Boot.dev Enhancer**, then refresh any open boot.dev tabs.
+## Install From Zip
+
+Chrome loads unpacked extension folders, not zip files directly. Unzip first, then load the folder.
+
+1. Unzip `bootdev-extension.zip`.
+   - macOS/Windows: double-click the zip file or use the built-in Extract option.
+   - Terminal:
+
+```bash
+unzip bootdev-extension.zip
+```
+
+2. Open Chrome and go to:
+
+```text
+chrome://extensions
+```
+
+3. Turn on **Developer mode**.
+4. Click **Load unpacked**.
+5. Select the unzipped `bootdev-extension` folder.
+6. Open or refresh `https://www.boot.dev`.
+
+## Updating
+
+1. Remove or replace the old unzipped `bootdev-extension` folder.
+2. Unzip the new `bootdev-extension.zip`.
+3. Go to `chrome://extensions`.
+4. Click the reload button on **Boot.dev Enhancer**.
+5. Refresh any open Boot.dev tabs.
 
 ## Usage
 
@@ -53,6 +84,14 @@ The extension runs automatically on `www.boot.dev`.
 - Personal **Top Daily Learners** uses `/v1/leaderboard_xp/day` when a saved handle appears there. Otherwise it shows observed XP gained today from the saved public profile snapshots. **Top All-Time Learners** uses public profile XP, and **Top Community Members** uses public stats karma.
 
 No extra sign-in flow is required. The extension reads JSON responses that the boot.dev page fetches, and it can ask the page context to refresh selected endpoints with the existing boot.dev session.
+
+## Troubleshooting
+
+- If the extension does not appear, confirm that Chrome loaded the unzipped `bootdev-extension` folder, not the zip file.
+- If changes do not show up after an update, click reload on the extension in `chrome://extensions`, then refresh Boot.dev.
+- If a feature says a user is unavailable, try refreshing the leaderboard page. Invalid usernames are rejected and are not saved.
+- Some console messages are normal page or browser noise, such as blocked ad/analytics requests or Boot.dev hydration warnings.
+- If the extension was reloaded while Boot.dev was already open, refresh the Boot.dev tab to make sure the newest content script is active.
 
 ## How It Works
 
@@ -76,6 +115,40 @@ node --check src/content.js
 node --check src/injected.js
 node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest.json ok')"
 ```
+
+## Release Zip
+
+From the repo root, create a shareable zip with:
+
+```bash
+bash scripts/package-extension.sh
+```
+
+This creates `bootdev-extension.zip` containing the loadable `bootdev-extension/` folder. It does not include `.git`, `reference_data/`, `node_modules`, debug artifacts, or unrelated local files because only the extension directory is packaged.
+
+You can also run the command manually:
+
+```bash
+zip -r bootdev-extension.zip bootdev-extension -x "*/.git/*" "*/node_modules/*" "*/.DS_Store" "*.log"
+```
+
+Recipients should unzip `bootdev-extension.zip` and select the unzipped `bootdev-extension` folder in Chrome's **Load unpacked** dialog.
+
+## Versioning
+
+This project uses semantic versioning:
+
+- `MAJOR`: breaking changes or major rewrites.
+- `MINOR`: backwards-compatible features.
+- `PATCH`: bug fixes, graceful handling, docs, packaging, and polish.
+
+Current version: `v0.2.1`.
+
+Version map:
+
+- `v0.1.0`: first usable local Boot.dev Enhancer build with core enhancement behavior.
+- `v0.2.0`: personal leaderboard build with manually added usernames.
+- `v0.2.1`: graceful error handling, invalid username validation, 401 handling, console-noise reduction, and release docs.
 
 The reference captures and API docs live outside the Chrome load target:
 

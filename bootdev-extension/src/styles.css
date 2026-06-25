@@ -247,6 +247,20 @@
   border-color: #e5ae3c;
   color: #fff;
 }
+.be-personal-message {
+  padding: 8px 10px 0;
+  color: #d1d5db;
+  font-size: 13px;
+}
+.be-personal-message-error {
+  color: #fecaca;
+}
+.be-personal-message-success {
+  color: #bbf7d0;
+}
+.be-personal-message-info {
+  color: #fde9b0;
+}
 .be-personal-chips {
   display: flex;
   flex-wrap: wrap;
