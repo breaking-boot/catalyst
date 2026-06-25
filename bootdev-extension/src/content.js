@@ -5,11 +5,8 @@
 //   3. Route each response to a feature handler.
 //   4. Own the stateful boss-event tracker (chrome.storage + notifications).
 //
-// NOTE ON FIELD NAMES: the HAR captures gave URLs and request bodies, but not
-// response bodies. So every place this code reads a field off a response
-// (e.g. r.cumulative_xp), the name is a best guess and marked with `FIXME`.
-// Open DevTools, look at the real JSON, and correct the field names. The
-// structure around them (interception, injection, persistence) is solid.
+// NOTE ON FIELD NAMES: response fields are mapped from captured api.boot.dev
+// JSON under the repo-level reference_data/http_responses_from_api_endpoints.
 
 const TAG = "BOOTDEV_ENHANCER";
 
@@ -41,12 +38,13 @@ function routeResponse({ url, method, status, json }) {
   try {
     const path = new URL(url).pathname;
 
-    if (path.includes("/v1/league_leaderboard_xp/alltime") ||
-        path.includes("/v1/leaderboard_xp/alltime")) {
+    if (path === "/v1/league_leaderboard_xp/alltime" ||
+        path === "/v1/leaderboard_xp/alltime") {
       handleAllTimeLeaderboard(json);
-    } else if (/\/v1\/users\/public\/[^/]+\/stats$/.test(path)) {
+    } else if (/\/v1\/users\/public\/[^/]+$/.test(path) ||
+        /\/v1\/users\/public\/[^/]+\/stats$/.test(path)) {
       handleProfileStats(json);
-    } else if (path.includes("/v1/boss_events_progress")) {
+    } else if (path === "/v1/boss_events_progress") {
       handleBossProgress(json);
     }
   } catch (e) {
@@ -58,34 +56,42 @@ function routeResponse({ url, method, status, json }) {
 // FEATURE 1: All-time XP leaderboard section
 // ===========================================================================
 function handleAllTimeLeaderboard(json) {
-  // FIXME: confirm the response is an array (or json.entries / json.leaders).
-  const entries = Array.isArray(json) ? json : json.entries || json.leaders || [];
+  const entries = getLeaderboardEntries(json);
   if (!entries.length) return;
 
   // The leaderboard page is an SPA route; wait for a stable container to exist.
-  waitFor(() => document.querySelector("main") || document.body).then((host) => {
+  waitFor(() => findLeaderboardAnchor() || document.querySelector("main") || document.body).then((host) => {
+    if (!host) return;
     let panel = document.getElementById("be-alltime-leaderboard");
     if (!panel) {
       panel = document.createElement("section");
       panel.id = "be-alltime-leaderboard";
       panel.className = "be-card";
-      host.prepend(panel);
+      if (host.matches?.("h1,h2,h3,[role='heading']")) {
+        host.insertAdjacentElement("afterend", panel);
+      } else if (host.parentElement && !["MAIN", "BODY"].includes(host.tagName)) {
+        host.insertAdjacentElement("afterend", panel);
+      } else {
+        host.prepend(panel);
+      }
     }
     const rows = entries
       .slice(0, 25)
       .map((e, i) => {
-        // FIXME: confirm field names (handle, username, xp, totalXp...)
-        const name = e.handle || e.username || e.userHandle || "unknown";
-        const xp = e.xp ?? e.totalXp ?? e.cumulativeXp ?? 0;
+        const name = e.Handle || "unknown";
+        const xp = e.XPEarned ?? e.XP ?? 0;
         return `<li class="be-row">
-            <span class="be-rank">${i + 1}</span>
+            <span class="be-rank">${e.Position ?? i + 1}</span>
             <span class="be-name">${escapeHtml(name)}</span>
             <span class="be-xp">${Number(xp).toLocaleString()} XP</span>
           </li>`;
       })
       .join("");
+    const title = json?.LeagueName
+      ? `${escapeHtml(json.LeagueName)} all-time XP leaders`
+      : "All-time XP leaders";
     panel.innerHTML = `
-      <h2 class="be-title">All-time XP leaders</h2>
+      <h2 class="be-title">${title}</h2>
       <ol class="be-list">${rows}</ol>`;
   });
 }
@@ -94,21 +100,24 @@ function handleAllTimeLeaderboard(json) {
 // FEATURE 2: Cumulative XP on profiles
 // ===========================================================================
 function handleProfileStats(json) {
-  // FIXME: confirm where cumulative XP lives in the stats payload.
-  const totalXp =
-    json.cumulativeXp ?? json.totalXp ?? json.xp ?? json.lifetimeXp ?? null;
+  const profile = json?.data ?? json;
+  const totalXp = profile?.XP ?? null;
   if (totalXp == null) return;
 
-  waitFor(() => document.querySelector("main") || document.body).then(() => {
+  waitFor(() => findProfileAnchor(profile) || document.querySelector("main") || document.body).then((anchor) => {
+    if (!anchor) return;
     let badge = document.getElementById("be-total-xp");
     if (!badge) {
       badge = document.createElement("div");
       badge.id = "be-total-xp";
       badge.className = "be-badge";
-      // Try to sit near the level display; fall back to top of main.
-      const anchor =
-        document.querySelector("main") || document.body;
-      anchor.prepend(badge);
+      if (anchor.matches?.("h1,h2,h3,[role='heading']")) {
+        anchor.insertAdjacentElement("afterend", badge);
+      } else if (anchor.parentElement && !["MAIN", "BODY"].includes(anchor.tagName)) {
+        anchor.insertAdjacentElement("afterend", badge);
+      } else {
+        anchor.prepend(badge);
+      }
     }
     badge.textContent = `Total XP: ${Number(totalXp).toLocaleString()}`;
   });
@@ -121,22 +130,15 @@ const BOSS_KEY = "be_boss_state";
 const NEAR_HIGH_THRESHOLD = 0.95; // notify when current >= 95% of event high
 
 async function handleBossProgress(json) {
-  // FIXME: map these to the real response shape.
-  //   bonusPct        -> the current "Boots Aura" bonus % (e.g. 45)
-  //   eventId         -> a stable id/uuid for the current event
-  //   damage          -> current boss XP "damage" dealt
-  //   nextChestAt     -> cumulative damage needed for the next chest
-  //   bossMaxHp       -> total damage to defeat the boss
-  //   lastChestTier   -> most recent chest tier earned
-  //   nextChestTier   -> next chest tier
+  const rewards = getBossRewards(json);
   const cur = {
-    eventId: json.eventId ?? json.event_id ?? json.id ?? "unknown-event",
-    bonusPct: num(json.bonusPct ?? json.bootsAura ?? json.auraPct),
-    damage: num(json.damage ?? json.bossDamage ?? json.currentDamage),
-    nextChestAt: num(json.nextChestAt ?? json.nextChestThreshold),
-    bossMaxHp: num(json.bossMaxHp ?? json.bossHp ?? json.maxHp),
-    lastChestTier: json.lastChestTier ?? json.currentChestTier ?? null,
-    nextChestTier: json.nextChestTier ?? null,
+    eventId: json?.Event?.UUID ?? json?.Event?.StartsAt ?? "unknown-event",
+    bonusPct: pct(json?.XPBonus),
+    damage: num(json?.XPTotal),
+    nextChestAt: getNextChestAt(rewards),
+    bossMaxHp: num(json?.Event?.HealthPoints),
+    lastChestTier: getLastChestTier(rewards),
+    nextChestTier: getNextChestTier(rewards),
   };
 
   const stored = (await chromeGet(BOSS_KEY)) || {};
@@ -155,9 +157,9 @@ async function handleBossProgress(json) {
     state.eventHigh = Math.max(state.eventHigh || 0, cur.bonusPct);
     state.allTimeHigh = Math.max(state.allTimeHigh || 0, cur.bonusPct);
   }
-  state.damage = cur.damage;
-  state.nextChestAt = cur.nextChestAt;
-  state.bossMaxHp = cur.bossMaxHp;
+  if (cur.damage != null) state.damage = cur.damage;
+  if (cur.nextChestAt != null) state.nextChestAt = cur.nextChestAt;
+  if (cur.bossMaxHp != null) state.bossMaxHp = cur.bossMaxHp;
   state.lastChestTier = cur.lastChestTier;
   state.nextChestTier = cur.nextChestTier;
   state.updatedAt = Date.now();
@@ -251,9 +253,51 @@ function toast(text) {
 // ---------------------------------------------------------------------------
 // Small helpers
 // ---------------------------------------------------------------------------
+function getLeaderboardEntries(json) {
+  if (Array.isArray(json)) return json;
+  if (Array.isArray(json?.LeagueMembers)) return json.LeagueMembers;
+  if (Array.isArray(json?.data)) return json.data;
+  if (Array.isArray(json?.data?.LeagueMembers)) return json.data.LeagueMembers;
+  return [];
+}
+
+function getBossRewards(json) {
+  const rewards = Array.isArray(json?.Rewards) ? json.Rewards : [];
+  return rewards
+    .slice()
+    .sort((a, b) => num(a.XPThreshold) - num(b.XPThreshold));
+}
+
+function getNextChestAt(rewards) {
+  const reward = rewards.find((r) => !r.IsUnlocked);
+  return reward ? num(reward.XPThreshold) : null;
+}
+
+function getLastChestTier(rewards) {
+  const unlocked = rewards.filter((r) => r.IsUnlocked && r.IsUnlockedByUser);
+  const reward = unlocked[unlocked.length - 1];
+  return reward ? chestTier(rewards.indexOf(reward)) : null;
+}
+
+function getNextChestTier(rewards) {
+  const reward = rewards.find((r) => !r.IsUnlocked);
+  return reward ? chestTier(rewards.indexOf(reward)) : null;
+}
+
+function chestTier(index) {
+  // The reward payload has ChestUUIDs but no tier names; the modal renders
+  // these thresholds in this order in the captured boss page.
+  return ["Common", "Uncommon", "Rare", "Mythic"][index] ?? `Tier ${index + 1}`;
+}
+
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
+}
+function pct(v) {
+  const n = num(v);
+  if (n == null) return null;
+  return n > 0 && n <= 1 ? n * 100 : n;
 }
 function fmtPct(v) {
   return v == null ? "-" : `${Math.round(v)}%`;
@@ -271,6 +315,41 @@ function chromeGet(key) {
 }
 function chromeSet(key, val) {
   return new Promise((res) => chrome.storage.local.set({ [key]: val }, res));
+}
+function findLeaderboardAnchor() {
+  // Boot.dev exposes no stable id/data hook for these sections; use visible
+  // heading landmarks instead of brittle hashed Vue/Tailwind classes.
+  const heading =
+    findHeadingByText("Top League Learners") ||
+    findHeadingByText("League Leaderboards") ||
+    findHeadingByText("Global Leaderboards");
+  return heading?.parentElement || heading;
+}
+function findProfileAnchor(profile) {
+  const fullName = [profile?.FirstName, profile?.LastName]
+    .filter(Boolean)
+    .join(" ")
+    .trim();
+  return (
+    (fullName && findHeadingByText(fullName)) ||
+    (profile?.Handle && findElementByText(`@ ${profile.Handle}`)) ||
+    null
+  );
+}
+function findHeadingByText(text) {
+  const target = normalizeText(text).toLowerCase();
+  return Array.from(document.querySelectorAll("h1,h2,h3,[role='heading']")).find(
+    (el) => normalizeText(el.textContent).toLowerCase() === target
+  );
+}
+function findElementByText(text) {
+  const target = normalizeText(text).toLowerCase();
+  return Array.from(document.querySelectorAll("main *, #__nuxt *")).find(
+    (el) => normalizeText(el.textContent).toLowerCase() === target
+  );
+}
+function normalizeText(s) {
+  return String(s || "").replace(/\s+/g, " ").trim();
 }
 // Poll for an element/condition (SPA routes render async).
 function waitFor(fn, timeout = 8000, interval = 150) {
