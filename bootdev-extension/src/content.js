@@ -20,7 +20,30 @@ const BOSS_PROGRESS_URL = "https://api.boot.dev/v1/boss_events_progress";
 const ALL_TIME_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/alltime";
 const DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/day";
 const DASHBOARD_CONTENT_URL = "https://api.boot.dev/v1/dashboard_content";
-const ARCHMAGE_FRAME_URL = "https://www.boot.dev/_nuxt/9.Cmx5X891.png";
+const ROLE_FRAME_URLS = [
+  "https://www.boot.dev/_nuxt/0.B6ueYVE9.png",
+  "https://www.boot.dev/_nuxt/1.DnmxFjr3.png",
+  "https://www.boot.dev/_nuxt/2.Cijf5c5Q.png",
+  "https://www.boot.dev/_nuxt/3.CikePfbF.png",
+  "https://www.boot.dev/_nuxt/4.B5xh_zDj.png",
+  "https://www.boot.dev/_nuxt/5.0Do8PVSr.png",
+  "https://www.boot.dev/_nuxt/6.4Va-k18V.png",
+  "https://www.boot.dev/_nuxt/7.BsonWGZg.png",
+  "https://www.boot.dev/_nuxt/8.CJ6g5ANN.png",
+  "https://www.boot.dev/_nuxt/9.Cmx5X891.png",
+];
+const ARCHMAGE_FRAME_URL = ROLE_FRAME_URLS[9];
+const ROLE_FRAME_INDEX_BY_ROLE = {
+  apprentice: 1,
+  pupil: 2,
+  acolyte: 3,
+  disciple: 4,
+  scholar: 5,
+  sorcerer: 6,
+  sage: 7,
+  archsage: 8,
+  archmage: 9,
+};
 const BOSS_REFRESH_MS = 30_000;
 const API_REQUEST_TIMEOUT_MS = 10_000;
 const AUTH_RETRY_MS = 5 * 60_000;
@@ -377,6 +400,7 @@ function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdent
 
 function renderLeaderAvatar(entry, displayName) {
   const avatar = getAvatarUrl(entry);
+  const frameUrl = getRoleFrameUrl(entry);
   const name = displayName || getDisplayName(entry, getHandle(entry));
   const avatarMarkup = avatar
     ? `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(name)} avatar" class="be-leader-avatar-img">`
@@ -384,7 +408,7 @@ function renderLeaderAvatar(entry, displayName) {
 
   return `<span class="be-leader-avatar">
     <span class="be-leader-avatar-inner">${avatarMarkup}</span>
-    <img src="${ARCHMAGE_FRAME_URL}" alt="" class="be-leader-frame" aria-hidden="true">
+    <img src="${escapeHtml(frameUrl)}" alt="" class="be-leader-frame" aria-hidden="true">
   </span>`;
 }
 
@@ -829,6 +853,8 @@ function getPersonalRows(kind) {
         name: getDisplayName(profile, getPersonalDisplayHandle(handle)),
         avatar: getAvatarUrl(profile),
         Handle: record.handle || handle,
+        Level: profile.Level,
+        Role: profile.Role,
         value,
         loading: personalPendingHandle === handle,
       };
@@ -1435,37 +1461,15 @@ function learnCurrentUserHandleFromDom() {
 }
 
 function findNativeCurrentUserHandle() {
-  const links = Array.from(document.querySelectorAll('main a[href^="/u/"], #__nuxt a[href^="/u/"]'))
-    .filter((link) => isVisible(link) && !link.closest("#be-alltime-leaderboard, #be-personal-leaderboards"));
+  const highlightedCards = Array.from(document.querySelectorAll(".box-shadow-glow-gold"))
+    .filter((el) => isVisible(el) && !el.closest("#be-alltime-leaderboard, #be-personal-leaderboards"));
 
-  for (const link of links) {
-    let el = link;
-    for (let depth = 0; el && depth < 6; depth += 1) {
-      if (hasNativeGoldGlow(el)) return getProfileHandleFromHref(link.getAttribute("href"));
-      el = el.parentElement;
-    }
+  for (const card of highlightedCards) {
+    const handle = getProfileHandleFromHref(card.querySelector('a[href^="/u/"]')?.getAttribute("href"));
+    if (handle) return handle;
   }
+
   return "";
-}
-
-function hasNativeGoldGlow(el) {
-  try {
-    const boxShadow = getComputedStyle(el).boxShadow;
-    return Boolean(boxShadow && boxShadow !== "none" && containsGoldCssColor(boxShadow));
-  } catch (_) {
-    return false;
-  }
-}
-
-function containsGoldCssColor(value) {
-  const matches = String(value).matchAll(/rgba?\((\d+),\s*(\d+),\s*(\d+)/gi);
-  for (const match of matches) {
-    const r = Number(match[1]);
-    const g = Number(match[2]);
-    const b = Number(match[3]);
-    if (r >= 150 && g >= 95 && g <= 215 && b <= 125 && r > b && g > b) return true;
-  }
-  return false;
 }
 
 function getLeaderboardEntries(json) {
@@ -1507,7 +1511,9 @@ function getCurrentUserIdentity() {
 }
 
 function getCurrentUserHandle(navLink = findCurrentUserProfileLink()) {
-  return normalizeHandle(getProfileHandleFromHref(navLink?.getAttribute("href")) || currentUserHandle);
+  const navHandle = getProfileHandleFromHref(navLink?.getAttribute("href"));
+  const nativeHandle = isLeaderboardPage() ? findNativeCurrentUserHandle() : "";
+  return normalizeHandle(navHandle || nativeHandle || (isLeaderboardPage() ? "" : currentUserHandle));
 }
 
 function getCurrentUserDisplayName(navLink) {
@@ -1519,7 +1525,8 @@ function getCurrentUserDisplayName(navLink) {
 }
 
 function findCurrentUserProfileLink() {
-  const links = Array.from(document.querySelectorAll('a[href^="/u/"]')).filter(isVisible);
+  const links = Array.from(document.querySelectorAll('a[href^="/u/"]'))
+    .filter((link) => isVisible(link) && !link.closest("main, #be-alltime-leaderboard, #be-personal-leaderboards"));
   const topLinks = links
     .map((link) => ({ link, rect: link.getBoundingClientRect() }))
     .filter(({ rect }) => rect.top >= 0 && rect.top < 90 && rect.right > window.innerWidth / 2)
@@ -1641,6 +1648,55 @@ function getAvatarUrl(entry) {
     entry?.User?.AvatarURL ||
     ""
   );
+}
+
+function getRoleFrameUrl(entry) {
+  return (
+    getExplicitFrameUrl(entry) ||
+    ROLE_FRAME_URLS[getRoleFrameIndex(entry)] ||
+    ARCHMAGE_FRAME_URL
+  );
+}
+
+function getExplicitFrameUrl(entry) {
+  const url = (
+    entry?.RoleFrameURL ||
+    entry?.RoleImageURL ||
+    entry?.RankFrameURL ||
+    entry?.RankImageURL ||
+    entry?.AvatarFrameURL ||
+    entry?.FrameURL ||
+    entry?.User?.RoleFrameURL ||
+    entry?.User?.RoleImageURL ||
+    entry?.User?.RankFrameURL ||
+    entry?.User?.RankImageURL ||
+    entry?.User?.AvatarFrameURL ||
+    entry?.User?.FrameURL ||
+    ""
+  );
+  return normalizeAssetUrl(url);
+}
+
+function getRoleFrameIndex(entry) {
+  const role = normalizeText(entry?.Role || entry?.User?.Role).toLowerCase();
+  if (ROLE_FRAME_INDEX_BY_ROLE[role] != null) return ROLE_FRAME_INDEX_BY_ROLE[role];
+
+  const level = num(entry?.Level ?? entry?.User?.Level);
+  if (level != null) {
+    return clamp(Math.floor(level / 10), 0, ROLE_FRAME_URLS.length - 1);
+  }
+
+  return ROLE_FRAME_URLS.length - 1;
+}
+
+function normalizeAssetUrl(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  try {
+    return new URL(raw, location.origin).href;
+  } catch (_) {
+    return raw;
+  }
 }
 
 function getBossRewards(json) {

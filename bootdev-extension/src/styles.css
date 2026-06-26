@@ -125,9 +125,12 @@
   border-color: #e5ae3c;
 }
 .be-leader-card.be-current-user {
-  border-color: #dca336;
+  border-color: #4b5563;
   background: transparent;
-  box-shadow: 0 0 0 1px rgba(220, 163, 54, 0.7), 0 0 18px 2px rgba(229, 174, 60, 0.45);
+  box-shadow: 0 0 18px 3px rgba(229, 174, 60, 0.45);
+}
+.be-leader-card.be-current-user:hover {
+  border-color: #e5ae3c;
 }
 .be-leader-link {
   display: flex;
@@ -345,8 +348,11 @@
   border-color: #e5ae3c;
 }
 .be-personal-row.be-current-user {
-  border-color: #dca336;
-  box-shadow: 0 0 0 1px rgba(220, 163, 54, 0.7), 0 0 18px 2px rgba(229, 174, 60, 0.45);
+  border-color: rgba(75, 85, 99, 0.95);
+  box-shadow: 0 0 18px 3px rgba(229, 174, 60, 0.45);
+}
+.be-personal-row.be-current-user:hover {
+  border-color: #e5ae3c;
 }
 .be-personal-rank {
   color: #9ca3af;
@@ -416,7 +422,7 @@
   background-blend-mode: overlay;
   color: #e8ecf1;
   font-family: inherit;
-  font-size: 13px;
+  font-size: 14px;
   backdrop-filter: blur(6px);
   box-shadow: 0 14px 36px rgba(0, 0, 0, 0.38), 0 0 18px rgba(229, 174, 60, 0.16);
 }
@@ -439,7 +445,9 @@
   margin-bottom: 10px;
   color: #fef4d1;
   font-family: Arcuata, serif;
+  font-size: 16px;
   font-weight: 700;
+  line-height: 1.15;
 }
 .be-boss-minimized .be-boss-head {
   margin-bottom: 0;
@@ -450,6 +458,7 @@
 }
 .be-boss-min-title {
   min-width: 0;
+  font-size: 14px;
   overflow: hidden;
   line-height: 1.2;
   text-overflow: ellipsis;
@@ -461,9 +470,13 @@
   gap: 6px;
 }
 .be-boss-head button {
-  font-size: 11px;
-  width: 28px;
-  height: 26px;
+  display: inline-flex;
+  width: 31px;
+  height: 29px;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  line-height: 1;
   padding: 0;
   border-radius: 6px;
   border: 1px solid rgba(229, 174, 60, 0.38);
@@ -474,6 +487,12 @@
 .be-boss-head button:hover {
   border-color: #e5ae3c;
   background: rgba(229, 174, 60, 0.12);
+}
+#be-boss-settings-toggle {
+  font-size: 17px;
+}
+#be-boss-toggle {
+  font-size: 20px;
 }
 .be-boss-grid {
   display: grid;
@@ -486,11 +505,12 @@
 }
 .be-boss-grid b {
   color: #fff;
+  font-size: 14px;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
 .be-boss-grid span {
-  font-size: 11px;
+  font-size: 12px;
   color: #a3b3c7;
 }
 .be-boss-progress-list {
@@ -545,7 +565,7 @@
   flex-direction: column;
   gap: 4px;
   color: #a3b3c7;
-  font-size: 11px;
+  font-size: 12px;
 }
 .be-boss-manual input {
   width: 100%;
@@ -556,6 +576,7 @@
   background: rgba(18, 22, 32, 0.82);
   color: #fff;
   font: inherit;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
   padding: 5px 7px;
 }
@@ -575,7 +596,7 @@
   background: rgba(229, 174, 60, 0.14);
   color: #fde9b0;
   font: inherit;
-  font-size: 12px;
+  font-size: 13px;
   cursor: pointer;
   white-space: nowrap;
 }
