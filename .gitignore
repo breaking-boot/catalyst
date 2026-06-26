@@ -1,8 +1,6 @@
-# Zip files
+# local release artifacts
+releases/
 *.zip
 
-# Reference files
+# local Codex/Claude/debug/reference files
 reference_data/
-
-# Download archive
-archive/
