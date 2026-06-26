@@ -15,6 +15,7 @@ const LEADERBOARD_CACHE_KEY = "be_alltime_leaderboard_cache";
 const NEXT_LESSON_KEY = "be_next_lesson_href";
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
 const PERSONAL_CACHE_KEY = "be_personal_leaderboard_cache";
+const CURRENT_USER_HANDLE_KEY = "be_current_user_handle";
 const BOSS_PROGRESS_URL = "https://api.boot.dev/v1/boss_events_progress";
 const ALL_TIME_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/alltime";
 const DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/day";
@@ -40,6 +41,7 @@ let personalHandles = [];
 let personalRecords = {};
 let personalFeedback = null;
 let personalPendingHandle = null;
+let currentUserHandle = "";
 let pendingApiRequests = new Map();
 let trackedTimeouts = new Set();
 let lastPath = location.pathname;
@@ -117,6 +119,7 @@ async function initEnhancer() {
   await loadBossUiState();
   await loadCachedAllTimeLeaderboard();
   await loadNextLessonHref();
+  await loadCurrentUserHandle();
   await loadPersonalLeaderboard();
   if (enhancerStopped) return;
   restoreBossPanel();
@@ -144,6 +147,7 @@ async function restoreBossPanel() {
 function syncRouteScopedUi() {
   renderNextLessonNav();
   captureNextLessonFromDom();
+  learnCurrentUserHandleFromDom();
 
   if (isLeaderboardPage()) {
     if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
@@ -164,6 +168,8 @@ function startDomScan() {
   domScanTimer = setTrackedInterval(() => {
     renderNextLessonNav();
     captureNextLessonFromDom();
+    learnCurrentUserHandleFromDom();
+    ensureLeaderboardUiState();
   }, 2000);
 }
 
@@ -227,6 +233,29 @@ function fetchApiJson(url, timeoutMs = API_REQUEST_TIMEOUT_MS) {
       pendingApiRequests.delete(requestId);
       resolve({ url, status: 0, json: { error: "request_not_sent" } });
     }
+  });
+}
+
+async function fetchApiJsonWithAuthRetry(url, timeoutMs = API_REQUEST_TIMEOUT_MS) {
+  const first = await fetchApiJson(url, timeoutMs);
+  if (!isAuthStatus(first.status) || enhancerStopped) return first;
+
+  await trackedDelay(750);
+  if (enhancerStopped) return first;
+
+  const second = await fetchApiJson(url, timeoutMs);
+  second.authRetried = true;
+  second.firstStatus = first.status;
+  return second;
+}
+
+function isAuthStatus(status) {
+  return status === 401 || status === 403;
+}
+
+function trackedDelay(ms) {
+  return new Promise((resolve) => {
+    setTrackedTimeout(resolve, ms);
   });
 }
 
@@ -302,21 +331,14 @@ function renderAllTimeLeaderboard(entries) {
         const handle = getHandle(e);
         const displayName = getDisplayName(e, handle);
         const xp = e.XP ?? e.TotalXP ?? e.XPEarned ?? 0;
-        const avatar = getAvatarUrl(e);
         const rank = e.Position ?? e.Rank ?? i + 1;
         const isCurrentUser = isCurrentLeaderboardEntry(e, currentIdentity);
         const href = handle ? `/u/${encodeURIComponent(handle)}` : "#";
-        const avatarMarkup = avatar
-          ? `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(displayName)} avatar" class="be-leader-avatar-img">`
-          : `<span class="be-leader-avatar-fallback">${escapeHtml(displayName.slice(0, 1).toUpperCase() || "?")}</span>`;
 
         return `<div class="be-leader-card${isCurrentUser ? " be-current-user" : ""}">
             <a href="${href}" class="be-leader-link">
               <span class="be-leader-rank">${escapeHtml(rank)}</span>
-              <span class="be-leader-avatar">
-                <span class="be-leader-avatar-inner">${avatarMarkup}</span>
-                <img src="${ARCHMAGE_FRAME_URL}" alt="" class="be-leader-frame" aria-hidden="true">
-              </span>
+              ${renderLeaderAvatar(e, displayName)}
               <span class="be-leader-copy">
                 <span class="be-leader-name">${escapeHtml(displayName)}</span>
                 <span class="be-leader-xp">${fmtNum(xp)} xp</span>
@@ -331,12 +353,13 @@ function renderAllTimeLeaderboard(entries) {
       <div class="be-native-grid-wrap">
         <div class="be-native-grid">${cards}</div>
       </div>`;
+    renderPersonalLeaderboards();
   });
 }
 
 function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdentity()) {
   const top25 = entries.slice(0, 25);
-  if (!currentIdentity.handle && !currentIdentity.avatarUrl && !currentIdentity.name) return top25;
+  if (!normalizeHandle(currentIdentity.handle)) return top25;
 
   const current = entries.find((entry) => isCurrentLeaderboardEntry(entry, currentIdentity));
   if (!current) return top25;
@@ -350,6 +373,40 @@ function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdent
   }
 
   return top25;
+}
+
+function renderLeaderAvatar(entry, displayName) {
+  const avatar = getAvatarUrl(entry);
+  const name = displayName || getDisplayName(entry, getHandle(entry));
+  const avatarMarkup = avatar
+    ? `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(name)} avatar" class="be-leader-avatar-img">`
+    : `<span class="be-leader-avatar-fallback">${escapeHtml(name.slice(0, 1).toUpperCase() || "?")}</span>`;
+
+  return `<span class="be-leader-avatar">
+    <span class="be-leader-avatar-inner">${avatarMarkup}</span>
+    <img src="${ARCHMAGE_FRAME_URL}" alt="" class="be-leader-frame" aria-hidden="true">
+  </span>`;
+}
+
+function ensureLeaderboardUiState() {
+  if (!isLeaderboardPage()) return;
+
+  const allTime = document.getElementById("be-alltime-leaderboard");
+  const personal = document.getElementById("be-personal-leaderboards");
+  const currentIdentity = getCurrentUserIdentity();
+
+  if (allTime && cachedAllTimeEntries.some((entry) => isCurrentLeaderboardEntry(entry, currentIdentity)) &&
+      !allTime.querySelector(".be-current-user")) {
+    renderAllTimeLeaderboard(cachedAllTimeEntries);
+    return;
+  }
+
+  if (allTime && (!personal || personal.previousElementSibling !== allTime)) {
+    renderPersonalLeaderboards();
+  } else if (personalHandles.some((handle) => isCurrentLeaderboardEntry({ handle }, currentIdentity)) &&
+      personal && !personal.querySelector(".be-current-user")) {
+    renderPersonalLeaderboards();
+  }
 }
 
 // ===========================================================================
@@ -386,6 +443,7 @@ function handleProfileStats(json) {
     badge.innerHTML = `<div>Total XP: <strong>${fmtNum(totalXp)}</strong></div>${progressMarkup}`;
     anchor.insertAdjacentElement("afterend", badge);
     if (progress) removeNativeProfileLevelXp(anchor, progress.current);
+    renderProfilePersonalAddButton(profile, badge);
   });
 }
 
@@ -595,8 +653,9 @@ function requestPersonalLeaderboardData() {
 function renderPersonalLeaderboards() {
   if (!isLeaderboardPage()) return;
 
-  waitFor(() => document.getElementById("be-alltime-leaderboard") || findAllTimeLeaderboardInsertionPoint() || document.querySelector("main") || document.body).then((host) => {
+  waitFor(() => document.getElementById("be-alltime-leaderboard"), 10000).then((allTime) => {
     if (!isLeaderboardPage()) return;
+    if (!allTime) return;
 
     let panel = document.getElementById("be-personal-leaderboards");
     if (!panel) {
@@ -605,17 +664,8 @@ function renderPersonalLeaderboards() {
       panel.className = "be-personal-leaderboards";
     }
 
-    const allTime = document.getElementById("be-alltime-leaderboard");
     if (allTime && panel.previousElementSibling !== allTime) {
       allTime.insertAdjacentElement("afterend", panel);
-    } else if (!panel.parentElement) {
-      if (host?.matches?.("h1,h2,h3,[role='heading']")) {
-        host.insertAdjacentElement("beforebegin", panel);
-      } else if (host?.parentElement && !["MAIN", "BODY"].includes(host.tagName)) {
-        host.insertAdjacentElement("afterend", panel);
-      } else {
-        (host || document.body).append(panel);
-      }
     }
 
     const chips = personalHandles
@@ -661,17 +711,15 @@ function renderPersonalBoard(title, rows, unit) {
 }
 
 function renderPersonalRow(row, rank, unit) {
-  const avatar = row.avatar
-    ? `<img src="${escapeHtml(row.avatar)}" alt="${escapeHtml(row.name)} avatar">`
-    : `<span>${escapeHtml(row.name.slice(0, 1).toUpperCase() || "?")}</span>`;
   const value = row.value == null
     ? row.loading ? "loading" : "unavailable"
     : `${fmtNum(row.value)} ${unit}`;
+  const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
 
   return `
-    <a class="be-personal-row" href="/u/${encodeURIComponent(row.handle)}">
+    <a class="be-personal-row${isCurrentUser ? " be-current-user" : ""}" href="/u/${encodeURIComponent(row.handle)}">
       <span class="be-personal-rank">${rank}</span>
-      <span class="be-personal-avatar">${avatar}</span>
+      ${renderLeaderAvatar(row, row.name)}
       <span class="be-personal-copy">
         <span class="be-personal-name">${escapeHtml(row.name)}</span>
         <span class="be-personal-handle">@${escapeHtml(row.displayHandle)}</span>
@@ -780,6 +828,7 @@ function getPersonalRows(kind) {
         displayHandle: getPersonalDisplayHandle(handle),
         name: getDisplayName(profile, getPersonalDisplayHandle(handle)),
         avatar: getAvatarUrl(profile),
+        Handle: record.handle || handle,
         value,
         loading: personalPendingHandle === handle,
       };
@@ -815,7 +864,7 @@ async function refreshPersonalStats(handle) {
   const normalized = normalizeHandle(handle);
   if (!isValidHandle(normalized) || !isPersonalHandle(normalized)) return;
 
-  const result = await fetchApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(normalized)}/stats`);
+  const result = await fetchApiJsonWithAuthRetry(`https://api.boot.dev/v1/users/public/${encodeURIComponent(normalized)}/stats`);
   if (result.status >= 200 && result.status < 300) {
     const record = ensurePersonalRecord(normalized);
     record.stats = result.json?.data ?? result.json;
@@ -828,7 +877,7 @@ async function refreshPersonalStats(handle) {
 
   if (result.status !== 404) {
     const record = ensurePersonalRecord(normalized);
-    record.statsError = "unavailable";
+    record.statsError = isAuthStatus(result.status) ? "auth" : "unavailable";
     record.updatedAt = Date.now();
     savePersonalCache();
     renderPersonalLeaderboards();
@@ -842,7 +891,7 @@ async function loadPublicUserProfile(handle, options = {}) {
     return null;
   }
 
-  const result = await fetchApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(normalized)}`);
+  const result = await fetchApiJsonWithAuthRetry(`https://api.boot.dev/v1/users/public/${encodeURIComponent(normalized)}`);
   if (result.status === 404) {
     if (options.removeMissing && isPersonalHandle(normalized)) {
       await removePersonalHandle(normalized);
@@ -850,6 +899,11 @@ async function loadPublicUserProfile(handle, options = {}) {
     } else {
       setPersonalFeedback("User not found", "error");
     }
+    return null;
+  }
+
+  if (isAuthStatus(result.status)) {
+    setPersonalFeedback("Session expired. Refresh Boot.dev and try again.", "error");
     return null;
   }
 
@@ -1028,8 +1082,11 @@ async function renderBossPanel(s) {
     if (bossUiState.minimized) {
       panel.innerHTML = `
         <div class="be-boss-head be-boss-drag-handle">
-          <span class="be-boss-min-title">Boss event - Current Aura: ${fmtPct(s.current)}</span>
-          <button id="be-boss-toggle" type="button" title="Expand boss event" aria-label="Expand boss event">+</button>
+          <span class="be-boss-min-title">Boss Event - Current Aura: ${fmtPct(s.current)}</span>
+          <div class="be-boss-actions">
+            <button id="be-boss-settings-toggle" type="button" title="Open boss settings" aria-label="Open boss settings" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}">&#9881;</button>
+            <button id="be-boss-toggle" type="button" title="Expand boss event" aria-label="Expand boss event">+</button>
+          </div>
         </div>`;
       applyBossPanelPosition(panel);
       bindBossPanelControls(panel, s);
@@ -1037,49 +1094,57 @@ async function renderBossPanel(s) {
     }
 
     const deltaToHigh =
-      s.eventHigh > 0 ? (s.eventHigh - s.current).toFixed(0) : "0";
+      s.eventHigh > 0 ? Math.max(0, s.eventHigh - s.current).toFixed(0) : "0";
     const toNextChest =
       s.nextChestAt > 0 ? Math.max(0, s.nextChestAt - s.damage) : "?";
     const toDefeat =
       s.bossMaxHp > 0 ? Math.max(0, s.bossMaxHp - s.damage) : "?";
+    const nextChestProgress = getProgressPct(s.damage, s.nextChestAt);
+    const bossProgress = getProgressPct(s.damage, s.bossMaxHp);
+    const lastUpdated = s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "unknown";
     const settingsMarkup = bossUiState.settingsOpen
-      ? `<div class="be-boss-manual">
-          <label>
-            <span>Event high %</span>
-            <input id="be-boss-event-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.eventHigh || 0))}">
-          </label>
-          <label>
-            <span>All-time high %</span>
-            <input id="be-boss-alltime-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.allTimeHigh || 0))}">
-          </label>
-          <button id="be-boss-save-highs" type="button">save highs</button>
+      ? `<div class="be-boss-settings-panel">
+          <div class="be-boss-manual">
+            <label>
+              <span>Event high %</span>
+              <input id="be-boss-event-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.eventHigh || 0))}">
+            </label>
+            <label>
+              <span>All-time high %</span>
+              <input id="be-boss-alltime-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.allTimeHigh || 0))}">
+            </label>
+            <div class="be-boss-manual-actions">
+              <button id="be-boss-save-highs" type="button">Save highs</button>
+              <button id="be-boss-refresh" type="button">Refresh</button>
+              <button id="be-boss-reset" class="be-boss-reset-button" type="button" title="Reset stats for this event">Reset</button>
+            </div>
+          </div>
         </div>`
       : "";
 
     panel.innerHTML = `
       <div class="be-boss-head be-boss-drag-handle">
-        <span>Boss event</span>
+        <span>Boss Event</span>
         <div class="be-boss-actions">
+          <button id="be-boss-settings-toggle" type="button" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}" title="Boss high settings" aria-label="Boss high settings">&#9881;</button>
           <button id="be-boss-toggle" type="button" title="Minimize boss event" aria-label="Minimize boss event">-</button>
-          <button id="be-boss-reset" type="button" title="Reset stats for a new event">reset</button>
         </div>
       </div>
       <div class="be-boss-grid">
-        <div><b>${fmtPct(s.current)}</b><span>current aura</span></div>
-        <div><b>${fmtPct(s.eventHigh)}</b><span>event high</span></div>
-        <div><b>${fmtPct(s.allTimeHigh)}</b><span>all-time high</span></div>
-        <div><b>${deltaToHigh}%</b><span>below event high</span></div>
-        <div><b>${fmtNum(s.damage)}</b><span>boss damage</span></div>
-        <div><b>${fmtNum(toNextChest)}</b><span>to next chest</span></div>
-        <div><b>${fmtNum(toDefeat)}</b><span>to defeat boss</span></div>
-        <div><b>${s.lastChestTier ?? "-"} &rarr; ${s.nextChestTier ?? "-"}</b><span>chest tier</span></div>
+        <div><b>${fmtPct(s.current)}</b><span>Current aura</span></div>
+        <div><b>${fmtPct(s.eventHigh)}</b><span>Event high</span></div>
+        <div><b>${fmtPct(s.allTimeHigh)}</b><span>All-time high</span></div>
+        <div><b>${deltaToHigh}%</b><span>Below event high</span></div>
+        <div><b>${fmtNum(s.damage)}</b><span>Boss damage</span></div>
+        <div><b>${fmtNum(toNextChest)}</b><span>To next chest</span></div>
+        <div><b>${fmtNum(toDefeat)}</b><span>To defeat boss</span></div>
+        <div><b>${escapeHtml(s.lastChestTier ?? "Start")} &rarr; ${escapeHtml(s.nextChestTier ?? "Complete")}</b><span>Chest tier</span></div>
       </div>
-      <div class="be-boss-settings-row">
-        <button id="be-boss-settings-toggle" type="button" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}" title="Toggle boss high settings">
-          <span aria-hidden="true">&#9881;</span>
-          <span>High settings</span>
-        </button>
+      <div class="be-boss-progress-list">
+        ${renderBossProgress("Next chest", nextChestProgress)}
+        ${renderBossProgress("Boss defeat", bossProgress)}
       </div>
+      <div class="be-boss-meta">Last updated ${escapeHtml(lastUpdated)}</div>
       ${settingsMarkup}`;
 
     applyBossPanelPosition(panel);
@@ -1111,9 +1176,14 @@ function bindBossPanelControls(panel, state) {
   const settingsToggle = panel.querySelector("#be-boss-settings-toggle");
   if (settingsToggle) {
     settingsToggle.onclick = async () => {
-      await saveBossUiState({ settingsOpen: !bossUiState.settingsOpen });
+      await saveBossUiState({ settingsOpen: !bossUiState.settingsOpen, minimized: false });
       renderBossPanel(state);
     };
+  }
+
+  const refresh = panel.querySelector("#be-boss-refresh");
+  if (refresh) {
+    refresh.onclick = () => requestBossProgress();
   }
 
   const saveHighs = panel.querySelector("#be-boss-save-highs");
@@ -1135,6 +1205,24 @@ function bindBossPanelControls(panel, state) {
       renderBossPanel(next);
     };
   }
+}
+
+function getProgressPct(value, total) {
+  const current = num(value);
+  const max = num(total);
+  if (current == null || max == null || max <= 0) return null;
+  return clamp((current / max) * 100, 0, 100);
+}
+
+function renderBossProgress(label, pctValue) {
+  const pctText = pctValue == null ? "?" : `${Math.round(pctValue)}%`;
+  const width = pctValue == null ? 0 : pctValue;
+  return `<div class="be-boss-progress">
+    <div class="be-boss-progress-label"><span>${escapeHtml(label)}</span><b>${escapeHtml(pctText)}</b></div>
+    <div class="be-boss-progress-track" role="progressbar" aria-label="${escapeHtml(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(pctValue == null ? 0 : Math.round(pctValue))}">
+      <span style="width: ${escapeHtml(width)}%"></span>
+    </div>
+  </div>`;
 }
 
 function bindBossDrag(panel) {
@@ -1265,6 +1353,7 @@ function removeAllTimeLeaderboard() {
 
 function removeProfileXpBadge() {
   document.getElementById("be-total-xp")?.remove();
+  document.getElementById("be-profile-personal-add")?.remove();
 }
 
 function removeNativeProfileLevelXp(anchor, currentXp) {
@@ -1279,6 +1368,35 @@ function removeNativeProfileLevelXp(anchor, currentXp) {
   duplicate?.remove();
 }
 
+function renderProfilePersonalAddButton(profile, anchor) {
+  const handle = normalizeHandle(profile?.Handle);
+  if (!isValidHandle(handle) || !anchor) return;
+
+  let button = document.getElementById("be-profile-personal-add");
+  if (!button) {
+    button = document.createElement("button");
+    button.id = "be-profile-personal-add";
+    button.className = "be-profile-personal-add";
+    button.type = "button";
+  }
+
+  const added = isPersonalHandle(handle);
+  button.disabled = added;
+  button.textContent = added ? "In Personal Leaderboards" : "Add to Personal Leaderboards";
+  button.onclick = added
+    ? null
+    : async () => {
+        button.disabled = true;
+        button.textContent = "Adding...";
+        await addPersonalHandle(handle);
+        const message = personalFeedback?.text || (isPersonalHandle(handle) ? `Added @${handle}` : "Could not add user");
+        toast(message);
+        renderProfilePersonalAddButton(profile, anchor);
+      };
+
+  anchor.insertAdjacentElement("afterend", button);
+}
+
 async function loadCachedAllTimeLeaderboard() {
   const stored = (await chromeGet(LEADERBOARD_CACHE_KEY)) || {};
   if (enhancerStopped) return;
@@ -1289,6 +1407,65 @@ async function loadNextLessonHref() {
   const stored = (await chromeGet(NEXT_LESSON_KEY)) || {};
   if (enhancerStopped) return;
   nextLessonHref = normalizeLessonHref(stored.href || stored);
+}
+
+async function loadCurrentUserHandle() {
+  const stored = (await chromeGet(CURRENT_USER_HANDLE_KEY)) || {};
+  if (enhancerStopped) return;
+  currentUserHandle = normalizeHandle(stored.handle || stored);
+}
+
+async function rememberCurrentUserHandle(handle) {
+  const normalized = normalizeHandle(handle);
+  if (!isValidHandle(normalized) || normalized === currentUserHandle) return;
+
+  currentUserHandle = normalized;
+  await chromeSet(CURRENT_USER_HANDLE_KEY, { handle: normalized, updatedAt: Date.now() });
+  if (!isLeaderboardPage()) return;
+
+  if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
+  renderPersonalLeaderboards();
+}
+
+function learnCurrentUserHandleFromDom() {
+  const navHandle = getProfileHandleFromHref(findCurrentUserProfileLink()?.getAttribute("href"));
+  const nativeHandle = isLeaderboardPage() ? findNativeCurrentUserHandle() : "";
+  const handle = normalizeHandle(navHandle || nativeHandle);
+  if (handle) void rememberCurrentUserHandle(handle);
+}
+
+function findNativeCurrentUserHandle() {
+  const links = Array.from(document.querySelectorAll('main a[href^="/u/"], #__nuxt a[href^="/u/"]'))
+    .filter((link) => isVisible(link) && !link.closest("#be-alltime-leaderboard, #be-personal-leaderboards"));
+
+  for (const link of links) {
+    let el = link;
+    for (let depth = 0; el && depth < 6; depth += 1) {
+      if (hasNativeGoldGlow(el)) return getProfileHandleFromHref(link.getAttribute("href"));
+      el = el.parentElement;
+    }
+  }
+  return "";
+}
+
+function hasNativeGoldGlow(el) {
+  try {
+    const boxShadow = getComputedStyle(el).boxShadow;
+    return Boolean(boxShadow && boxShadow !== "none" && containsGoldCssColor(boxShadow));
+  } catch (_) {
+    return false;
+  }
+}
+
+function containsGoldCssColor(value) {
+  const matches = String(value).matchAll(/rgba?\((\d+),\s*(\d+),\s*(\d+)/gi);
+  for (const match of matches) {
+    const r = Number(match[1]);
+    const g = Number(match[2]);
+    const b = Number(match[3]);
+    if (r >= 150 && g >= 95 && g <= 215 && b <= 125 && r > b && g > b) return true;
+  }
+  return false;
 }
 
 function getLeaderboardEntries(json) {
@@ -1318,10 +1495,6 @@ function isCurrentLeaderboardEntry(entry, currentIdentity) {
   const handle = normalizeHandle(identity.handle);
   if (handle && normalizeHandle(getHandle(entry)) === handle) return true;
 
-  const identityAvatar = normalizeImageUrl(identity.avatarUrl);
-  const entryAvatar = normalizeImageUrl(getAvatarUrl(entry));
-  if (identityAvatar && entryAvatar && identityAvatar === entryAvatar) return true;
-
   return false;
 }
 
@@ -1329,21 +1502,12 @@ function getCurrentUserIdentity() {
   const navLink = findCurrentUserProfileLink();
   return {
     handle: getCurrentUserHandle(navLink),
-    avatarUrl: getCurrentUserAvatarUrl(navLink),
     name: getCurrentUserDisplayName(navLink),
   };
 }
 
 function getCurrentUserHandle(navLink = findCurrentUserProfileLink()) {
-  const profileMatch = /^\/u\/([^/]+)\/?$/.exec(location.pathname);
-  const href = navLink?.getAttribute("href") || "";
-  const navMatch = /^\/u\/([^/]+)\/?$/.exec(href);
-  return decodeURIComponent(navMatch?.[1] || profileMatch?.[1] || "");
-}
-
-function getCurrentUserAvatarUrl(navLink) {
-  const img = navLink?.querySelector?.("img[src]") || findTopNavAvatarImage();
-  return img?.currentSrc || img?.src || img?.getAttribute?.("src") || "";
+  return normalizeHandle(getProfileHandleFromHref(navLink?.getAttribute("href")) || currentUserHandle);
 }
 
 function getCurrentUserDisplayName(navLink) {
@@ -1364,19 +1528,6 @@ function findCurrentUserProfileLink() {
   return topLinks[0]?.link || null;
 }
 
-function findTopNavAvatarImage() {
-  const images = Array.from(document.querySelectorAll("img[src]"))
-    .filter(isVisible)
-    .map((img) => ({ img, rect: img.getBoundingClientRect(), src: img.currentSrc || img.src || img.getAttribute("src") || "" }))
-    .filter(({ rect, src }) => {
-      if (rect.top < 0 || rect.top > 90 || rect.right < window.innerWidth / 2) return false;
-      return !/bootdev-logo|\/_nuxt\/9\.|role|frame/i.test(src);
-    })
-    .sort((a, b) => b.rect.right - a.rect.right);
-
-  return images[0]?.img || null;
-}
-
 function getLevelProgress(profile) {
   const current = num(profile?.XPForLevel);
   const total = num(profile?.XPTotalForLevel);
@@ -1391,6 +1542,7 @@ function getLevelProgress(profile) {
 
 function getHandle(entry) {
   return (
+    entry?.handle ||
     entry?.Handle ||
     entry?.Username ||
     entry?.UserHandle ||
@@ -1416,6 +1568,18 @@ function normalizeLessonHref(value) {
     return parsed.pathname + parsed.search + parsed.hash;
   } catch (_) {
     return null;
+  }
+}
+
+function getProfileHandleFromHref(href) {
+  if (!href) return "";
+  try {
+    const parsed = new URL(href, location.origin);
+    const match = /^\/u\/([^/]+)\/?$/.exec(parsed.pathname);
+    return normalizeHandle(match?.[1] ? decodeURIComponent(match[1]) : "");
+  } catch (_) {
+    const match = /^\/u\/([^/]+)\/?$/.exec(String(href));
+    return normalizeHandle(match?.[1] ? decodeURIComponent(match[1]) : "");
   }
 }
 
@@ -1453,6 +1617,7 @@ function isEditableTarget(target) {
 
 function getDisplayName(entry, handle) {
   return (
+    entry?.name ||
     entry?.FirstName ||
     entry?.Name ||
     entry?.DisplayName ||
@@ -1465,6 +1630,7 @@ function getDisplayName(entry, handle) {
 
 function getAvatarUrl(entry) {
   return (
+    entry?.avatar ||
     entry?.ProfileImageURL ||
     entry?.ProfileImageUrl ||
     entry?.ProfilePictureURL ||
@@ -1591,7 +1757,7 @@ function handleAsyncError(err, scope = "runtime") {
     stopEnhancer();
     return;
   }
-  console.warn(`[Boot.dev Enhancer] ${scope} error`, safeErrorMessage(err));
+  console.warn(`[catalyst] ${scope} error`, safeErrorMessage(err));
 }
 
 function safeErrorMessage(err) {
@@ -1615,7 +1781,7 @@ function handleChromeApiError(err) {
     stopEnhancer();
     return;
   }
-  console.warn("[Boot.dev Enhancer] Chrome API error", safeErrorMessage(err));
+  console.warn("[catalyst] Chrome API error", safeErrorMessage(err));
 }
 
 function chromeGet(key) {

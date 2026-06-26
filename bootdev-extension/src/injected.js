@@ -181,5 +181,5 @@
     } catch (_) {}
   });
 
-  if (DEBUG) console.debug("[Boot.dev Enhancer] interceptor installed");
+  if (DEBUG) console.debug("[catalyst] interceptor installed");
 })();
