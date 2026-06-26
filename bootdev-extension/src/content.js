@@ -34,14 +34,15 @@ const ROLE_FRAME_URLS = [
 ];
 const ARCHMAGE_FRAME_URL = ROLE_FRAME_URLS[9];
 const ROLE_FRAME_INDEX_BY_ROLE = {
-  apprentice: 1,
-  pupil: 2,
-  acolyte: 3,
-  disciple: 4,
-  scholar: 5,
-  sorcerer: 6,
-  sage: 7,
-  archsage: 8,
+  apprentice: 0,
+  pupil: 1,
+  acolyte: 2,
+  disciple: 3,
+  scholar: 4,
+  sorcerer: 5,
+  sage: 6,
+  archsage: 7,
+  mage: 8,
   archmage: 9,
 };
 const BOSS_REFRESH_MS = 30_000;
@@ -376,7 +377,6 @@ function renderAllTimeLeaderboard(entries) {
       <div class="be-native-grid-wrap">
         <div class="be-native-grid">${cards}</div>
       </div>`;
-    renderPersonalLeaderboards();
   });
 }
 
@@ -406,9 +406,13 @@ function renderLeaderAvatar(entry, displayName) {
     ? `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(name)} avatar" class="be-leader-avatar-img">`
     : `<span class="be-leader-avatar-fallback">${escapeHtml(name.slice(0, 1).toUpperCase() || "?")}</span>`;
 
+  const frameMarkup = frameUrl
+    ? `<img src="${escapeHtml(frameUrl)}" alt="" class="be-leader-frame" aria-hidden="true">`
+    : "";
+
   return `<span class="be-leader-avatar">
     <span class="be-leader-avatar-inner">${avatarMarkup}</span>
-    <img src="${escapeHtml(frameUrl)}" alt="" class="be-leader-frame" aria-hidden="true">
+    ${frameMarkup}
   </span>`;
 }
 
@@ -425,10 +429,19 @@ function ensureLeaderboardUiState() {
     return;
   }
 
-  if (allTime && (!personal || personal.previousElementSibling !== allTime)) {
+  if (!allTime) return;
+
+  if (!personal) {
     renderPersonalLeaderboards();
-  } else if (personalHandles.some((handle) => isCurrentLeaderboardEntry({ handle }, currentIdentity)) &&
-      personal && !personal.querySelector(".be-current-user")) {
+    return;
+  }
+
+  // Reposition without re-rendering if boot.dev inserted elements between the panels.
+  const isAfterAllTime = !!(allTime.compareDocumentPosition(personal) & Node.DOCUMENT_POSITION_FOLLOWING);
+  if (!isAfterAllTime) allTime.insertAdjacentElement("afterend", personal);
+
+  if (personalHandles.some((handle) => isCurrentLeaderboardEntry({ handle }, currentIdentity)) &&
+      !personal.querySelector(".be-current-user")) {
     renderPersonalLeaderboards();
   }
 }
@@ -692,6 +705,11 @@ function renderPersonalLeaderboards() {
       allTime.insertAdjacentElement("afterend", panel);
     }
 
+    // Save input state so background data refreshes don't clear a user's typing.
+    const prevInput = panel.querySelector("#be-personal-handle");
+    const savedInputValue = prevInput ? prevInput.value : "";
+    const inputWasFocused = prevInput !== null && prevInput === document.activeElement;
+
     const chips = personalHandles
       .map((handle) => `<button type="button" class="be-personal-chip" data-be-remove-handle="${escapeHtml(handle)}">@${escapeHtml(getPersonalDisplayHandle(handle))}<span aria-hidden="true">&times;</span></button>`)
       .join("");
@@ -717,6 +735,15 @@ function renderPersonalLeaderboards() {
           ${renderPersonalBoard("Top Community Members", getPersonalRows("karma"), "karma")}
         </div>
       </div>`;
+
+    // Restore input state after innerHTML replacement.
+    if (savedInputValue || inputWasFocused) {
+      const newInput = panel.querySelector("#be-personal-handle");
+      if (newInput) {
+        if (savedInputValue) newInput.value = savedInputValue;
+        if (inputWasFocused) newInput.focus();
+      }
+    }
 
     bindPersonalLeaderboardControls(panel);
   });
@@ -1513,7 +1540,7 @@ function getCurrentUserIdentity() {
 function getCurrentUserHandle(navLink = findCurrentUserProfileLink()) {
   const navHandle = getProfileHandleFromHref(navLink?.getAttribute("href"));
   const nativeHandle = isLeaderboardPage() ? findNativeCurrentUserHandle() : "";
-  return normalizeHandle(navHandle || nativeHandle || (isLeaderboardPage() ? "" : currentUserHandle));
+  return normalizeHandle(navHandle || nativeHandle || currentUserHandle);
 }
 
 function getCurrentUserDisplayName(navLink) {
@@ -1654,7 +1681,7 @@ function getRoleFrameUrl(entry) {
   return (
     getExplicitFrameUrl(entry) ||
     ROLE_FRAME_URLS[getRoleFrameIndex(entry)] ||
-    ARCHMAGE_FRAME_URL
+    ""
   );
 }
 
@@ -1678,15 +1705,19 @@ function getExplicitFrameUrl(entry) {
 }
 
 function getRoleFrameIndex(entry) {
-  const role = normalizeText(entry?.Role || entry?.User?.Role).toLowerCase();
+  const role = normalizeText(entry?.Role || entry?.User?.Role)
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
   if (ROLE_FRAME_INDEX_BY_ROLE[role] != null) return ROLE_FRAME_INDEX_BY_ROLE[role];
 
   const level = num(entry?.Level ?? entry?.User?.Level);
   if (level != null) {
-    return clamp(Math.floor(level / 10), 0, ROLE_FRAME_URLS.length - 1);
+    const idx = Math.floor(level / 10) - 1;
+    if (idx < 0) return -1;
+    return Math.min(idx, ROLE_FRAME_URLS.length - 1);
   }
 
-  return ROLE_FRAME_URLS.length - 1;
+  return -1;
 }
 
 function normalizeAssetUrl(value) {
@@ -2016,10 +2047,11 @@ function waitFor(fn, timeout = 8000, interval = 150) {
   return new Promise((resolve) => {
     const start = Date.now();
     const tick = () => {
+      if (enhancerStopped) return resolve(null);
       const v = fn();
       if (v) return resolve(v);
       if (Date.now() - start > timeout) return resolve(null);
-      setTimeout(tick, interval);
+      setTrackedTimeout(tick, interval);
     };
     tick();
   });

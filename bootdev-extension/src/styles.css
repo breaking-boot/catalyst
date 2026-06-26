@@ -127,7 +127,7 @@
 .be-leader-card.be-current-user {
   border-color: #4b5563;
   background: transparent;
-  box-shadow: 0 0 18px 3px rgba(229, 174, 60, 0.45);
+  box-shadow: 0 0 15px 1px #e5a012;
 }
 .be-leader-card.be-current-user:hover {
   border-color: #e5ae3c;
@@ -349,7 +349,7 @@
 }
 .be-personal-row.be-current-user {
   border-color: rgba(75, 85, 99, 0.95);
-  box-shadow: 0 0 18px 3px rgba(229, 174, 60, 0.45);
+  box-shadow: 0 0 15px 1px #e5a012;
 }
 .be-personal-row.be-current-user:hover {
   border-color: #e5ae3c;
@@ -412,7 +412,7 @@
   right: 16px;
   bottom: 16px;
   z-index: 99999;
-  width: min(320px, calc(100vw - 24px));
+  width: min(380px, calc(100vw - 24px));
   padding: 12px 14px;
   border-radius: 8px;
   border: 1px solid rgba(229, 174, 60, 0.35);
@@ -434,7 +434,7 @@
   user-select: none;
 }
 .be-boss-panel.be-boss-minimized {
-  width: min(320px, calc(100vw - 24px));
+  width: min(380px, calc(100vw - 24px));
   padding: 9px 14px;
 }
 .be-boss-head {
@@ -458,7 +458,7 @@
 }
 .be-boss-min-title {
   min-width: 0;
-  font-size: 14px;
+  font-size: 16px;
   overflow: hidden;
   line-height: 1.2;
   text-overflow: ellipsis;
