@@ -1,4 +1,4 @@
-# Boot.dev Enhancer
+# catalyst for Boot.dev
 
 A Manifest V3 Chrome extension that augments boot.dev with a few quality-of-life additions:
 
@@ -29,21 +29,21 @@ Only `bootdev-extension/` is needed by Chrome. The `reference_data/` directory i
 
 ## TL;DR
 
-1. Download `bootdev-extension.zip`.
+1. Download the latest `catalyst-v<version>.zip` from the `releases/` folder.
 2. Unzip it.
-3. In Chrome, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the unzipped `bootdev-extension` folder.
+3. In Chrome, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the unzipped `catalyst-v<version>` folder.
 4. Visit `https://www.boot.dev`.
 
 ## Install From Zip
 
 Chrome loads unpacked extension folders, not zip files directly. Unzip first, then load the folder.
 
-1. Unzip `bootdev-extension.zip`.
+1. Unzip `catalyst-v<version>.zip`.
    - macOS/Windows: double-click the zip file or use the built-in Extract option.
    - Terminal:
 
 ```bash
-unzip bootdev-extension.zip
+unzip catalyst-v0.3.0.zip
 ```
 
 2. Open Chrome and go to:
@@ -54,15 +54,15 @@ chrome://extensions
 
 3. Turn on **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the unzipped `bootdev-extension` folder.
+5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.3.0`).
 6. Open or refresh `https://www.boot.dev`.
 
 ## Updating
 
-1. Remove or replace the old unzipped `bootdev-extension` folder.
-2. Unzip the new `bootdev-extension.zip`.
+1. Remove or replace the old unzipped `catalyst-v<old-version>` folder.
+2. Unzip the new `catalyst-v<version>.zip`.
 3. Go to `chrome://extensions`.
-4. Click the reload button on **Boot.dev Enhancer**.
+4. Click the reload button on **catalyst for Boot.dev**.
 5. Refresh any open Boot.dev tabs.
 
 ## Usage
@@ -72,16 +72,18 @@ The extension runs automatically on `www.boot.dev`.
 - On `https://www.boot.dev/leaderboard`, it adds **Top All-Time Learners** below the native **Top Daily Learners** section using `/v1/leaderboard_xp/alltime`.
 - The all-time leaderboard uses the native Archmage role frame around avatars, highlights the logged-in user's row when present, and caches the latest response so repeat visits render faster while fresh data loads.
 - On public profile pages like `https://www.boot.dev/u/<username>`, it adds `Total XP`, current-level XP progress, and remaining XP below the native level line in the profile header.
+- Public profile pages also include an **Add to Personal Leaderboards** button for quickly tracking that user.
 - On boot.dev pages, it shows the boss tracker once boss-event data has been loaded.
 - Drag the boss tracker header to reposition it. The position persists across pages.
-- Use the `-` / `+` boss tracker button to minimize or expand it. The minimized view still shows `Boss event - Current Aura: <aura>%`.
+- Use the `-` / `+` boss tracker button to minimize or expand it. The minimized view still shows `Boss Event - Current Aura: <aura>%`.
 - In the expanded boss tracker, use the gear button to open or close high settings. Manually edit event high and all-time high percentages there if you learn about a missed high while the extension was not watching the page. Saving an event high above the all-time high also raises the all-time high.
-- Use the boss tracker **reset** button to clear the current event stats while keeping the all-time aura high.
+- Boss tracker settings also include **Refresh** and **Reset**. Reset clears the current event stats while keeping the all-time aura high.
 - Boss-event data refreshes in the background about every 30 seconds. Navigating within boot.dev resets that 30-second timer and triggers a fresh fetch.
 - The **Next Lesson** top-nav link is learned from `/v1/dashboard_content`, specifically `CurrentLessonUUID`. Lesson progress responses trigger a delayed dashboard refresh so the link updates after completions. The dashboard **Continue Learning** button is also used as a same-page fallback.
 - Press `Alt+N` to open the saved **Next Lesson** link from any boot.dev page. The shortcut is ignored while typing in inputs or editors.
 - On `https://www.boot.dev/leaderboard`, the **Personal Leaderboards** section lets you add and remove handles. Handles are stored in `chrome.storage.local`.
 - Personal **Top Daily Learners** uses `/v1/leaderboard_xp/day` when a saved handle appears there. Otherwise it shows observed XP gained today from the saved public profile snapshots. **Top All-Time Learners** uses public profile XP, and **Top Community Members** uses public stats karma.
+- Invalid, empty, duplicate, or nonexistent users are rejected before being saved. If Boot.dev returns an auth error, catalyst retries once and then asks you to refresh Boot.dev.
 
 No extra sign-in flow is required. The extension reads JSON responses that the boot.dev page fetches, and it can ask the page context to refresh selected endpoints with the existing boot.dev session.
 
@@ -124,15 +126,9 @@ From the repo root, create a shareable zip with:
 bash scripts/package-extension.sh
 ```
 
-This creates `bootdev-extension.zip` containing the loadable `bootdev-extension/` folder. It does not include `.git`, `reference_data/`, `node_modules`, debug artifacts, or unrelated local files because only the extension directory is packaged.
+This reads the version from `bootdev-extension/manifest.json` and produces `releases/catalyst-v<version>.zip`. The zip contains a single folder named `catalyst-v<version>/` with the loadable extension contents. It does not include `.git`, `reference_data/`, `node_modules`, debug artifacts, or unrelated local files.
 
-You can also run the command manually:
-
-```bash
-zip -r bootdev-extension.zip bootdev-extension -x "*/.git/*" "*/node_modules/*" "*/.DS_Store" "*.log"
-```
-
-Recipients should unzip `bootdev-extension.zip` and select the unzipped `bootdev-extension` folder in Chrome's **Load unpacked** dialog.
+Recipients should unzip `catalyst-v<version>.zip` and select the unzipped `catalyst-v<version>` folder in Chrome's **Load unpacked** dialog.
 
 ## Versioning
 
@@ -142,13 +138,14 @@ This project uses semantic versioning:
 - `MINOR`: backwards-compatible features.
 - `PATCH`: bug fixes, graceful handling, docs, packaging, and polish.
 
-Current version: `v0.2.1`.
+Current version: `v0.3.0`.
 
 Version map:
 
-- `v0.1.0`: first usable local Boot.dev Enhancer build with core enhancement behavior.
+- `v0.1.0`: first usable local pre-rename build with core enhancement behavior.
 - `v0.2.0`: personal leaderboard build with manually added usernames.
 - `v0.2.1`: graceful error handling, invalid username validation, 401 handling, console-noise reduction, and release docs.
+- `v0.3.0`: catalyst rename, current-user highlight fixes, Personal Leaderboards placement and avatar polish, profile-page add button, boss widget polish, auth retry handling for personal user checks, leaderboard re-render loop fix, avatar frame tier correction, and packaging script update.
 
 The reference captures and API docs live outside the Chrome load target:
 
@@ -172,8 +169,10 @@ The reference captures and API docs live outside the Chrome load target:
 - Added boss tracker background refresh, SPA route refresh resets, minimization, and drag-position persistence.
 - Added manual boss event-high and all-time-high editing.
 - Added a collapsible boss high-settings section.
+- Added boss progress bars, last-updated display, a manual refresh button, and safer hidden reset placement.
 - Added the top-nav Next Lesson shortcut and `Alt+N` keyboard shortcut.
 - Added manual Personal Leaderboards for saved handles on the leaderboard page.
+- Added profile-page add buttons for Personal Leaderboards.
 - Added semantic/text-landmark injection anchors instead of relying on hashed CSS classes.
 - Updated `bootdev_openapi.yaml` with response schemas from the captured data and useful challenge schema details from `old_openapi.yaml`.
 - Documented `/v1/dashboard_content` as the Next Lesson source and corrected karma leaderboard periods to `alltime`.
