@@ -1,4 +1,8 @@
-# catalyst for Boot.dev
+<p align="center">
+  <img src="docs/branding/catalyst-logo-master.png" alt="Catalyst logo" width="450">
+</p>
+
+# Catalyst for Boot.dev
 
 A Manifest V3 Chrome extension that augments boot.dev with a few quality-of-life additions:
 
