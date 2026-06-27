@@ -3,17 +3,19 @@
 ## v0.4.0 - XP and karma delta display on all leaderboards, stability fixes
 
 - Added XP and karma delta to every leaderboard entry: each card (other than your own) now shows how far ahead or behind you are, in green when you lead and red when you trail.
-- Deltas appear in the extension's Top All-Time Learners panel, all three Personal Leaderboards boards (daily XP, all-time XP, karma), and the native boot.dev Top Daily Learners and Top Community Members sections.
-- Native section deltas are overlaid via `position: absolute` at the bottom-right of each card so boot.dev's layout is not disrupted.
-- Intercepted `/v1/leaderboard_karma/alltime` to power native karma deltas and as a fallback source for the current user's karma when they have not added themselves to Personal Leaderboards.
-- Extended the daily XP cache to hold all leaderboard entries (not just personal handles) to enable native daily-section deltas and as a fallback for the current user's daily XP.
-- Added fast-path rendering: both `renderAllTimeLeaderboard` and `renderPersonalLeaderboards` skip the `waitFor` when their panel already exists, eliminating the async race where stale `waitFor` resolutions overwrote good renders and caused flickering.
+- Deltas now appear on all leaderboards: the extension's Top All-Time Learners panel, all three Personal Leaderboards boards (daily XP, all-time XP, karma), and every native boot.dev board — League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members.
+- Native section deltas are appended into each card's text column, directly beneath the native value and sharing its left edge, so the delta lines up with the value it compares against (instead of floating at the card's bottom-right).
+- Intercepted `/v1/leaderboard_karma/alltime` and `/v1/league_leaderboard_xp/{day,alltime}` to power the native karma and League deltas. Each native board is matched to the API response that feeds it, and the current user's own value is read from that same response, so the comparison is always self-consistent.
+- Extended the daily XP cache to hold all leaderboard entries, and added the league-daily response as a fallback for the current user's own daily XP when they rank outside the global daily top 25.
+- Removed the redundant " today" suffix from daily deltas; the board already implies the period.
+- Fixed leaderboard flicker by rendering each panel once and then reconciling in place (keyed by handle) instead of replacing `innerHTML` on every update. The current-user card is never destroyed and recreated, so its gold glow no longer drops frames; unchanged rows are not touched at all, and only genuine value changes patch the affected text node. Native deltas are likewise patched in place.
+- Added fast-path rendering: both `renderAllTimeLeaderboard` and `renderPersonalLeaderboards` skip the `waitFor` when their panel already exists, eliminating the async race where stale `waitFor` resolutions overwrote good renders.
 - Added a version guard to the `waitFor` slow path so only the latest pending render applies; older superseded resolutions are no-ops.
 - Debounced all data-triggered calls to the personal leaderboard render into `schedulePersonalLeaderboardRender` (50 ms), collapsing the burst of callbacks from simultaneous handle refreshes into a single render.
+- The Personal Leaderboards form, chips, and row containers are now a persistent skeleton, so background refreshes never rebuild the input — input value and focus are preserved without the previous save/restore workaround.
 - Corrected the complete avatar role-frame tier map using confirmed API data: added the missing Mage tier (level 90–99), restored the Archmage index (level 100+), and shifted the level formula down by one step so all tiers render the correct frame.
 - Changed the avatar frame fallback to show no frame for entries with no recognized role and a level below 10 (or no level).
 - Fixed the `ensureLeaderboardUiState` position check to use `compareDocumentPosition` so it repositions the Personal Leaderboards panel without triggering a full re-render when boot.dev inserts elements between the extension's panels.
-- Preserved input value and focus across Personal Leaderboards re-renders so background data refreshes no longer erase text the user is typing.
 - Matched current-user card glow to the native site value (`0 0 15px 1px #e5a012`) in both the all-time and personal leaderboard rows.
 - Matched the boss panel minimized-state title font size to the expanded-state title (both now 16 px); widened the panel to prevent title truncation at maximum aura length.
 

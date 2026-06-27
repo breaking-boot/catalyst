@@ -230,11 +230,14 @@
 }
 .be-leader-delta-ahead { color: #6ee7b7; }
 .be-leader-delta-behind { color: #f87171; }
-/* FRAGILE: overlays native card; relies on card accepting position:relative */
+/* Empty (current-user / no-data) delta spans take no space. */
+.be-delta:empty { display: none; }
+/* Native overlay: an in-flow line appended to the card's text column, so it sits
+   directly beneath the native value and shares its left edge. */
 .be-native-delta {
-  position: absolute;
-  bottom: 6px;
-  right: 8px;
+  display: block;
+  margin-top: 1px;
+  line-height: 1.1;
   pointer-events: none;
 }
 

@@ -5,6 +5,9 @@
 const LEADERBOARD_CACHE_KEY = "be_alltime_leaderboard_cache";
 const ALL_TIME_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/alltime";
 const DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/day";
+const KARMA_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_karma/alltime";
+const LEAGUE_DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/day?limit=25";
+const LEAGUE_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/alltime?limit=25";
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
 const PERSONAL_CACHE_KEY = "be_personal_leaderboard_cache";
 const CURRENT_USER_HANDLE_KEY = "be_current_user_handle";
@@ -37,6 +40,8 @@ const ROLE_FRAME_INDEX_BY_ROLE = {
 let cachedAllTimeEntries = [];
 let cachedDailyEntries = [];
 let cachedKarmaEntries = [];
+let cachedLeagueDailyEntries = [];
+let cachedLeagueEntries = [];
 let personalHandles = [];
 let personalRecords = {};
 let personalFeedback = null;
@@ -291,7 +296,10 @@ function getMyValue(kind) {
     return entry ? num(entry.XP ?? entry.TotalXP ?? entry.XPEarned) : null;
   }
   if (kind === "daily") {
-    const entry = cachedDailyEntries.find((e) => isCurrentLeaderboardEntry(e, identity));
+    // Daily XP earned is universal, so the league-daily response is a valid
+    // fallback when we rank outside the global daily top 25.
+    const entry = cachedDailyEntries.find((e) => isCurrentLeaderboardEntry(e, identity))
+      || cachedLeagueDailyEntries.find((e) => isCurrentLeaderboardEntry(e, identity));
     return entry ? num(entry.XPEarned ?? entry.XP) : null;
   }
   if (kind === "karma") {
@@ -301,13 +309,89 @@ function getMyValue(kind) {
   return null;
 }
 
-function renderDeltaMarkup(myValue, theirValue, unit) {
-  if (myValue == null || theirValue == null) return "";
+// ---------------------------------------------------------------------------
+// Delta helpers (shared by string templates and in-place DOM patching)
+// ---------------------------------------------------------------------------
+function deltaParts(myValue, theirValue) {
+  if (myValue == null || theirValue == null) return null;
   const delta = myValue - theirValue;
-  if (delta === 0) return "";
-  const sign = delta > 0 ? "+" : "−";
-  const cls = delta > 0 ? "be-leader-delta-ahead" : "be-leader-delta-behind";
-  return `<span class="be-leader-delta ${cls}">${sign}${escapeHtml(fmtNum(Math.abs(delta)))} ${unit}</span>`;
+  if (delta === 0) return null;
+  return {
+    text: `${delta > 0 ? "+" : "−"}${fmtNum(Math.abs(delta))}`,
+    cls: delta > 0 ? "be-leader-delta-ahead" : "be-leader-delta-behind",
+  };
+}
+
+function deltaText(myValue, theirValue, unit, skip) {
+  if (skip) return "";
+  const parts = deltaParts(myValue, theirValue);
+  return parts ? `${parts.text} ${unit}` : "";
+}
+
+// An always-present, possibly empty, delta span. Empty spans are hidden via
+// `.be-delta:empty`. Keeping the node stable lets us patch text/class in place
+// instead of rebuilding the card, which is what eliminates the glow flicker.
+function deltaSpanHTML(myValue, theirValue, unit, skip) {
+  const parts = skip ? null : deltaParts(myValue, theirValue);
+  const cls = parts ? ` ${parts.cls}` : "";
+  const text = parts ? `${parts.text} ${unit}` : "";
+  return `<span class="be-leader-delta be-delta${cls}" data-be-delta>${escapeHtml(text)}</span>`;
+}
+
+function patchDeltaEl(el, myValue, theirValue, unit, skip) {
+  if (!el) return;
+  const parts = skip ? null : deltaParts(myValue, theirValue);
+  const text = parts ? `${parts.text} ${unit}` : "";
+  setTextIfChanged(el, text);
+  el.classList.toggle("be-leader-delta-ahead", !!parts && parts.cls === "be-leader-delta-ahead");
+  el.classList.toggle("be-leader-delta-behind", !!parts && parts.cls === "be-leader-delta-behind");
+}
+
+// ---------------------------------------------------------------------------
+// In-place DOM reconciliation
+// ---------------------------------------------------------------------------
+// Update `container`'s children to match `items` without tearing down nodes that
+// persist between renders. Each kept node is patched in place (no destroy/create),
+// so the current-user box-shadow never drops a frame. Only genuinely new rows are
+// created and only removed rows are deleted; reorders move existing nodes.
+function reconcileKeyedChildren(container, items, keyOf, createEl, updateEl) {
+  const existing = new Map();
+  for (const child of Array.from(container.children)) {
+    const key = child.getAttribute("data-be-key");
+    if (key !== null) existing.set(key, child);
+    else child.remove(); // drop stray nodes such as the empty-state placeholder
+  }
+
+  let prev = null;
+  for (const item of items) {
+    const key = String(keyOf(item));
+    let el = existing.get(key);
+    if (el) {
+      updateEl(el, item);
+      existing.delete(key);
+    } else {
+      el = createEl(item);
+      el.setAttribute("data-be-key", key);
+    }
+    if (prev) {
+      if (prev.nextElementSibling !== el) prev.insertAdjacentElement("afterend", el);
+    } else if (container.firstElementChild !== el) {
+      container.insertBefore(el, container.firstElementChild);
+    }
+    prev = el;
+  }
+
+  for (const el of existing.values()) el.remove();
+}
+
+function elementFromHTML(html) {
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html.trim();
+  return tpl.content.firstElementChild;
+}
+
+function setTextIfChanged(el, text) {
+  if (el && el.textContent !== text) el.textContent = text;
 }
 
 function renderAllTimeLeaderboard(entries) {
@@ -342,38 +426,66 @@ function renderAllTimeLeaderboard(entries) {
 }
 
 function _applyAllTimeContent(panel, entries) {
+  // Build the static skeleton once; thereafter reconcile the grid in place.
+  let grid = panel.querySelector(".be-native-grid");
+  if (!grid) {
+    panel.innerHTML = `
+      <h3 class="be-native-title">Top All-Time Learners</h3>
+      <div class="be-native-grid-wrap">
+        <div class="be-native-grid"></div>
+      </div>`;
+    grid = panel.querySelector(".be-native-grid");
+  }
+
   const currentIdentity = getCurrentUserIdentity();
   const visibleEntries = getVisibleAllTimeEntries(entries, currentIdentity);
   const myXP = getMyValue("xp");
-  const cards = visibleEntries
-    .map((e, i) => {
-      const handle = getHandle(e);
-      const displayName = getDisplayName(e, handle);
-      const xp = e.XP ?? e.TotalXP ?? e.XPEarned ?? 0;
-      const rank = e.Position ?? e.Rank ?? i + 1;
-      const isCurrentUser = isCurrentLeaderboardEntry(e, currentIdentity);
-      const href = handle ? `/u/${encodeURIComponent(handle)}` : "#";
-      const deltaMarkup = isCurrentUser ? "" : renderDeltaMarkup(myXP, xp, "xp");
 
-      return `<div class="be-leader-card${isCurrentUser ? " be-current-user" : ""}">
-          <a href="${href}" class="be-leader-link">
-            <span class="be-leader-rank">${escapeHtml(rank)}</span>
-            ${renderLeaderAvatar(e, displayName)}
-            <span class="be-leader-copy">
-              <span class="be-leader-name">${escapeHtml(displayName)}</span>
-              <span class="be-leader-xp">${fmtNum(xp)} xp</span>
-              ${deltaMarkup}
-            </span>
-          </a>
-        </div>`;
-    })
-    .join("");
+  const items = visibleEntries.map((e, i) => {
+    const handle = getHandle(e);
+    return {
+      key: handle || `#${i}`,
+      entry: e,
+      handle,
+      displayName: getDisplayName(e, handle),
+      xp: e.XP ?? e.TotalXP ?? e.XPEarned ?? 0,
+      rank: e.Position ?? e.Rank ?? i + 1,
+      isCurrentUser: isCurrentLeaderboardEntry(e, currentIdentity),
+      href: handle ? `/u/${encodeURIComponent(handle)}` : "#",
+    };
+  });
 
-  panel.innerHTML = `
-    <h3 class="be-native-title">Top All-Time Learners</h3>
-    <div class="be-native-grid-wrap">
-      <div class="be-native-grid">${cards}</div>
+  reconcileKeyedChildren(
+    grid,
+    items,
+    (it) => it.key,
+    (it) => elementFromHTML(allTimeCardHTML(it, myXP)),
+    (el, it) => patchAllTimeCard(el, it, myXP)
+  );
+}
+
+function allTimeCardHTML(it, myXP) {
+  return `<div class="be-leader-card${it.isCurrentUser ? " be-current-user" : ""}">
+      <a href="${it.href}" class="be-leader-link">
+        <span class="be-leader-rank">${escapeHtml(it.rank)}</span>
+        ${renderLeaderAvatar(it.entry, it.displayName)}
+        <span class="be-leader-copy">
+          <span class="be-leader-name">${escapeHtml(it.displayName)}</span>
+          <span class="be-leader-xp">${fmtNum(it.xp)} xp</span>
+          ${deltaSpanHTML(myXP, it.xp, "xp", it.isCurrentUser)}
+        </span>
+      </a>
     </div>`;
+}
+
+function patchAllTimeCard(el, it, myXP) {
+  el.classList.toggle("be-current-user", it.isCurrentUser);
+  const link = el.querySelector(".be-leader-link");
+  if (link && link.getAttribute("href") !== it.href) link.setAttribute("href", it.href);
+  setTextIfChanged(el.querySelector(".be-leader-rank"), String(it.rank));
+  setTextIfChanged(el.querySelector(".be-leader-name"), it.displayName);
+  setTextIfChanged(el.querySelector(".be-leader-xp"), `${fmtNum(it.xp)} xp`);
+  patchDeltaEl(el.querySelector("[data-be-delta]"), myXP, it.xp, "xp", it.isCurrentUser);
 }
 
 function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdentity()) {
@@ -415,70 +527,132 @@ function renderLeaderAvatar(entry, displayName) {
 // ---------------------------------------------------------------------------
 // Native section delta augmentation
 // ---------------------------------------------------------------------------
+// boot.dev renders four native leaderboard boards (League daily + standing,
+// Global daily + community). We can't read their values from the DOM, so each
+// board is matched to the API response that feeds it and a delta vs. our own
+// value is appended into the card's text column, beneath the native value.
+// Deltas are patched in place (never torn down) so they never flicker.
 
-function augmentNativeSectionEntries(heading, dataByHandle, myValue, unit) {
-  if (!heading || myValue == null) return;
-  const section = heading.parentElement;
-  if (!section) return;
-
-  for (const link of section.querySelectorAll('a[href^="/u/"]')) {
-    if (link.closest('#be-alltime-leaderboard, #be-personal-leaderboards')) continue;
-    const handle = normalizeHandle(getProfileHandleFromHref(link.getAttribute('href')));
-    if (!handle) continue;
-    const theirValue = dataByHandle[handle];
-    if (theirValue == null) continue;
-
-    // The card is whichever element is a direct child of the grid/flex container.
-    let card = link;
-    for (let i = 0; i < 5; i++) {
-      if (!card.parentElement) break;
-      const pDisp = getComputedStyle(card.parentElement).display;
-      if (pDisp === 'grid' || pDisp === 'flex' || pDisp === 'inline-flex' || pDisp === 'inline-grid') break;
-      card = card.parentElement;
-    }
-
-    if (card.querySelector('.be-native-delta')) continue; // already augmented
-
-    const delta = myValue - theirValue;
-    if (delta === 0) continue;
-    const sign = delta > 0 ? "+" : "−";
-    const cls = delta > 0 ? "be-leader-delta-ahead" : "be-leader-delta-behind";
-    const span = document.createElement('span');
-    span.className = `be-leader-delta be-native-delta ${cls}`;
-    span.textContent = `${sign}${fmtNum(Math.abs(delta))} ${unit}`;
-    card.style.position = 'relative';
-    card.appendChild(span);
+// Cards (profile links) sitting in document order between `heading` and the next
+// heading. Using document position rather than DOM nesting keeps this correct for
+// both the League and Global containers regardless of their wrapper structure.
+function nativeCardsForHeading(heading) {
+  if (!heading) return [];
+  const headings = Array.from(document.querySelectorAll("h1,h2,h3,[role='heading']"));
+  let next = null;
+  for (const h of headings) {
+    if (h === heading) continue;
+    if (!(heading.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
+    if (!next || (h.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING)) next = h;
   }
+
+  return Array.from(document.querySelectorAll('a[href^="/u/"]')).filter((a) => {
+    if (a.closest("#be-alltime-leaderboard, #be-personal-leaderboards")) return false;
+    if (!(heading.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+    if (next && (next.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING)) return false;
+    return true;
+  });
+}
+
+function mapByHandle(entries, ...fields) {
+  const map = {};
+  for (const entry of entries) {
+    const handle = normalizeHandle(getHandle(entry));
+    if (!handle) continue;
+    let value = null;
+    for (const field of fields) {
+      value = num(entry[field]);
+      if (value != null) break;
+    }
+    if (value != null) map[handle] = value;
+  }
+  return map;
+}
+
+function myValueFromEntries(entries, ...fields) {
+  const identity = getCurrentUserIdentity();
+  const mine = entries.find((entry) => isCurrentLeaderboardEntry(entry, identity));
+  if (!mine) return null;
+  for (const field of fields) {
+    const value = num(mine[field]);
+    if (value != null) return value;
+  }
+  return null;
+}
+
+function augmentNativeSection(heading, dataByHandle, myValue, unit) {
+  if (!heading || myValue == null) return;
+  for (const link of nativeCardsForHeading(heading)) {
+    const column = link.lastElementChild; // [rank, avatar, textColumn]
+    if (!column) continue;
+    const handle = normalizeHandle(getProfileHandleFromHref(link.getAttribute("href")));
+    const theirValue = handle ? dataByHandle[handle] : null;
+    applyNativeDelta(column, myValue, theirValue, unit, theirValue == null);
+  }
+}
+
+function applyNativeDelta(column, myValue, theirValue, unit, skip) {
+  let el = column.querySelector(":scope > .be-native-delta");
+  const parts = skip ? null : deltaParts(myValue, theirValue);
+  if (!parts) {
+    if (el) el.remove();
+    return;
+  }
+  if (!el) {
+    el = document.createElement("span");
+    el.className = "be-leader-delta be-native-delta";
+    column.appendChild(el);
+  }
+  setTextIfChanged(el, `${parts.text} ${unit}`);
+  el.classList.toggle("be-leader-delta-ahead", parts.cls === "be-leader-delta-ahead");
+  el.classList.toggle("be-leader-delta-behind", parts.cls === "be-leader-delta-behind");
+}
+
+function augmentNativeLeagueDaily() {
+  const heading = findHeadingAfter(findHeadingByText("League Leaderboards"), "Top Daily Learners");
+  augmentNativeSection(
+    heading,
+    mapByHandle(cachedLeagueDailyEntries, "XPEarned"),
+    myValueFromEntries(cachedLeagueDailyEntries, "XPEarned"),
+    "xp"
+  );
+}
+
+function augmentNativeLeagueStanding() {
+  const heading = findHeadingAfter(findHeadingByText("League Leaderboards"), "Top League Learners");
+  augmentNativeSection(
+    heading,
+    mapByHandle(cachedLeagueEntries, "XPEarned"),
+    myValueFromEntries(cachedLeagueEntries, "XPEarned"),
+    "xp"
+  );
 }
 
 function augmentNativeDailyLeaderboard() {
-  if (!cachedDailyEntries.length) return;
-  const myValue = getMyValue("daily");
-  if (myValue == null) return;
-  const globalHeading = findHeadingByText("Global Leaderboards");
-  const heading = findHeadingAfter(globalHeading, "Top Daily Learners");
-  const dataByHandle = {};
-  for (const e of cachedDailyEntries) {
-    const h = normalizeHandle(getHandle(e));
-    const v = num(e.XPEarned ?? e.XP);
-    if (h && v != null) dataByHandle[h] = v;
-  }
-  augmentNativeSectionEntries(heading, dataByHandle, myValue, "xp today");
+  const heading = findHeadingAfter(findHeadingByText("Global Leaderboards"), "Top Daily Learners");
+  augmentNativeSection(
+    heading,
+    mapByHandle(cachedDailyEntries, "XPEarned", "XP"),
+    getMyValue("daily"),
+    "xp"
+  );
 }
 
 function augmentNativeKarmaLeaderboard() {
-  if (!cachedKarmaEntries.length) return;
-  const myValue = getMyValue("karma");
-  if (myValue == null) return;
-  const globalHeading = findHeadingByText("Global Leaderboards");
-  const heading = findHeadingAfter(globalHeading, "Top Community Members");
-  const dataByHandle = {};
-  for (const e of cachedKarmaEntries) {
-    const h = normalizeHandle(getHandle(e));
-    const v = num(e.Karma);
-    if (h && v != null) dataByHandle[h] = v;
-  }
-  augmentNativeSectionEntries(heading, dataByHandle, myValue, "karma");
+  const heading = findHeadingAfter(findHeadingByText("Global Leaderboards"), "Top Community Members");
+  augmentNativeSection(
+    heading,
+    mapByHandle(cachedKarmaEntries, "Karma"),
+    getMyValue("karma"),
+    "karma"
+  );
+}
+
+function augmentNativeLeaderboards() {
+  augmentNativeLeagueDaily();
+  augmentNativeLeagueStanding();
+  augmentNativeDailyLeaderboard();
+  augmentNativeKarmaLeaderboard();
 }
 
 function ensureLeaderboardUiState() {
@@ -510,8 +684,7 @@ function ensureLeaderboardUiState() {
     schedulePersonalLeaderboardRender();
   }
 
-  augmentNativeDailyLeaderboard();
-  augmentNativeKarmaLeaderboard();
+  augmentNativeLeaderboards();
 }
 
 function removeAllTimeLeaderboard() {
@@ -564,6 +737,19 @@ function handleKarmaLeaderboard(json) {
   if (isLeaderboardPage()) augmentNativeKarmaLeaderboard();
 }
 
+function handleLeagueDailyLeaderboard(json) {
+  cachedLeagueDailyEntries = getLeaderboardEntries(json);
+  if (isLeaderboardPage()) {
+    augmentNativeLeagueDaily();
+    augmentNativeDailyLeaderboard(); // league-daily is a fallback for our own daily value
+  }
+}
+
+function handleLeagueLeaderboard(json) {
+  cachedLeagueEntries = getLeaderboardEntries(json);
+  if (isLeaderboardPage()) augmentNativeLeagueStanding();
+}
+
 function updatePersonalUserData(username, isStats, json) {
   const requestedHandle = normalizeHandle(username);
   const data = json?.data ?? json;
@@ -613,6 +799,17 @@ function requestPersonalLeaderboardData() {
   }
 }
 
+// Source data for native-section deltas (karma + league boards). Independent of
+// personal handles so deltas show even with no saved handles, and useful when the
+// extension loads into an already-open leaderboard page boot.dev won't re-fetch.
+function requestNativeLeaderboardData() {
+  if (!isLeaderboardPage()) return;
+  requestApiJson(DAILY_LEADERBOARD_URL);
+  requestApiJson(KARMA_LEADERBOARD_URL);
+  requestApiJson(LEAGUE_DAILY_LEADERBOARD_URL);
+  requestApiJson(LEAGUE_LEADERBOARD_URL);
+}
+
 function schedulePersonalLeaderboardRender() {
   if (!isLeaderboardPage()) return;
   clearTrackedTimeout(personalRenderTimer);
@@ -656,25 +853,26 @@ function renderPersonalLeaderboards() {
   _applyPersonalContent(panel, existingAllTime);
 }
 
-function _applyPersonalContent(panel, allTime) {
-  if (panel.previousElementSibling !== allTime) {
-    allTime.insertAdjacentElement("afterend", panel);
-  }
+// Static board definitions: which kind of value each board shows and its unit.
+const PERSONAL_BOARDS = [
+  { title: "Top Daily Learners", kind: "daily", unit: "xp" },
+  { title: "Top All-Time Learners", kind: "xp", unit: "xp" },
+  { title: "Top Community Members", kind: "karma", unit: "karma" },
+];
 
-  // Save input state so background data refreshes don't clear a user's typing.
-  const prevInput = panel.querySelector("#be-personal-handle");
-  const savedInputValue = prevInput ? prevInput.value : "";
-  const inputWasFocused = prevInput !== null && prevInput === document.activeElement;
+// Build the persistent panel skeleton once. The form, chips container, message
+// slot, and per-board row containers stay mounted across renders so that data
+// refreshes patch text in place rather than recreating the glowing cards.
+function ensurePersonalSkeleton(panel) {
+  if (panel.querySelector(".be-personal-shell")) return;
 
-  const chips = personalHandles
-    .map((handle) => `<button type="button" class="be-personal-chip" data-be-remove-handle="${escapeHtml(handle)}">@${escapeHtml(getPersonalDisplayHandle(handle))}<span aria-hidden="true">&times;</span></button>`)
+  const boards = PERSONAL_BOARDS
+    .map((b) => `
+      <section class="be-personal-board">
+        <h4>${escapeHtml(b.title)}</h4>
+        <div class="be-personal-rows" data-kind="${b.kind}" data-unit="${b.unit}"></div>
+      </section>`)
     .join("");
-  const messageMarkup = personalFeedback?.text
-    ? `<div class="be-personal-message be-personal-message-${escapeHtml(personalFeedback.type || "info")}">${escapeHtml(personalFeedback.text)}</div>`
-    : "";
-  const pendingMarkup = personalPendingHandle
-    ? `<div class="be-personal-message be-personal-message-info">Checking @${escapeHtml(personalPendingHandle)}...</div>`
-    : "";
 
   panel.innerHTML = `
     <h3 class="be-native-title">Personal Leaderboards</h3>
@@ -683,48 +881,70 @@ function _applyPersonalContent(panel, allTime) {
         <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="boot.dev handle or profile URL" aria-label="boot.dev handle or profile URL">
         <button type="submit">Add</button>
       </form>
-      ${messageMarkup || pendingMarkup}
-      <div class="be-personal-chips">${chips || '<span class="be-personal-empty">Add handles to compare friends, guild members, or rivals.</span>'}</div>
-      <div class="be-personal-grid">
-        ${renderPersonalBoard("Top Daily Learners", getPersonalRows("daily"), "xp today", "daily")}
-        ${renderPersonalBoard("Top All-Time Learners", getPersonalRows("xp"), "xp", "xp")}
-        ${renderPersonalBoard("Top Community Members", getPersonalRows("karma"), "karma", "karma")}
-      </div>
+      <div class="be-personal-message-slot"></div>
+      <div class="be-personal-chips"></div>
+      <div class="be-personal-grid">${boards}</div>
     </div>`;
-
-  // Restore input state after innerHTML replacement.
-  if (savedInputValue || inputWasFocused) {
-    const newInput = panel.querySelector("#be-personal-handle");
-    if (newInput) {
-      if (savedInputValue) newInput.value = savedInputValue;
-      if (inputWasFocused) newInput.focus();
-    }
-  }
 
   bindPersonalLeaderboardControls(panel);
 }
 
-function renderPersonalBoard(title, rows, unit, kind) {
-  const myValue = getMyValue(kind);
-  const body = rows.length
-    ? rows.map((row, index) => renderPersonalRow(row, index + 1, unit, myValue)).join("")
-    : '<div class="be-personal-board-empty">No handles added yet.</div>';
+function _applyPersonalContent(panel, allTime) {
+  if (panel.previousElementSibling !== allTime) {
+    allTime.insertAdjacentElement("afterend", panel);
+  }
+  ensurePersonalSkeleton(panel);
 
-  return `
-    <section class="be-personal-board">
-      <h4>${escapeHtml(title)}</h4>
-      <div class="be-personal-rows">${body}</div>
-    </section>`;
+  // Message slot (feedback / pending). Only touched when its markup changes.
+  const slot = panel.querySelector(".be-personal-message-slot");
+  const messageMarkup = personalFeedback?.text
+    ? `<div class="be-personal-message be-personal-message-${escapeHtml(personalFeedback.type || "info")}">${escapeHtml(personalFeedback.text)}</div>`
+    : personalPendingHandle
+      ? `<div class="be-personal-message be-personal-message-info">Checking @${escapeHtml(personalPendingHandle)}...</div>`
+      : "";
+  if (slot && slot.innerHTML !== messageMarkup) slot.innerHTML = messageMarkup;
+
+  // Chips. The container is persistent and uses delegated click handling, so a
+  // plain innerHTML swap here is safe and never touches the row cards' glow.
+  const chipsEl = panel.querySelector(".be-personal-chips");
+  const chipsMarkup = personalHandles.length
+    ? personalHandles
+        .map((handle) => `<button type="button" class="be-personal-chip" data-be-remove-handle="${escapeHtml(handle)}">@${escapeHtml(getPersonalDisplayHandle(handle))}<span aria-hidden="true">&times;</span></button>`)
+        .join("")
+    : '<span class="be-personal-empty">Add handles to compare friends, guild members, or rivals.</span>';
+  if (chipsEl && chipsEl.innerHTML !== chipsMarkup) chipsEl.innerHTML = chipsMarkup;
+
+  // Rows: reconcile each board in place so unchanged rows are never rebuilt.
+  for (const rowsEl of panel.querySelectorAll(".be-personal-rows")) {
+    const kind = rowsEl.getAttribute("data-kind");
+    const unit = rowsEl.getAttribute("data-unit");
+    const rows = getPersonalRows(kind);
+    const myValue = getMyValue(kind);
+
+    if (!rows.length) {
+      const empty = '<div class="be-personal-board-empty">No handles added yet.</div>';
+      if (rowsEl.innerHTML !== empty) rowsEl.innerHTML = empty;
+      continue;
+    }
+
+    const items = rows.map((row, i) => ({ row, rank: i + 1, unit, myValue }));
+    reconcileKeyedChildren(
+      rowsEl,
+      items,
+      (it) => it.row.handle,
+      (it) => elementFromHTML(personalRowHTML(it)),
+      (el, it) => patchPersonalRow(el, it)
+    );
+  }
 }
 
-function renderPersonalRow(row, rank, unit, myValue) {
+function personalRowHTML(it) {
+  const { row, rank, unit, myValue } = it;
   const valueText = row.value == null
     ? row.loading ? "loading" : "unavailable"
     : `${fmtNum(row.value)} ${unit}`;
   const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
-  const deltaMarkup = (!isCurrentUser && !row.loading && row.value != null)
-    ? renderDeltaMarkup(myValue, row.value, unit)
-    : "";
+  const skipDelta = isCurrentUser || row.loading || row.value == null;
 
   return `
     <a class="be-personal-row${isCurrentUser ? " be-current-user" : ""}" href="/u/${encodeURIComponent(row.handle)}">
@@ -736,9 +956,27 @@ function renderPersonalRow(row, rank, unit, myValue) {
       </span>
       <span class="be-personal-value-col">
         <span class="be-personal-value">${escapeHtml(valueText)}</span>
-        ${deltaMarkup}
+        ${deltaSpanHTML(myValue, row.value, unit, skipDelta)}
       </span>
     </a>`;
+}
+
+function patchPersonalRow(el, it) {
+  const { row, rank, unit, myValue } = it;
+  const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
+  const skipDelta = isCurrentUser || row.loading || row.value == null;
+  const valueText = row.value == null
+    ? row.loading ? "loading" : "unavailable"
+    : `${fmtNum(row.value)} ${unit}`;
+
+  el.classList.toggle("be-current-user", isCurrentUser);
+  const href = `/u/${encodeURIComponent(row.handle)}`;
+  if (el.getAttribute("href") !== href) el.setAttribute("href", href);
+  setTextIfChanged(el.querySelector(".be-personal-rank"), String(rank));
+  setTextIfChanged(el.querySelector(".be-personal-name"), row.name);
+  setTextIfChanged(el.querySelector(".be-personal-handle"), `@${row.displayHandle}`);
+  setTextIfChanged(el.querySelector(".be-personal-value"), valueText);
+  patchDeltaEl(el.querySelector("[data-be-delta]"), myValue, row.value, unit, skipDelta);
 }
 
 function bindPersonalLeaderboardControls(panel) {
