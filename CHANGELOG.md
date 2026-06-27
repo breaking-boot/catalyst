@@ -1,13 +1,18 @@
 # Changelog
 
-## v0.4.0 - XP and karma delta display, leaderboard polish, boss widget fixes
+## v0.4.0 - XP and karma delta display on all leaderboards, stability fixes
 
-- Added XP and karma delta to every leaderboard entry: each card and personal-leaderboard row (other than your own) now shows how far ahead or behind you are, in green when you lead and red when you trail.
-- Delta is shown in the Top All-Time Learners panel and all three Personal Leaderboards sections (daily XP, all-time XP, karma).
-- Your comparison value comes from your Personal Leaderboard record if you have added yourself, with a fallback to the all-time leaderboard cache for XP.
+- Added XP and karma delta to every leaderboard entry: each card (other than your own) now shows how far ahead or behind you are, in green when you lead and red when you trail.
+- Deltas appear in the extension's Top All-Time Learners panel, all three Personal Leaderboards boards (daily XP, all-time XP, karma), and the native boot.dev Top Daily Learners and Top Community Members sections.
+- Native section deltas are overlaid via `position: absolute` at the bottom-right of each card so boot.dev's layout is not disrupted.
+- Intercepted `/v1/leaderboard_karma/alltime` to power native karma deltas and as a fallback source for the current user's karma when they have not added themselves to Personal Leaderboards.
+- Extended the daily XP cache to hold all leaderboard entries (not just personal handles) to enable native daily-section deltas and as a fallback for the current user's daily XP.
+- Added fast-path rendering: both `renderAllTimeLeaderboard` and `renderPersonalLeaderboards` skip the `waitFor` when their panel already exists, eliminating the async race where stale `waitFor` resolutions overwrote good renders and caused flickering.
+- Added a version guard to the `waitFor` slow path so only the latest pending render applies; older superseded resolutions are no-ops.
+- Debounced all data-triggered calls to the personal leaderboard render into `schedulePersonalLeaderboardRender` (50 ms), collapsing the burst of callbacks from simultaneous handle refreshes into a single render.
 - Corrected the complete avatar role-frame tier map using confirmed API data: added the missing Mage tier (level 90–99), restored the Archmage index (level 100+), and shifted the level formula down by one step so all tiers render the correct frame.
 - Changed the avatar frame fallback to show no frame for entries with no recognized role and a level below 10 (or no level).
-- Fixed the `ensureLeaderboardUiState` position check to use `compareDocumentPosition` so it repositions the Personal Leaderboards panel without triggering a full re-render when boot.dev inserts elements between the extension's panels — the primary cause of ongoing flicker.
+- Fixed the `ensureLeaderboardUiState` position check to use `compareDocumentPosition` so it repositions the Personal Leaderboards panel without triggering a full re-render when boot.dev inserts elements between the extension's panels.
 - Preserved input value and focus across Personal Leaderboards re-renders so background data refreshes no longer erase text the user is typing.
 - Matched current-user card glow to the native site value (`0 0 15px 1px #e5a012`) in both the all-time and personal leaderboard rows.
 - Matched the boss panel minimized-state title font size to the expanded-state title (both now 16 px); widened the panel to prevent title truncation at maximum aura length.

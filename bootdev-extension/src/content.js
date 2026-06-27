@@ -72,6 +72,8 @@ async function routeResponse({ url, status, json }) {
       handleAllTimeLeaderboard(json);
     } else if (path === "/v1/leaderboard_xp/day") {
       handleDailyXpLeaderboard(json);
+    } else if (path === "/v1/leaderboard_karma/alltime") {
+      handleKarmaLeaderboard(json);
     } else if (publicUserMatch) {
       handlePublicUserResponse(decodeURIComponent(publicUserMatch[1]), Boolean(publicUserMatch[2]), json);
     } else if (path === "/v1/boss_events_progress") {
@@ -117,7 +119,7 @@ function syncRouteScopedUi() {
 
   if (isLeaderboardPage()) {
     if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
-    renderPersonalLeaderboards();
+    schedulePersonalLeaderboardRender();
     setTrackedTimeout(() => requestApiJson(ALL_TIME_LEADERBOARD_URL), 50);
     setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
   } else {

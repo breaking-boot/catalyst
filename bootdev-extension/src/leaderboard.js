@@ -35,11 +35,16 @@ const ROLE_FRAME_INDEX_BY_ROLE = {
 };
 
 let cachedAllTimeEntries = [];
+let cachedDailyEntries = [];
+let cachedKarmaEntries = [];
 let personalHandles = [];
 let personalRecords = {};
 let personalFeedback = null;
 let personalPendingHandle = null;
 let currentUserHandle = "";
+let allTimeRenderVersion = 0;
+let personalRenderVersion = 0;
+let personalRenderTimer = null;
 
 // ---------------------------------------------------------------------------
 // Page detection
@@ -242,7 +247,7 @@ async function rememberCurrentUserHandle(handle) {
   if (!isLeaderboardPage()) return;
 
   if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
-  renderPersonalLeaderboards();
+  schedulePersonalLeaderboardRender();
 }
 
 function learnCurrentUserHandleFromDom() {
@@ -280,10 +285,18 @@ function getMyValue(kind) {
   if (!myHandle) return null;
   const record = personalRecords[myHandle];
   if (record) return getPersonalValue(record, kind);
+  const identity = getCurrentUserIdentity();
   if (kind === "xp") {
-    const identity = getCurrentUserIdentity();
     const entry = cachedAllTimeEntries.find((e) => isCurrentLeaderboardEntry(e, identity));
     return entry ? num(entry.XP ?? entry.TotalXP ?? entry.XPEarned) : null;
+  }
+  if (kind === "daily") {
+    const entry = cachedDailyEntries.find((e) => isCurrentLeaderboardEntry(e, identity));
+    return entry ? num(entry.XPEarned ?? entry.XP) : null;
+  }
+  if (kind === "karma") {
+    const entry = cachedKarmaEntries.find((e) => isCurrentLeaderboardEntry(e, identity));
+    return entry ? num(entry.Karma) : null;
   }
   return null;
 }
@@ -298,10 +311,19 @@ function renderDeltaMarkup(myValue, theirValue, unit) {
 }
 
 function renderAllTimeLeaderboard(entries) {
-  // The leaderboard page is an SPA route; wait for the native global section.
-  waitFor(() => findAllTimeLeaderboardInsertionPoint() || document.querySelector("main") || document.body).then((host) => {
+  // Fast path: if panel already exists skip waitFor to avoid async races.
+  const existingPanel = document.getElementById("be-alltime-leaderboard");
+  if (existingPanel) {
     if (!isLeaderboardPage()) return;
-    if (!host) return;
+    _applyAllTimeContent(existingPanel, entries);
+    return;
+  }
+
+  // Slow path: wait for the native insertion point, then create and fill panel.
+  const version = ++allTimeRenderVersion;
+  waitFor(() => findAllTimeLeaderboardInsertionPoint() || document.querySelector("main") || document.body).then((host) => {
+    if (version !== allTimeRenderVersion) return; // superseded by a later call
+    if (!isLeaderboardPage() || !host) return;
     let panel = document.getElementById("be-alltime-leaderboard");
     if (!panel) {
       panel = document.createElement("section");
@@ -315,39 +337,43 @@ function renderAllTimeLeaderboard(entries) {
         host.append(panel);
       }
     }
-    const currentIdentity = getCurrentUserIdentity();
-    const visibleEntries = getVisibleAllTimeEntries(entries, currentIdentity);
-    const myXP = getMyValue("xp");
-    const cards = visibleEntries
-      .map((e, i) => {
-        const handle = getHandle(e);
-        const displayName = getDisplayName(e, handle);
-        const xp = e.XP ?? e.TotalXP ?? e.XPEarned ?? 0;
-        const rank = e.Position ?? e.Rank ?? i + 1;
-        const isCurrentUser = isCurrentLeaderboardEntry(e, currentIdentity);
-        const href = handle ? `/u/${encodeURIComponent(handle)}` : "#";
-        const deltaMarkup = isCurrentUser ? "" : renderDeltaMarkup(myXP, xp, "xp");
-
-        return `<div class="be-leader-card${isCurrentUser ? " be-current-user" : ""}">
-            <a href="${href}" class="be-leader-link">
-              <span class="be-leader-rank">${escapeHtml(rank)}</span>
-              ${renderLeaderAvatar(e, displayName)}
-              <span class="be-leader-copy">
-                <span class="be-leader-name">${escapeHtml(displayName)}</span>
-                <span class="be-leader-xp">${fmtNum(xp)} xp</span>
-                ${deltaMarkup}
-              </span>
-            </a>
-          </div>`;
-      })
-      .join("");
-
-    panel.innerHTML = `
-      <h3 class="be-native-title">Top All-Time Learners</h3>
-      <div class="be-native-grid-wrap">
-        <div class="be-native-grid">${cards}</div>
-      </div>`;
+    _applyAllTimeContent(panel, entries);
   });
+}
+
+function _applyAllTimeContent(panel, entries) {
+  const currentIdentity = getCurrentUserIdentity();
+  const visibleEntries = getVisibleAllTimeEntries(entries, currentIdentity);
+  const myXP = getMyValue("xp");
+  const cards = visibleEntries
+    .map((e, i) => {
+      const handle = getHandle(e);
+      const displayName = getDisplayName(e, handle);
+      const xp = e.XP ?? e.TotalXP ?? e.XPEarned ?? 0;
+      const rank = e.Position ?? e.Rank ?? i + 1;
+      const isCurrentUser = isCurrentLeaderboardEntry(e, currentIdentity);
+      const href = handle ? `/u/${encodeURIComponent(handle)}` : "#";
+      const deltaMarkup = isCurrentUser ? "" : renderDeltaMarkup(myXP, xp, "xp");
+
+      return `<div class="be-leader-card${isCurrentUser ? " be-current-user" : ""}">
+          <a href="${href}" class="be-leader-link">
+            <span class="be-leader-rank">${escapeHtml(rank)}</span>
+            ${renderLeaderAvatar(e, displayName)}
+            <span class="be-leader-copy">
+              <span class="be-leader-name">${escapeHtml(displayName)}</span>
+              <span class="be-leader-xp">${fmtNum(xp)} xp</span>
+              ${deltaMarkup}
+            </span>
+          </a>
+        </div>`;
+    })
+    .join("");
+
+  panel.innerHTML = `
+    <h3 class="be-native-title">Top All-Time Learners</h3>
+    <div class="be-native-grid-wrap">
+      <div class="be-native-grid">${cards}</div>
+    </div>`;
 }
 
 function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdentity()) {
@@ -386,6 +412,75 @@ function renderLeaderAvatar(entry, displayName) {
   </span>`;
 }
 
+// ---------------------------------------------------------------------------
+// Native section delta augmentation
+// ---------------------------------------------------------------------------
+
+function augmentNativeSectionEntries(heading, dataByHandle, myValue, unit) {
+  if (!heading || myValue == null) return;
+  const section = heading.parentElement;
+  if (!section) return;
+
+  for (const link of section.querySelectorAll('a[href^="/u/"]')) {
+    if (link.closest('#be-alltime-leaderboard, #be-personal-leaderboards')) continue;
+    const handle = normalizeHandle(getProfileHandleFromHref(link.getAttribute('href')));
+    if (!handle) continue;
+    const theirValue = dataByHandle[handle];
+    if (theirValue == null) continue;
+
+    // The card is whichever element is a direct child of the grid/flex container.
+    let card = link;
+    for (let i = 0; i < 5; i++) {
+      if (!card.parentElement) break;
+      const pDisp = getComputedStyle(card.parentElement).display;
+      if (pDisp === 'grid' || pDisp === 'flex' || pDisp === 'inline-flex' || pDisp === 'inline-grid') break;
+      card = card.parentElement;
+    }
+
+    if (card.querySelector('.be-native-delta')) continue; // already augmented
+
+    const delta = myValue - theirValue;
+    if (delta === 0) continue;
+    const sign = delta > 0 ? "+" : "−";
+    const cls = delta > 0 ? "be-leader-delta-ahead" : "be-leader-delta-behind";
+    const span = document.createElement('span');
+    span.className = `be-leader-delta be-native-delta ${cls}`;
+    span.textContent = `${sign}${fmtNum(Math.abs(delta))} ${unit}`;
+    card.style.position = 'relative';
+    card.appendChild(span);
+  }
+}
+
+function augmentNativeDailyLeaderboard() {
+  if (!cachedDailyEntries.length) return;
+  const myValue = getMyValue("daily");
+  if (myValue == null) return;
+  const globalHeading = findHeadingByText("Global Leaderboards");
+  const heading = findHeadingAfter(globalHeading, "Top Daily Learners");
+  const dataByHandle = {};
+  for (const e of cachedDailyEntries) {
+    const h = normalizeHandle(getHandle(e));
+    const v = num(e.XPEarned ?? e.XP);
+    if (h && v != null) dataByHandle[h] = v;
+  }
+  augmentNativeSectionEntries(heading, dataByHandle, myValue, "xp today");
+}
+
+function augmentNativeKarmaLeaderboard() {
+  if (!cachedKarmaEntries.length) return;
+  const myValue = getMyValue("karma");
+  if (myValue == null) return;
+  const globalHeading = findHeadingByText("Global Leaderboards");
+  const heading = findHeadingAfter(globalHeading, "Top Community Members");
+  const dataByHandle = {};
+  for (const e of cachedKarmaEntries) {
+    const h = normalizeHandle(getHandle(e));
+    const v = num(e.Karma);
+    if (h && v != null) dataByHandle[h] = v;
+  }
+  augmentNativeSectionEntries(heading, dataByHandle, myValue, "karma");
+}
+
 function ensureLeaderboardUiState() {
   if (!isLeaderboardPage()) return;
 
@@ -402,7 +497,7 @@ function ensureLeaderboardUiState() {
   if (!allTime) return;
 
   if (!personal) {
-    renderPersonalLeaderboards();
+    schedulePersonalLeaderboardRender();
     return;
   }
 
@@ -412,8 +507,11 @@ function ensureLeaderboardUiState() {
 
   if (personalHandles.some((handle) => isCurrentLeaderboardEntry({ handle }, currentIdentity)) &&
       !personal.querySelector(".be-current-user")) {
-    renderPersonalLeaderboards();
+    schedulePersonalLeaderboardRender();
   }
+
+  augmentNativeDailyLeaderboard();
+  augmentNativeKarmaLeaderboard();
 }
 
 function removeAllTimeLeaderboard() {
@@ -436,6 +534,7 @@ function findAllTimeLeaderboardInsertionPoint() {
 // ===========================================================================
 function handleDailyXpLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
+  cachedDailyEntries = entries;
   let changed = false;
 
   for (const entry of entries) {
@@ -453,8 +552,16 @@ function handleDailyXpLeaderboard(json) {
 
   if (changed) {
     savePersonalCache();
-    renderPersonalLeaderboards();
+    schedulePersonalLeaderboardRender();
   }
+  if (isLeaderboardPage()) augmentNativeDailyLeaderboard();
+}
+
+function handleKarmaLeaderboard(json) {
+  const entries = getLeaderboardEntries(json);
+  if (!entries.length) return;
+  cachedKarmaEntries = entries;
+  if (isLeaderboardPage()) augmentNativeKarmaLeaderboard();
 }
 
 function updatePersonalUserData(username, isStats, json) {
@@ -475,7 +582,7 @@ function updatePersonalUserData(username, isStats, json) {
   record.updatedAt = Date.now();
 
   savePersonalCache();
-  renderPersonalLeaderboards();
+  schedulePersonalLeaderboardRender();
 }
 
 async function loadPersonalLeaderboard() {
@@ -506,66 +613,95 @@ function requestPersonalLeaderboardData() {
   }
 }
 
+function schedulePersonalLeaderboardRender() {
+  if (!isLeaderboardPage()) return;
+  clearTrackedTimeout(personalRenderTimer);
+  personalRenderTimer = setTrackedTimeout(renderPersonalLeaderboards, 50);
+}
+
 function renderPersonalLeaderboards() {
+  personalRenderTimer = null;
   if (!isLeaderboardPage()) return;
 
-  waitFor(() => document.getElementById("be-alltime-leaderboard"), 10000).then((allTime) => {
-    if (!isLeaderboardPage()) return;
-    if (!allTime) return;
+  // Fast path: if both panels already exist, render directly to avoid async races.
+  const existingAllTime = document.getElementById("be-alltime-leaderboard");
+  const existingPersonal = document.getElementById("be-personal-leaderboards");
+  if (existingAllTime && existingPersonal) {
+    _applyPersonalContent(existingPersonal, existingAllTime);
+    return;
+  }
 
-    let panel = document.getElementById("be-personal-leaderboards");
-    if (!panel) {
-      panel = document.createElement("section");
-      panel.id = "be-personal-leaderboards";
-      panel.className = "be-personal-leaderboards";
-    }
-
-    if (allTime && panel.previousElementSibling !== allTime) {
-      allTime.insertAdjacentElement("afterend", panel);
-    }
-
-    // Save input state so background data refreshes don't clear a user's typing.
-    const prevInput = panel.querySelector("#be-personal-handle");
-    const savedInputValue = prevInput ? prevInput.value : "";
-    const inputWasFocused = prevInput !== null && prevInput === document.activeElement;
-
-    const chips = personalHandles
-      .map((handle) => `<button type="button" class="be-personal-chip" data-be-remove-handle="${escapeHtml(handle)}">@${escapeHtml(getPersonalDisplayHandle(handle))}<span aria-hidden="true">&times;</span></button>`)
-      .join("");
-    const messageMarkup = personalFeedback?.text
-      ? `<div class="be-personal-message be-personal-message-${escapeHtml(personalFeedback.type || "info")}">${escapeHtml(personalFeedback.text)}</div>`
-      : "";
-    const pendingMarkup = personalPendingHandle
-      ? `<div class="be-personal-message be-personal-message-info">Checking @${escapeHtml(personalPendingHandle)}...</div>`
-      : "";
-
-    panel.innerHTML = `
-      <h3 class="be-native-title">Personal Leaderboards</h3>
-      <div class="be-personal-shell">
-        <form id="be-personal-form" class="be-personal-form">
-          <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="boot.dev handle or profile URL" aria-label="boot.dev handle or profile URL">
-          <button type="submit">Add</button>
-        </form>
-        ${messageMarkup || pendingMarkup}
-        <div class="be-personal-chips">${chips || '<span class="be-personal-empty">Add handles to compare friends, guild members, or rivals.</span>'}</div>
-        <div class="be-personal-grid">
-          ${renderPersonalBoard("Top Daily Learners", getPersonalRows("daily"), "xp today", "daily")}
-          ${renderPersonalBoard("Top All-Time Learners", getPersonalRows("xp"), "xp", "xp")}
-          ${renderPersonalBoard("Top Community Members", getPersonalRows("karma"), "karma", "karma")}
-        </div>
-      </div>`;
-
-    // Restore input state after innerHTML replacement.
-    if (savedInputValue || inputWasFocused) {
-      const newInput = panel.querySelector("#be-personal-handle");
-      if (newInput) {
-        if (savedInputValue) newInput.value = savedInputValue;
-        if (inputWasFocused) newInput.focus();
+  // Also fast path if only the personal panel exists but alltime doesn't (shouldn't happen,
+  // but guards against the case where they were reordered by the 2-second scan).
+  if (!existingAllTime) {
+    const version = ++personalRenderVersion;
+    waitFor(() => document.getElementById("be-alltime-leaderboard"), 10000).then((allTime) => {
+      if (version !== personalRenderVersion) return; // superseded
+      if (!isLeaderboardPage() || !allTime) return;
+      let panel = document.getElementById("be-personal-leaderboards");
+      if (!panel) {
+        panel = document.createElement("section");
+        panel.id = "be-personal-leaderboards";
+        panel.className = "be-personal-leaderboards";
       }
-    }
+      _applyPersonalContent(panel, allTime);
+    });
+    return;
+  }
 
-    bindPersonalLeaderboardControls(panel);
-  });
+  // All-time exists but personal doesn't — create and insert personal, then render.
+  const panel = document.createElement("section");
+  panel.id = "be-personal-leaderboards";
+  panel.className = "be-personal-leaderboards";
+  _applyPersonalContent(panel, existingAllTime);
+}
+
+function _applyPersonalContent(panel, allTime) {
+  if (panel.previousElementSibling !== allTime) {
+    allTime.insertAdjacentElement("afterend", panel);
+  }
+
+  // Save input state so background data refreshes don't clear a user's typing.
+  const prevInput = panel.querySelector("#be-personal-handle");
+  const savedInputValue = prevInput ? prevInput.value : "";
+  const inputWasFocused = prevInput !== null && prevInput === document.activeElement;
+
+  const chips = personalHandles
+    .map((handle) => `<button type="button" class="be-personal-chip" data-be-remove-handle="${escapeHtml(handle)}">@${escapeHtml(getPersonalDisplayHandle(handle))}<span aria-hidden="true">&times;</span></button>`)
+    .join("");
+  const messageMarkup = personalFeedback?.text
+    ? `<div class="be-personal-message be-personal-message-${escapeHtml(personalFeedback.type || "info")}">${escapeHtml(personalFeedback.text)}</div>`
+    : "";
+  const pendingMarkup = personalPendingHandle
+    ? `<div class="be-personal-message be-personal-message-info">Checking @${escapeHtml(personalPendingHandle)}...</div>`
+    : "";
+
+  panel.innerHTML = `
+    <h3 class="be-native-title">Personal Leaderboards</h3>
+    <div class="be-personal-shell">
+      <form id="be-personal-form" class="be-personal-form">
+        <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="boot.dev handle or profile URL" aria-label="boot.dev handle or profile URL">
+        <button type="submit">Add</button>
+      </form>
+      ${messageMarkup || pendingMarkup}
+      <div class="be-personal-chips">${chips || '<span class="be-personal-empty">Add handles to compare friends, guild members, or rivals.</span>'}</div>
+      <div class="be-personal-grid">
+        ${renderPersonalBoard("Top Daily Learners", getPersonalRows("daily"), "xp today", "daily")}
+        ${renderPersonalBoard("Top All-Time Learners", getPersonalRows("xp"), "xp", "xp")}
+        ${renderPersonalBoard("Top Community Members", getPersonalRows("karma"), "karma", "karma")}
+      </div>
+    </div>`;
+
+  // Restore input state after innerHTML replacement.
+  if (savedInputValue || inputWasFocused) {
+    const newInput = panel.querySelector("#be-personal-handle");
+    if (newInput) {
+      if (savedInputValue) newInput.value = savedInputValue;
+      if (inputWasFocused) newInput.focus();
+    }
+  }
+
+  bindPersonalLeaderboardControls(panel);
 }
 
 function renderPersonalBoard(title, rows, unit, kind) {
@@ -643,12 +779,12 @@ async function addPersonalHandle(handle) {
 
   clearPersonalFeedback();
   personalPendingHandle = normalized;
-  renderPersonalLeaderboards();
+  schedulePersonalLeaderboardRender();
 
   const profile = await loadPublicUserProfile(normalized);
   if (!profile) {
     personalPendingHandle = null;
-    renderPersonalLeaderboards();
+    schedulePersonalLeaderboardRender();
     return;
   }
 
@@ -679,7 +815,7 @@ async function addPersonalHandle(handle) {
   }
 
   personalPendingHandle = null;
-  renderPersonalLeaderboards();
+  schedulePersonalLeaderboardRender();
   void refreshPersonalStats(canonical);
 }
 
@@ -691,7 +827,7 @@ async function removePersonalHandle(handle) {
   delete personalRecords[normalized];
   await savePersonalHandles();
   savePersonalCache();
-  renderPersonalLeaderboards();
+  schedulePersonalLeaderboardRender();
 }
 
 function getPersonalRows(kind) {
@@ -734,7 +870,7 @@ async function refreshPersonalHandle(handle) {
   record.profileError = null;
   updateObservedDailyXp(record, profile);
   savePersonalCache();
-  renderPersonalLeaderboards();
+  schedulePersonalLeaderboardRender();
 
   await refreshPersonalStats(normalized);
 }
@@ -750,7 +886,7 @@ async function refreshPersonalStats(handle) {
     record.statsError = null;
     record.updatedAt = Date.now();
     savePersonalCache();
-    renderPersonalLeaderboards();
+    schedulePersonalLeaderboardRender();
     return;
   }
 
@@ -759,7 +895,7 @@ async function refreshPersonalStats(handle) {
     record.statsError = isAuthStatus(result.status) ? "auth" : "unavailable";
     record.updatedAt = Date.now();
     savePersonalCache();
-    renderPersonalLeaderboards();
+    schedulePersonalLeaderboardRender();
   }
 }
 
@@ -850,7 +986,7 @@ function parsePersonalHandleInput(value) {
 
 function setPersonalFeedback(text, type = "info") {
   personalFeedback = text ? { text, type } : null;
-  renderPersonalLeaderboards();
+  schedulePersonalLeaderboardRender();
 }
 
 function clearPersonalFeedback() {

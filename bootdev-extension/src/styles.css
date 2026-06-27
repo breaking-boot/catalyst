@@ -230,6 +230,13 @@
 }
 .be-leader-delta-ahead { color: #6ee7b7; }
 .be-leader-delta-behind { color: #f87171; }
+/* FRAGILE: overlays native card; relies on card accepting position:relative */
+.be-native-delta {
+  position: absolute;
+  bottom: 6px;
+  right: 8px;
+  pointer-events: none;
+}
 
 .be-personal-leaderboards {
   width: 100%;
