@@ -19,12 +19,18 @@ catalyst/
   bootdev-extension/       Chrome "Load unpacked" target
     manifest.json
     src/
-      content.js
-      injected.js
+      utils.js             Shared helpers (loaded first)
+      leaderboard.js       All-time and personal leaderboard feature
+      profile.js           Cumulative XP on public profile pages
+      boss.js              Boss-event tracker
+      nextLesson.js        Next Lesson nav link and Alt+N shortcut
+      content.js           postMessage listener and URL router (loaded last)
+      injected.js          Page-context fetch/XHR interceptor
       styles.css
   scripts/
     package-extension.sh   Creates bootdev-extension.zip
   reference_data/          API captures, rendered HTML, and OpenAPI docs
+  CLAUDE.md
   CHANGELOG.md
   README.md
 ```
@@ -117,8 +123,13 @@ Useful checks from the loadable extension directory:
 
 ```bash
 cd bootdev-extension
-node --check src/content.js
+node --check src/utils.js
+node --check src/leaderboard.js
+node --check src/profile.js
+node --check src/boss.js
+node --check src/nextLesson.js
 node --check src/injected.js
+node --check src/content.js
 node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest.json ok')"
 ```
 

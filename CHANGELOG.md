@@ -1,6 +1,13 @@
 # Changelog
 
-## v0.3.0
+## [Unreleased]
+
+### Infrastructure
+- Split `src/content.js` (2059 lines) into feature modules: `utils.js`, `leaderboard.js`, `profile.js`, `boss.js`, `nextLesson.js`, and a slim router-only `content.js`.
+- Created `CLAUDE.md` with agent guidance, file responsibilities, architecture rules, and quick-check commands.
+- No logic changes; user-facing behavior is identical.
+
+## v0.3.0 - Catalyst rename, leaderboard and avatar polish, boss widget improvements
 
 - Renamed the public extension metadata to catalyst for Boot.dev.
 - Stabilized current-user leaderboard highlighting across responsive layouts by avoiding leaderboard-card identity matches.
@@ -16,13 +23,13 @@
 - Corrected the complete avatar role-frame tier map using confirmed API data: added the missing Mage tier (level 90–99), restored the Archmage index (level 100+), and shifted the level formula down by one step so all tiers render the correct frame.
 - Normalized role strings before frame lookup.
 - Changed the avatar frame fallback to show no frame for entries with no recognized role and a level below 10 (or no level).
-- Fixed the `ensureLeaderboardUiState` position check to use `compareDocumentPosition` so it repositions the Personal Leaderboards panel without triggering a full re-render when boot.dev inserts elements between the extension's panels — the primary cause of ongoing flicker.
+- Fixed the `ensureLeaderboardUiState` position check to use `compareDocumentPosition` so it repositions the Personal Leaderboards panel without triggering a full re-render when boot.dev inserts elements between the extension's panels - the primary cause of ongoing flicker.
 - Preserved input value and focus across Personal Leaderboards re-renders so background data refreshes no longer erase text the user is typing.
 - Matched current-user card glow to the native site value (`0 0 15px 1px #e5a012`) in both the all-time and personal leaderboard rows.
 - Matched the boss panel minimized-state title font size to the expanded-state title (both now 16 px).
 - Updated packaging script to produce versioned zips (`releases/catalyst-v<version>.zip`) with the extension folder named after the version.
 
-## v0.2.1
+## v0.2.1 - Graceful error handling, invalid username validation, console-noise reduction, and release docs.
 
 - Added graceful handling for extension reloads and invalidated content-script contexts.
 - Added validation for manually added personal leaderboard users.
@@ -30,13 +37,13 @@
 - Reduced release console noise from the injected interceptor.
 - Added release zip guidance and packaging script.
 
-## v0.2.0
+## v0.2.0 - Personal leaderboard build with manually added usernames.
 
 - Added manual Personal Leaderboards on the Boot.dev leaderboard page.
 - Added the Next Lesson nav shortcut and keyboard shortcut.
 - Added collapsible boss high settings.
 
-## v0.1.0
+## v0.1.0 - First usable local pre-rename build with core enhancement behavior.
 
 - First usable local pre-rename build.
 - Added the core all-time leaderboard, profile XP, boss tracker, and next-lesson behavior.
