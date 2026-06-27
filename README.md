@@ -80,7 +80,8 @@ chrome://extensions
 The extension runs automatically on `www.boot.dev`.
 
 - On `https://www.boot.dev/leaderboard`, it adds **Top All-Time Learners** below the native **Top Daily Learners** section using `/v1/leaderboard_xp/alltime`.
-- The all-time leaderboard uses the native Archmage role frame around avatars, highlights the logged-in user's row when present, and caches the latest response so repeat visits render faster while fresh data loads.
+- The all-time leaderboard uses role-tier avatar frames, highlights the logged-in user's row when present, and caches the latest response so repeat visits render faster while fresh data loads.
+- Each entry (other than your own) shows an XP delta — how many XP you are ahead (green) or behind (red) relative to that user.
 - On public profile pages like `https://www.boot.dev/u/<username>`, it adds `Total XP`, current-level XP progress, and remaining XP below the native level line in the profile header.
 - Public profile pages also include an **Add to Personal Leaderboards** button for quickly tracking that user.
 - On boot.dev pages, it shows the boss tracker once boss-event data has been loaded.
@@ -93,6 +94,7 @@ The extension runs automatically on `www.boot.dev`.
 - Press `Alt+N` to open the saved **Next Lesson** link from any boot.dev page. The shortcut is ignored while typing in inputs or editors.
 - On `https://www.boot.dev/leaderboard`, the **Personal Leaderboards** section lets you add and remove handles. Handles are stored in `chrome.storage.local`.
 - Personal **Top Daily Learners** uses `/v1/leaderboard_xp/day` when a saved handle appears there. Otherwise it shows observed XP gained today from the saved public profile snapshots. **Top All-Time Learners** uses public profile XP, and **Top Community Members** uses public stats karma.
+- Each personal leaderboard row (other than your own) shows a delta in the same unit as the row value — green when you are ahead, red when you are behind. Your comparison value comes from your Personal Leaderboard record if you have added yourself, with a fallback to the all-time leaderboard cache for XP.
 - Invalid, empty, duplicate, or nonexistent users are rejected before being saved. If Boot.dev returns an auth error, catalyst retries once and then asks you to refresh Boot.dev.
 
 No extra sign-in flow is required. The extension reads JSON responses that the boot.dev page fetches, and it can ask the page context to refresh selected endpoints with the existing boot.dev session.
@@ -153,7 +155,7 @@ This project uses semantic versioning:
 - `MINOR`: backwards-compatible features.
 - `PATCH`: bug fixes, graceful handling, docs, packaging, and polish.
 
-Current version: `v0.3.0`.
+Current version: `v0.4.0`.
 
 Version map:
 
@@ -161,6 +163,7 @@ Version map:
 - `v0.2.0`: personal leaderboard build with manually added usernames.
 - `v0.2.1`: graceful error handling, invalid username validation, 401 handling, console-noise reduction, and release docs.
 - `v0.3.0`: catalyst rename, current-user highlight fixes, Personal Leaderboards placement and avatar polish, profile-page add button, boss widget polish, auth retry handling for personal user checks, leaderboard re-render loop fix, avatar frame tier correction, and packaging script update.
+- `v0.4.0`: XP and karma delta display on all leaderboard entries, avatar frame tier correction, boss widget width and font fixes, leaderboard flicker elimination, and input focus preservation.
 
 The reference captures and API docs live outside the Chrome load target:
 

@@ -1,11 +1,20 @@
 # Changelog
 
-## [Unreleased]
+## v0.4.0 - XP and karma delta display, leaderboard polish, boss widget fixes
+
+- Added XP and karma delta to every leaderboard entry: each card and personal-leaderboard row (other than your own) now shows how far ahead or behind you are, in green when you lead and red when you trail.
+- Delta is shown in the Top All-Time Learners panel and all three Personal Leaderboards sections (daily XP, all-time XP, karma).
+- Your comparison value comes from your Personal Leaderboard record if you have added yourself, with a fallback to the all-time leaderboard cache for XP.
+- Corrected the complete avatar role-frame tier map using confirmed API data: added the missing Mage tier (level 90–99), restored the Archmage index (level 100+), and shifted the level formula down by one step so all tiers render the correct frame.
+- Changed the avatar frame fallback to show no frame for entries with no recognized role and a level below 10 (or no level).
+- Fixed the `ensureLeaderboardUiState` position check to use `compareDocumentPosition` so it repositions the Personal Leaderboards panel without triggering a full re-render when boot.dev inserts elements between the extension's panels — the primary cause of ongoing flicker.
+- Preserved input value and focus across Personal Leaderboards re-renders so background data refreshes no longer erase text the user is typing.
+- Matched current-user card glow to the native site value (`0 0 15px 1px #e5a012`) in both the all-time and personal leaderboard rows.
+- Matched the boss panel minimized-state title font size to the expanded-state title (both now 16 px); widened the panel to prevent title truncation at maximum aura length.
 
 ### Infrastructure
 - Split `src/content.js` (2059 lines) into feature modules: `utils.js`, `leaderboard.js`, `profile.js`, `boss.js`, `nextLesson.js`, and a slim router-only `content.js`.
 - Created `CLAUDE.md` with agent guidance, file responsibilities, architecture rules, and quick-check commands.
-- No logic changes; user-facing behavior is identical.
 
 ## v0.3.0 - Catalyst rename, leaderboard and avatar polish, boss widget improvements
 

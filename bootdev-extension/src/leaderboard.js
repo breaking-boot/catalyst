@@ -275,6 +275,28 @@ function handleAllTimeLeaderboard(json) {
   renderAllTimeLeaderboard(entries);
 }
 
+function getMyValue(kind) {
+  const myHandle = normalizeHandle(currentUserHandle);
+  if (!myHandle) return null;
+  const record = personalRecords[myHandle];
+  if (record) return getPersonalValue(record, kind);
+  if (kind === "xp") {
+    const identity = getCurrentUserIdentity();
+    const entry = cachedAllTimeEntries.find((e) => isCurrentLeaderboardEntry(e, identity));
+    return entry ? num(entry.XP ?? entry.TotalXP ?? entry.XPEarned) : null;
+  }
+  return null;
+}
+
+function renderDeltaMarkup(myValue, theirValue, unit) {
+  if (myValue == null || theirValue == null) return "";
+  const delta = myValue - theirValue;
+  if (delta === 0) return "";
+  const sign = delta > 0 ? "+" : "−";
+  const cls = delta > 0 ? "be-leader-delta-ahead" : "be-leader-delta-behind";
+  return `<span class="be-leader-delta ${cls}">${sign}${escapeHtml(fmtNum(Math.abs(delta)))} ${unit}</span>`;
+}
+
 function renderAllTimeLeaderboard(entries) {
   // The leaderboard page is an SPA route; wait for the native global section.
   waitFor(() => findAllTimeLeaderboardInsertionPoint() || document.querySelector("main") || document.body).then((host) => {
@@ -295,6 +317,7 @@ function renderAllTimeLeaderboard(entries) {
     }
     const currentIdentity = getCurrentUserIdentity();
     const visibleEntries = getVisibleAllTimeEntries(entries, currentIdentity);
+    const myXP = getMyValue("xp");
     const cards = visibleEntries
       .map((e, i) => {
         const handle = getHandle(e);
@@ -303,6 +326,7 @@ function renderAllTimeLeaderboard(entries) {
         const rank = e.Position ?? e.Rank ?? i + 1;
         const isCurrentUser = isCurrentLeaderboardEntry(e, currentIdentity);
         const href = handle ? `/u/${encodeURIComponent(handle)}` : "#";
+        const deltaMarkup = isCurrentUser ? "" : renderDeltaMarkup(myXP, xp, "xp");
 
         return `<div class="be-leader-card${isCurrentUser ? " be-current-user" : ""}">
             <a href="${href}" class="be-leader-link">
@@ -311,6 +335,7 @@ function renderAllTimeLeaderboard(entries) {
               <span class="be-leader-copy">
                 <span class="be-leader-name">${escapeHtml(displayName)}</span>
                 <span class="be-leader-xp">${fmtNum(xp)} xp</span>
+                ${deltaMarkup}
               </span>
             </a>
           </div>`;
@@ -524,9 +549,9 @@ function renderPersonalLeaderboards() {
         ${messageMarkup || pendingMarkup}
         <div class="be-personal-chips">${chips || '<span class="be-personal-empty">Add handles to compare friends, guild members, or rivals.</span>'}</div>
         <div class="be-personal-grid">
-          ${renderPersonalBoard("Top Daily Learners", getPersonalRows("daily"), "xp today")}
-          ${renderPersonalBoard("Top All-Time Learners", getPersonalRows("xp"), "xp")}
-          ${renderPersonalBoard("Top Community Members", getPersonalRows("karma"), "karma")}
+          ${renderPersonalBoard("Top Daily Learners", getPersonalRows("daily"), "xp today", "daily")}
+          ${renderPersonalBoard("Top All-Time Learners", getPersonalRows("xp"), "xp", "xp")}
+          ${renderPersonalBoard("Top Community Members", getPersonalRows("karma"), "karma", "karma")}
         </div>
       </div>`;
 
@@ -543,9 +568,10 @@ function renderPersonalLeaderboards() {
   });
 }
 
-function renderPersonalBoard(title, rows, unit) {
+function renderPersonalBoard(title, rows, unit, kind) {
+  const myValue = getMyValue(kind);
   const body = rows.length
-    ? rows.map((row, index) => renderPersonalRow(row, index + 1, unit)).join("")
+    ? rows.map((row, index) => renderPersonalRow(row, index + 1, unit, myValue)).join("")
     : '<div class="be-personal-board-empty">No handles added yet.</div>';
 
   return `
@@ -555,11 +581,14 @@ function renderPersonalBoard(title, rows, unit) {
     </section>`;
 }
 
-function renderPersonalRow(row, rank, unit) {
-  const value = row.value == null
+function renderPersonalRow(row, rank, unit, myValue) {
+  const valueText = row.value == null
     ? row.loading ? "loading" : "unavailable"
     : `${fmtNum(row.value)} ${unit}`;
   const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
+  const deltaMarkup = (!isCurrentUser && !row.loading && row.value != null)
+    ? renderDeltaMarkup(myValue, row.value, unit)
+    : "";
 
   return `
     <a class="be-personal-row${isCurrentUser ? " be-current-user" : ""}" href="/u/${encodeURIComponent(row.handle)}">
@@ -569,7 +598,10 @@ function renderPersonalRow(row, rank, unit) {
         <span class="be-personal-name">${escapeHtml(row.name)}</span>
         <span class="be-personal-handle">@${escapeHtml(row.displayHandle)}</span>
       </span>
-      <span class="be-personal-value">${escapeHtml(value)}</span>
+      <span class="be-personal-value-col">
+        <span class="be-personal-value">${escapeHtml(valueText)}</span>
+        ${deltaMarkup}
+      </span>
     </a>`;
 }
 

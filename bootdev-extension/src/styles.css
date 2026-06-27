@@ -222,6 +222,14 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.be-leader-delta {
+  font-size: 11px;
+  line-height: 1.1;
+  margin-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.be-leader-delta-ahead { color: #6ee7b7; }
+.be-leader-delta-behind { color: #f87171; }
 
 .be-personal-leaderboards {
   width: 100%;
@@ -390,6 +398,12 @@
   color: #d1d5db;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
+}
+.be-personal-value-col {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
 }
 
 @media (min-width: 1280px) {
