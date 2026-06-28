@@ -40,6 +40,7 @@ window.addEventListener("message", handleWindowMessage);
 function handleWindowMessage(event) {
   if (enhancerStopped) return;
   if (event.source !== window) return;
+  if (event.origin !== window.location.origin) return;
   const msg = event.data;
   if (!msg || msg.source !== TAG || !msg.payload || !("json" in msg.payload)) {
     return;

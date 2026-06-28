@@ -159,6 +159,7 @@
 
   window.addEventListener("message", async (event) => {
     if (event.source !== window) return;
+    if (event.origin !== window.location.origin) return;
 
     const msg = event.data;
     if (!msg || msg.source !== TAG || msg.command !== "BE_FETCH_JSON") return;

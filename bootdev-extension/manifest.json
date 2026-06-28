@@ -39,7 +39,8 @@
   "web_accessible_resources": [
     {
       "resources": ["src/injected.js"],
-      "matches": ["https://www.boot.dev/*"]
+      "matches": ["https://www.boot.dev/*"],
+      "use_dynamic_url": true
     }
   ]
 }
