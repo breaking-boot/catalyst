@@ -89,7 +89,7 @@ function findProfileSummaryScope(profile) {
   const candidates = Array.from(document.querySelectorAll("main section, main article, main div, #__nuxt section, #__nuxt article, #__nuxt div"))
     .map((el) => ({ el, text: normalizeText(el.textContent) }))
     .filter(({ text }) => {
-      if (text.length > 650) return false;
+      if (text.length > 650) return false; // skip page-level wrappers; the summary card's text is short
       if (fullName && !text.includes(fullName)) return false;
       if (handleNeedles.length && !handleNeedles.some((handle) => text.includes(handle))) return false;
       if (levelText && !text.includes(levelText)) return false;

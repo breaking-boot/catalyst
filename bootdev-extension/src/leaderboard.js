@@ -11,6 +11,11 @@ const LEAGUE_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/al
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
 const PERSONAL_CACHE_KEY = "be_personal_leaderboard_cache";
 const CURRENT_USER_HANDLE_KEY = "be_current_user_handle";
+// FRAGILE: build-hashed Nuxt asset URLs. These filenames are regenerated on
+// every boot.dev frontend deploy, so this list is expected to rot and 404 over
+// time. Only used as a fallback when the API provides no explicit frame URL
+// (see getExplicitFrameUrl), so a stale entry just means a missing frame image,
+// never a broken feature.
 const ROLE_FRAME_URLS = [
   "https://www.boot.dev/_nuxt/0.B6ueYVE9.png",
   "https://www.boot.dev/_nuxt/1.DnmxFjr3.png",
@@ -23,7 +28,6 @@ const ROLE_FRAME_URLS = [
   "https://www.boot.dev/_nuxt/8.CJ6g5ANN.png",
   "https://www.boot.dev/_nuxt/9.Cmx5X891.png",
 ];
-const ARCHMAGE_FRAME_URL = ROLE_FRAME_URLS[9];
 const ROLE_FRAME_INDEX_BY_ROLE = {
   apprentice: 0,
   pupil: 1,
@@ -842,7 +846,8 @@ async function loadPersonalLeaderboard() {
 function requestPersonalLeaderboardData() {
   if (!isLeaderboardPage() || !personalHandles.length) return;
 
-  requestApiJson(DAILY_LEADERBOARD_URL);
+  // The daily board is requested by requestNativeLeaderboardData, which always
+  // runs on the leaderboard page; no need to re-request it here.
   for (const handle of personalHandles) {
     void refreshPersonalHandle(handle);
   }

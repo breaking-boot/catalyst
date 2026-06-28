@@ -181,6 +181,7 @@ function findTopNavInsertionPoint() {
   for (const selector of desktopCandidates) {
     const link = Array.from(document.querySelectorAll(selector)).find((el) => {
       const rect = el.getBoundingClientRect();
+      // top < 90: keep to links in the top nav band, not duplicates lower in the page
       return isVisible(el) && rect.top >= 0 && rect.top < 90;
     });
     if (link) return link;

@@ -75,7 +75,9 @@ function isVisible(el) {
   const rect = el.getBoundingClientRect();
   return rect.width > 0 && rect.height > 0;
 }
-// Poll for an element/condition (SPA routes render async).
+// Poll for an element/condition (SPA routes render async). Resolves with the
+// truthy value once available, or null on timeout/teardown; never rejects, so
+// callers must null-check the result.
 function waitFor(fn, timeout = 8000, interval = 150) {
   return new Promise((resolve) => {
     const start = Date.now();
@@ -110,16 +112,6 @@ function normalizeHandle(value) {
     .replace(/^\/u\//i, "")
     .replace(/^@/, "");
   return raw.split(/[/?#\s]/)[0].toLowerCase();
-}
-
-function normalizeImageUrl(value) {
-  if (!value) return "";
-  try {
-    const parsed = new URL(value, location.origin);
-    return `${parsed.origin}${parsed.pathname}`;
-  } catch (_) {
-    return String(value).split("?")[0];
-  }
 }
 
 function normalizeAssetUrl(value) {
@@ -251,7 +243,7 @@ function findSmallTextElement(root, text, exact) {
   return Array.from(root.querySelectorAll("*")).find((el) => {
     if (el.id === "be-total-xp") return false;
     const value = normalizeText(el.textContent);
-    if (value.length > 80) return false;
+    if (value.length > 80) return false; // skip containers; we want a leaf label, not a section
     const lowered = value.toLowerCase();
     return exact ? lowered === target : lowered.includes(target);
   });
