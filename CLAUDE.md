@@ -72,3 +72,5 @@ node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console
 - `/v1/boss_events_progress` — boss tracker source of truth; new-event detection keys off `Event.UUID`
 - `/v1/dashboard_content` — Next Lesson source via `CurrentLessonUUID`
 - `/v1/leaderboard_xp/day` — used for personal leaderboard daily XP when a handle appears there
+
+Confirmed API response field names are documented in `reference_data/bootdev_api_info/bootdev_openapi.yaml`

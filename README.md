@@ -12,12 +12,20 @@ A Manifest V3 Chrome extension that augments boot.dev with a few quality-of-life
 4. **Next Lesson nav button** - adds a top-nav shortcut to the current next lesson when the extension can infer it.
 5. **Personal leaderboards** - lets you save boot.dev handles and compare them in custom daily XP, all-time XP, and all-time karma boards.
 
+## TL;DR
+
+1. Download the latest `catalyst-v<version>.zip` from the `releases/` folder.
+2. Unzip it.
+3. In Chrome, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the unzipped `catalyst-v<version>` folder.
+4. Visit `https://www.boot.dev`.
+
 ## Project Layout
 
 ```text
 catalyst/
   bootdev-extension/       Chrome "Load unpacked" target
     manifest.json
+    icons/                 Extension toolbar icons
     src/
       utils.js             Shared helpers (loaded first)
       leaderboard.js       All-time and personal leaderboard feature
@@ -27,22 +35,16 @@ catalyst/
       content.js           postMessage listener and URL router (loaded last)
       injected.js          Page-context fetch/XHR interceptor
       styles.css
+  docs/
+    branding/              Logo assets referenced by this README
   scripts/
-    package-extension.sh   Creates bootdev-extension.zip
-  reference_data/          API captures, rendered HTML, and OpenAPI docs
-  CLAUDE.md
+    package-extension.sh   Builds releases/catalyst-v<version>.zip
+  CLAUDE.md                Agent guidance and development conventions
   CHANGELOG.md
   README.md
 ```
 
-Only `bootdev-extension/` is needed by Chrome. The `reference_data/` directory is for development and documentation only.
-
-## TL;DR
-
-1. Download the latest `catalyst-v<version>.zip` from the `releases/` folder.
-2. Unzip it.
-3. In Chrome, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the unzipped `catalyst-v<version>` folder.
-4. Visit `https://www.boot.dev`.
+Only `bootdev-extension/` is needed by Chrome.
 
 ## Install From Zip
 
@@ -53,7 +55,7 @@ Chrome loads unpacked extension folders, not zip files directly. Unzip first, th
    - Terminal:
 
 ```bash
-unzip catalyst-v0.3.0.zip
+unzip catalyst-v<version>.zip
 ```
 
 2. Open Chrome and go to:
@@ -64,7 +66,7 @@ chrome://extensions
 
 3. Turn on **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.3.0`).
+5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.4.0`).
 6. Open or refresh `https://www.boot.dev`.
 
 ## Updating
@@ -72,32 +74,51 @@ chrome://extensions
 1. Remove or replace the old unzipped `catalyst-v<old-version>` folder.
 2. Unzip the new `catalyst-v<version>.zip`.
 3. Go to `chrome://extensions`.
-4. Click the reload button on **catalyst for Boot.dev**.
+4. Click the reload button on **Catalyst for Boot.dev**.
 5. Refresh any open Boot.dev tabs.
 
 ## Usage
 
-The extension runs automatically on `www.boot.dev`.
+The extension runs automatically on `www.boot.dev`. No extra sign-in flow is required — it reads JSON responses that the boot.dev page fetches using the existing boot.dev session.
 
-- On `https://www.boot.dev/leaderboard`, it adds **Top All-Time Learners** below the native **Top Daily Learners** section using `/v1/leaderboard_xp/alltime`.
-- The all-time leaderboard uses role-tier avatar frames, highlights the logged-in user's row when present, and caches the latest response so repeat visits render faster while fresh data loads.
-- Each entry (other than your own) shows an XP delta — how many XP you are ahead (green) or behind (red) relative to that user.
-- On public profile pages like `https://www.boot.dev/u/<username>`, it adds `Total XP`, current-level XP progress, and remaining XP below the native level line in the profile header.
-- Public profile pages also include an **Add to Personal Leaderboards** button for quickly tracking that user.
-- On boot.dev pages, it shows the boss tracker once boss-event data has been loaded.
-- Drag the boss tracker header to reposition it. The position persists across pages.
-- Use the `-` / `+` boss tracker button to minimize or expand it. The minimized view still shows `Boss Event - Current Aura: <aura>%`.
-- In the expanded boss tracker, use the gear button to open or close high settings. Manually edit event high and all-time high percentages there if you learn about a missed high while the extension was not watching the page. Saving an event high above the all-time high also raises the all-time high.
-- Boss tracker settings also include **Refresh** and **Reset**. Reset clears the current event stats while keeping the all-time aura high.
-- Boss-event data refreshes in the background about every 30 seconds. Navigating within boot.dev resets that 30-second timer and triggers a fresh fetch.
-- The **Next Lesson** top-nav link is learned from `/v1/dashboard_content`, specifically `CurrentLessonUUID`. Lesson progress responses trigger a delayed dashboard refresh so the link updates after completions. The dashboard **Continue Learning** button is also used as a same-page fallback.
-- Press `Alt+N` to open the saved **Next Lesson** link from any boot.dev page. The shortcut is ignored while typing in inputs or editors.
-- On `https://www.boot.dev/leaderboard`, the **Personal Leaderboards** section lets you add and remove handles. Handles are stored in `chrome.storage.local`.
-- Personal **Top Daily Learners** uses `/v1/leaderboard_xp/day` when a saved handle appears there. Otherwise it shows observed XP gained today from the saved public profile snapshots. **Top All-Time Learners** uses public profile XP, and **Top Community Members** uses public stats karma.
-- Each personal leaderboard row (other than your own) shows a delta in the same unit as the row value — green when you are ahead, red when you are behind. Your comparison value comes from your Personal Leaderboard record if you have added yourself, with a fallback to the all-time leaderboard cache for XP.
-- Invalid, empty, duplicate, or nonexistent users are rejected before being saved. If Boot.dev returns an auth error, catalyst retries once and then asks you to refresh Boot.dev.
+### Next Lesson
 
-No extra sign-in flow is required. The extension reads JSON responses that the boot.dev page fetches, and it can ask the page context to refresh selected endpoints with the existing boot.dev session.
+- A **Next Lesson** link is added to the top nav on all boot.dev pages once the extension learns your current lesson from `/v1/dashboard_content`. The dashboard **Continue Learning** button is used as a same-page fallback.
+- Press `Alt+N` from any boot.dev page to open the Next Lesson link directly. The shortcut is ignored while typing in inputs or editors.
+- Lesson progress responses trigger a delayed dashboard refresh so the link updates automatically after you complete a lesson.
+
+### Leaderboards
+
+#### All-Time XP
+
+- On `https://www.boot.dev/leaderboard`, a **Top All-Time Learners** section is added below the native **Top Daily Learners** section, sourced from `/v1/leaderboard_xp/alltime`.
+- Entries use role-tier avatar frames and highlight your own row. The latest response is cached so repeat visits render faster while fresh data loads.
+
+#### Personal Leaderboards
+
+- Also on the leaderboard page, a **Personal Leaderboards** section lets you track specific boot.dev handles across three boards: daily XP, all-time XP, and karma. Handles are stored in `chrome.storage.local`.
+- On any public profile page (`https://www.boot.dev/u/<username>`), an **Add to Personal Leaderboards** button lets you save that user directly.
+- Personal **Top Daily Learners** uses `/v1/leaderboard_xp/day` when a saved handle appears there; otherwise it shows observed XP gained today from saved profile snapshots. **Top All-Time Learners** uses public profile XP. **Top Community Members** uses public stats karma.
+- Invalid, empty, duplicate, or nonexistent handles are rejected before being saved. If boot.dev returns an auth error, Catalyst retries once and then asks you to refresh the page.
+
+#### XP and Karma Deltas
+
+- Every leaderboard entry other than your own shows a delta — how far ahead (green) or behind (red) you are in the same unit as that board's value.
+- Deltas appear on all extension panels (Top All-Time Learners and all three Personal Leaderboards boards) and on all four native boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. Recent Archmages is left untouched.
+- Your comparison value is read from the same API response that feeds each board, with a fallback to your saved personal record when absent.
+
+### Boss Event Tracker
+
+- The boss tracker appears on boot.dev pages once boss-event data has been loaded. It tracks current Boots Aura bonus %, event-high %, all-time-high %, boss damage dealt, XP to the next chest, and XP to defeat the boss.
+- Drag the tracker header to reposition it anywhere on screen. The position persists across pages.
+- Use the **−** / **+** button to minimize or expand the tracker. The minimized view still shows the current aura percentage.
+- Use the **gear** button to open the high settings panel. You can manually edit the event high and all-time high percentages — useful if you missed a high while the extension wasn't watching. Saving an event high above the all-time high also raises the all-time high.
+- The settings panel also includes a **Refresh** button and a **Reset** button. Reset clears the current event stats while keeping the all-time high.
+- Boss-event data refreshes in the background roughly every 30 seconds. Navigating within boot.dev resets that timer and triggers a fresh fetch immediately.
+
+### Profile Pages
+
+- On public profile pages (`https://www.boot.dev/u/<username>`), Catalyst adds **Total XP**, current-level XP progress, and XP remaining to the next level, displayed below the native level line in the profile header.
 
 ## Troubleshooting
 
@@ -135,17 +156,7 @@ node --check src/content.js
 node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest.json ok')"
 ```
 
-## Release Zip
-
-From the repo root, create a shareable zip with:
-
-```bash
-bash scripts/package-extension.sh
-```
-
-This reads the version from `bootdev-extension/manifest.json` and produces `releases/catalyst-v<version>.zip`. The zip contains a single folder named `catalyst-v<version>/` with the loadable extension contents. It does not include `.git`, `reference_data/`, `node_modules`, debug artifacts, or unrelated local files.
-
-Recipients should unzip `catalyst-v<version>.zip` and select the unzipped `catalyst-v<version>` folder in Chrome's **Load unpacked** dialog.
+To build a release zip, run `bash scripts/package-extension.sh` from the repo root. See `CLAUDE.md` for architecture details and agent guidance.
 
 ## Versioning
 
@@ -155,49 +166,4 @@ This project uses semantic versioning:
 - `MINOR`: backwards-compatible features.
 - `PATCH`: bug fixes, graceful handling, docs, packaging, and polish.
 
-Current version: `v0.4.0`.
-
-Version map:
-
-- `v0.1.0`: first usable local pre-rename build with core enhancement behavior.
-- `v0.2.0`: personal leaderboard build with manually added usernames.
-- `v0.2.1`: graceful error handling, invalid username validation, 401 handling, console-noise reduction, and release docs.
-- `v0.3.0`: catalyst rename, current-user highlight fixes, Personal Leaderboards placement and avatar polish, profile-page add button, boss widget polish, auth retry handling for personal user checks, leaderboard re-render loop fix, avatar frame tier correction, and packaging script update.
-- `v0.4.0`: XP and karma delta display on all leaderboard entries, avatar frame tier correction, boss widget width and font fixes, leaderboard flicker elimination, and input focus preservation.
-
-The reference captures and API docs live outside the Chrome load target:
-
-- `reference_data/http_responses_from_api_endpoints/`
-- `reference_data/har_files/`
-- `reference_data/webpage_raw_html/`
-- `reference_data/bootdev_api_info/bootdev_openapi.yaml`
-- `reference_data/bootdev_api_info/old_openapi.yaml`
-
-## Completed
-
-- Replaced placeholder response-field guesses with fields from captured JSON.
-- Moved the custom leaderboard section to global `/v1/leaderboard_xp/alltime`.
-- Scoped the all-time leaderboard UI to `/leaderboard` only and cached the last response for faster repeat rendering.
-- Added Archmage role frames, current-user glow, and native hover behavior to the all-time leaderboard rows.
-- Switched cumulative profile XP to the public profile response, where `data.XP` is present.
-- Moved cumulative profile XP into the native-looking profile header area below the level line.
-- Added `XPForLevel / XPTotalForLevel` and remaining XP under the profile Total XP line.
-- Confirmed boss new-event detection can key off `Event.UUID`.
-- Mapped boss progress fields: `XPBonus`, `XPTotal`, `XPUser`, `Event.HealthPoints`, and `Rewards`.
-- Added boss tracker background refresh, SPA route refresh resets, minimization, and drag-position persistence.
-- Added manual boss event-high and all-time-high editing.
-- Added a collapsible boss high-settings section.
-- Added boss progress bars, last-updated display, a manual refresh button, and safer hidden reset placement.
-- Added the top-nav Next Lesson shortcut and `Alt+N` keyboard shortcut.
-- Added manual Personal Leaderboards for saved handles on the leaderboard page.
-- Added profile-page add buttons for Personal Leaderboards.
-- Added semantic/text-landmark injection anchors instead of relying on hashed CSS classes.
-- Updated `bootdev_openapi.yaml` with response schemas from the captured data and useful challenge schema details from `old_openapi.yaml`.
-- Documented `/v1/dashboard_content` as the Next Lesson source and corrected karma leaderboard periods to `alltime`.
-- Moved reference data out of the Chrome extension load directory.
-
-## Notes
-
-- Boss chest tier names are inferred from the rendered modal order because `boss_events_progress` contains chest UUIDs and thresholds, not display names.
-- Alerts are in-page toasts; the extension does not request Chrome's `"notifications"` permission.
-- Per-event boss stats reset automatically when `Event.UUID` changes. The all-time high persists across events.
+See [CHANGELOG.md](CHANGELOG.md) for full version history.

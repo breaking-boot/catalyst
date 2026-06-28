@@ -49,8 +49,9 @@
 ## v0.2.0 - Personal leaderboard build with manually added usernames.
 
 - Added manual Personal Leaderboards on the Boot.dev leaderboard page.
-- Added the Next Lesson nav shortcut and keyboard shortcut.
+- Added the Next Lesson nav shortcut and `Alt+N` keyboard shortcut.
 - Added collapsible boss high settings.
+- Added boss tracker drag-to-reposition with persistent position, and minimize/expand toggle.
 
 ## v0.1.0 - First usable local pre-rename build with core enhancement behavior.
 
