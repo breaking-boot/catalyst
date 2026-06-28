@@ -15,6 +15,7 @@ Chrome extension (Manifest V3) that augments boot.dev. The Chrome-loadable direc
 | `src/boss.js` | Boss-event tracker: state management, render, drag-to-reposition, background refresh, settings panel, near-high notification. |
 | `src/nextLesson.js` | Next Lesson top-nav link and Alt+N keyboard shortcut. |
 | `src/styles.css` | All injected UI styles. Uses `be-` prefix on all class names to avoid clashing with boot.dev's own styles. |
+| `assets/frames/` | Bundled static art: avatar role frames `0.png`–`9.png`, indexed to `ROLE_FRAME_INDEX_BY_ROLE` in `leaderboard.js`. Loaded into the page via `chrome.runtime.getURL` and exposed through `web_accessible_resources`. Used only as the fallback when the API provides no explicit frame URL; bundling avoids depending on boot.dev's build-hashed asset paths. Unlike `reference_data/`, this directory **is** loaded by Chrome. |
 | `manifest.json` | MV3 manifest. Do not add permissions without explaining why. Current permissions: `storage` only. |
 
 ## Hard architecture rule

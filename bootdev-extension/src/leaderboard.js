@@ -11,23 +11,15 @@ const LEAGUE_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/al
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
 const PERSONAL_CACHE_KEY = "be_personal_leaderboard_cache";
 const CURRENT_USER_HANDLE_KEY = "be_current_user_handle";
-// FRAGILE: build-hashed Nuxt asset URLs. These filenames are regenerated on
-// every boot.dev frontend deploy, so this list is expected to rot and 404 over
-// time. Only used as a fallback when the API provides no explicit frame URL
-// (see getExplicitFrameUrl), so a stale entry just means a missing frame image,
-// never a broken feature.
-const ROLE_FRAME_URLS = [
-  "https://www.boot.dev/_nuxt/0.B6ueYVE9.png",
-  "https://www.boot.dev/_nuxt/1.DnmxFjr3.png",
-  "https://www.boot.dev/_nuxt/2.Cijf5c5Q.png",
-  "https://www.boot.dev/_nuxt/3.CikePfbF.png",
-  "https://www.boot.dev/_nuxt/4.B5xh_zDj.png",
-  "https://www.boot.dev/_nuxt/5.0Do8PVSr.png",
-  "https://www.boot.dev/_nuxt/6.4Va-k18V.png",
-  "https://www.boot.dev/_nuxt/7.BsonWGZg.png",
-  "https://www.boot.dev/_nuxt/8.CJ6g5ANN.png",
-  "https://www.boot.dev/_nuxt/9.Cmx5X891.png",
-];
+// Avatar role frames, indexed to match ROLE_FRAME_INDEX_BY_ROLE below. Bundled
+// locally (assets/frames/<index>.png) and resolved to extension URLs so the
+// fallback never depends on boot.dev's build-hashed asset paths, which are
+// regenerated on every redeploy. Only used when the API provides no explicit
+// frame URL (see getExplicitFrameUrl); if boot.dev redesigns the frames the
+// bundled copies render slightly stale rather than breaking.
+const ROLE_FRAME_URLS = Array.from({ length: 10 }, (_, i) =>
+  chrome.runtime.getURL(`assets/frames/${i}.png`)
+);
 const ROLE_FRAME_INDEX_BY_ROLE = {
   apprentice: 0,
   pupil: 1,
