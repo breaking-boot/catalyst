@@ -66,7 +66,7 @@ chrome://extensions
 
 3. Turn on **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.4.0`).
+5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.4.1`).
 6. Open or refresh `https://www.boot.dev`.
 
 ## Updating

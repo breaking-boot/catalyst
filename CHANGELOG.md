@@ -1,5 +1,22 @@
 # Changelog
 
+## v0.4.1 - Code-audit fixes: message-bridge hardening, boss reliability, cleanup
+
+### Security
+- Validated `event.origin` on both `window.postMessage` listeners (the content-script router and the page-context interceptor) so only same-origin messages are processed.
+- Marked the injected.js web-accessible resource with `use_dynamic_url` to prevent extension fingerprinting from a stable resource URL.
+
+### Quality
+- Made the in-memory boss state authoritative and treated `chrome.storage` as a write-through cache, removing the read-modify-write race between the refresh interval, the manual Refresh button, and the near-high notification.
+- Slowed boss polling from 30 sec to 2 min and skipped fetches while the tab is hidden, reducing standing API load.
+- Memoized `findCurrentUserProfileLink` per synchronous render burst to stop repeated forced-layout `getBoundingClientRect` loops on every leaderboard render.
+- Guarded the message-dispatch path so a single malformed payload can no longer abort sibling handlers.
+
+### Maintainability
+- Moved all boss auth-state and refresh-timer mutation into boss.js (`markBossAuthUnavailable`) so content.js no longer reaches into boss globals.
+- Marked the hashed-class injection anchors with `FRAGILE` comments per project convention and documented the build-hashed frame asset list as expected to rot.
+- Removed dead code (`normalizeImageUrl`, `ARCHMAGE_FRAME_URL`), dropped a duplicate daily-leaderboard request, documented `waitFor`'s null-on-timeout contract, and annotated inline threshold constants.
+
 ## v0.4.0 - XP and karma delta display on all leaderboards, stability fixes
 
 - Added XP and karma delta to every leaderboard entry — each card other than your own shows how far ahead (green) or behind (red) you are. Shown on the extension's Top All-Time Learners panel, all three Personal Leaderboards boards (daily XP, all-time XP, karma), and all four native boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. (Recent Archmages is left untouched — it lists no XP or karma.)
