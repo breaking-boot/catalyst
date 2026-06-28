@@ -20,6 +20,28 @@ const CURRENT_USER_HANDLE_KEY = "be_current_user_handle";
 const ROLE_FRAME_URLS = Array.from({ length: 10 }, (_, i) =>
   chrome.runtime.getURL(`assets/frames/${i}.png`)
 );
+// Dev-only rot-detection baseline (NOT used for rendering). These are the
+// boot.dev source URLs the bundled assets/frames PNGs were copied from. Nuxt/Vite
+// content-hash asset filenames, so a URL keeps resolving as long as the image
+// bytes are unchanged and 404s once the art changes. checkFrameAssetsForRot()
+// probes these when the be_frame_debug flag is set so the maintainer gets a local
+// heads-up to refresh the bundled copies. Keep in sync if the bundle is updated.
+const FRAME_SOURCE_URLS = [
+  "https://www.boot.dev/_nuxt/0.B6ueYVE9.png",
+  "https://www.boot.dev/_nuxt/1.DnmxFjr3.png",
+  "https://www.boot.dev/_nuxt/2.Cijf5c5Q.png",
+  "https://www.boot.dev/_nuxt/3.CikePfbF.png",
+  "https://www.boot.dev/_nuxt/4.B5xh_zDj.png",
+  "https://www.boot.dev/_nuxt/5.0Do8PVSr.png",
+  "https://www.boot.dev/_nuxt/6.4Va-k18V.png",
+  "https://www.boot.dev/_nuxt/7.BsonWGZg.png",
+  "https://www.boot.dev/_nuxt/8.CJ6g5ANN.png",
+  "https://www.boot.dev/_nuxt/9.Cmx5X891.png",
+];
+const FRAME_DEBUG_KEY = "be_frame_debug";
+let frameDebugEnabled = false;
+let frameRotChecked = false; // probe at most once per page load
+
 const ROLE_FRAME_INDEX_BY_ROLE = {
   apprentice: 0,
   pupil: 1,
@@ -138,6 +160,38 @@ function getRoleFrameIndex(entry) {
   }
 
   return -1;
+}
+
+// ---------------------------------------------------------------------------
+// Frame rot detection (opt-in, maintainer-only)
+// ---------------------------------------------------------------------------
+// boot.dev's API never sends a frame URL (the frame is derived from Role/Level),
+// so the bundled assets/frames copies are always the source. They can't 404, but
+// they can drift if boot.dev redesigns the art. This probe lets the maintainer
+// notice that drift locally without ever surfacing anything to ordinary users:
+// it does nothing unless `be_frame_debug` is set to true in chrome.storage.local.
+async function loadFrameDebugFlag() {
+  frameDebugEnabled = Boolean(await chromeGet(FRAME_DEBUG_KEY));
+}
+
+function checkFrameAssetsForRot() {
+  if (!frameDebugEnabled || frameRotChecked || enhancerStopped) return;
+  if (!isLeaderboardPage()) return;
+  frameRotChecked = true;
+
+  FRAME_SOURCE_URLS.forEach((url, index) => {
+    // A same-origin <img> probe: load succeeds while the content hash is intact,
+    // and errors once boot.dev ships different art under a new hash.
+    const probe = new Image();
+    probe.onerror = () => {
+      console.warn(
+        `[catalyst] role frame ${index} no longer resolves upstream (${url}); ` +
+        "boot.dev likely changed the art. Re-download assets/frames and update FRAME_SOURCE_URLS."
+      );
+      toast(`Role frame ${index} changed on boot.dev. Refresh the bundled frames when convenient.`);
+    };
+    probe.src = url;
+  });
 }
 
 // ---------------------------------------------------------------------------

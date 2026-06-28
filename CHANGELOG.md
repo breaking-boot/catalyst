@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Bundled the ten avatar role frames into `assets/frames` and resolved them with `chrome.runtime.getURL` instead of pointing at boot.dev's build-hashed Nuxt asset URLs, which are regenerated on every redeploy and would eventually 404. The frames now load from the extension and can no longer break on a boot.dev deploy.
+- Added an opt-in, maintainer-only detector (`checkFrameAssetsForRot`) that probes the original boot.dev frame URLs and warns (console + toast) when one stops resolving, signaling that the art changed upstream and the bundled copies should be refreshed. It does nothing unless `be_frame_debug` is set to `true` in `chrome.storage.local`, so ordinary users never see it.
+
 ## v0.4.1 - Code-audit fixes: message-bridge hardening, boss reliability, cleanup
 
 ### Security

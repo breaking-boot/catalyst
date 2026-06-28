@@ -104,6 +104,7 @@ async function initEnhancer() {
   await loadNextLessonHref();
   await loadCurrentUserHandle();
   await loadPersonalLeaderboard();
+  await loadFrameDebugFlag();
   if (enhancerStopped) return;
   restoreBossPanel();
   syncRouteScopedUi();
@@ -148,6 +149,7 @@ function startDomScan() {
     captureNextLessonFromDom();
     learnCurrentUserHandleFromDom();
     ensureLeaderboardUiState();
+    checkFrameAssetsForRot();
   }, 2000);
 }
 
