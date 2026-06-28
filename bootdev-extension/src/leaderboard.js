@@ -189,9 +189,13 @@ function getCurrentUserIdentity() {
 }
 
 function getCurrentUserHandle(navLink = findCurrentUserProfileLink()) {
-  const navHandle = getProfileHandleFromHref(navLink?.getAttribute("href"));
+  // Sticky once known: a confirmed identity is never overridden by a transient
+  // DOM read (the nav heuristic can match a scrolled-past leaderboard card). The
+  // 2-second scan keeps it corrected from the authoritative gold-glow highlight.
+  if (currentUserHandle) return currentUserHandle;
   const nativeHandle = isLeaderboardPage() ? findNativeCurrentUserHandle() : "";
-  return normalizeHandle(navHandle || nativeHandle || currentUserHandle);
+  const navHandle = getProfileHandleFromHref(navLink?.getAttribute("href"));
+  return normalizeHandle(nativeHandle || navHandle);
 }
 
 function getCurrentUserDisplayName(navLink) {
@@ -256,10 +260,19 @@ async function rememberCurrentUserHandle(handle) {
 }
 
 function learnCurrentUserHandleFromDom() {
-  const navHandle = getProfileHandleFromHref(findCurrentUserProfileLink()?.getAttribute("href"));
+  // The native gold-glow highlight marks the current user's own cards and is never
+  // wrong, so trust it as the source of truth and let it correct a stale handle.
   const nativeHandle = isLeaderboardPage() ? findNativeCurrentUserHandle() : "";
-  const handle = normalizeHandle(navHandle || nativeHandle);
-  if (handle) void rememberCurrentUserHandle(handle);
+  if (nativeHandle) {
+    void rememberCurrentUserHandle(nativeHandle);
+    return;
+  }
+  // Off the leaderboard (or before the glow renders) fall back to the nav profile
+  // link, but only to learn an unknown handle — never to overwrite a known one,
+  // since that heuristic can transiently match a scrolled-past profile card.
+  if (currentUserHandle) return;
+  const navHandle = getProfileHandleFromHref(findCurrentUserProfileLink()?.getAttribute("href"));
+  if (navHandle) void rememberCurrentUserHandle(navHandle);
 }
 
 // ---------------------------------------------------------------------------
@@ -285,28 +298,33 @@ function handleAllTimeLeaderboard(json) {
   renderAllTimeLeaderboard(entries);
 }
 
+// Our own value for a given metric. Prefer the actual leaderboard responses
+// (which are exactly the numbers shown on those boards) so deltas always match
+// the displayed values; fall back to the saved personal record only when we are
+// not present in any cached board.
 function getMyValue(kind) {
-  const myHandle = normalizeHandle(currentUserHandle);
-  if (!myHandle) return null;
-  const record = personalRecords[myHandle];
-  if (record) return getPersonalValue(record, kind);
   const identity = getCurrentUserIdentity();
+  if (!normalizeHandle(identity.handle)) return null;
+
+  const fromEntries = (entries, ...fields) => myValueFromEntries(entries, ...fields);
+
+  let value = null;
   if (kind === "xp") {
-    const entry = cachedAllTimeEntries.find((e) => isCurrentLeaderboardEntry(e, identity));
-    return entry ? num(entry.XP ?? entry.TotalXP ?? entry.XPEarned) : null;
-  }
-  if (kind === "daily") {
+    value = fromEntries(cachedAllTimeEntries, "XP", "TotalXP")
+      ?? fromEntries(cachedLeagueEntries, "XP")
+      ?? fromEntries(cachedLeagueDailyEntries, "XP");
+  } else if (kind === "daily") {
     // Daily XP earned is universal, so the league-daily response is a valid
     // fallback when we rank outside the global daily top 25.
-    const entry = cachedDailyEntries.find((e) => isCurrentLeaderboardEntry(e, identity))
-      || cachedLeagueDailyEntries.find((e) => isCurrentLeaderboardEntry(e, identity));
-    return entry ? num(entry.XPEarned ?? entry.XP) : null;
+    value = fromEntries(cachedDailyEntries, "XPEarned", "XP")
+      ?? fromEntries(cachedLeagueDailyEntries, "XPEarned", "XP");
+  } else if (kind === "karma") {
+    value = fromEntries(cachedKarmaEntries, "Karma");
   }
-  if (kind === "karma") {
-    const entry = cachedKarmaEntries.find((e) => isCurrentLeaderboardEntry(e, identity));
-    return entry ? num(entry.Karma) : null;
-  }
-  return null;
+  if (value != null) return value;
+
+  const record = personalRecords[normalizeHandle(identity.handle)];
+  return record ? getPersonalValue(record, kind) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -533,15 +551,33 @@ function renderLeaderAvatar(entry, displayName) {
 // value is appended into the card's text column, beneath the native value.
 // Deltas are patched in place (never torn down) so they never flicker.
 
+// Titles that delimit a leaderboard board. Only these bound a section's cards —
+// the Global boards put a dynamic "You are in position N…" <h3> subtitle between
+// the board title and its cards, and that must not be treated as a boundary.
+const NATIVE_SECTION_TITLES = new Set([
+  "league leaderboards",
+  "global leaderboards",
+  "top daily learners",
+  "top league learners",
+  "top community members",
+  "recent archmages",
+  "top all-time learners",
+  "personal leaderboards",
+]);
+
+function isNativeSectionHeading(el) {
+  return NATIVE_SECTION_TITLES.has(normalizeText(el.textContent).toLowerCase());
+}
+
 // Cards (profile links) sitting in document order between `heading` and the next
-// heading. Using document position rather than DOM nesting keeps this correct for
-// both the League and Global containers regardless of their wrapper structure.
+// section heading. Using document position rather than DOM nesting keeps this
+// correct for both the League and Global containers regardless of their wrappers.
 function nativeCardsForHeading(heading) {
   if (!heading) return [];
   const headings = Array.from(document.querySelectorAll("h1,h2,h3,[role='heading']"));
   let next = null;
   for (const h of headings) {
-    if (h === heading) continue;
+    if (h === heading || !isNativeSectionHeading(h)) continue;
     if (!(heading.compareDocumentPosition(h) & Node.DOCUMENT_POSITION_FOLLOWING)) continue;
     if (!next || (h.compareDocumentPosition(next) & Node.DOCUMENT_POSITION_FOLLOWING)) next = h;
   }
