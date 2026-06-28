@@ -45,7 +45,11 @@ function handleWindowMessage(event) {
   if (!msg || msg.source !== TAG || !msg.payload || !("json" in msg.payload)) {
     return;
   }
-  resolveApiRequest(msg.payload);
+  try {
+    resolveApiRequest(msg.payload);
+  } catch (err) {
+    handleAsyncError(err, "resolve");
+  }
   Promise.resolve(routeResponse(msg.payload)).catch((err) => handleAsyncError(err, "route"));
 }
 
@@ -234,9 +238,7 @@ function handleAuthUnavailable(path) {
   if (path === "/v1/dashboard_content") {
     dashboardAuthUnavailableUntil = Date.now() + 15_000;
   } else if (path === "/v1/boss_events_progress") {
-    bossAuthUnavailableUntil = Date.now() + 15_000;
-    clearBossRefreshTimer();
-    setTrackedTimeout(() => resetBossRefreshTimer(true), 15_000);
+    markBossAuthUnavailable(15_000, true);
   }
 }
 
@@ -244,8 +246,7 @@ function handleUnauthorizedApi(path) {
   if (path === "/v1/dashboard_content") {
     dashboardAuthUnavailableUntil = Date.now() + AUTH_RETRY_MS;
   } else if (path === "/v1/boss_events_progress") {
-    bossAuthUnavailableUntil = Date.now() + AUTH_RETRY_MS;
-    clearBossRefreshTimer();
+    markBossAuthUnavailable(AUTH_RETRY_MS, false);
   }
 }
 

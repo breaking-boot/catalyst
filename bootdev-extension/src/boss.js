@@ -7,18 +7,30 @@
 const BOSS_KEY = "be_boss_state";
 const BOSS_UI_KEY = "be_boss_ui_state";
 const BOSS_PROGRESS_URL = "https://api.boot.dev/v1/boss_events_progress";
-const BOSS_REFRESH_MS = 30_000;
+const BOSS_REFRESH_MS = 120_000; // boss data changes slowly; poll every 2 min
 const NEAR_HIGH_THRESHOLD = 0.95; // notify when current >= 95% of event high
 
 let bossRefreshTimer = null;
 let bossUiState = { minimized: false, settingsOpen: false, x: null, y: null };
 let bossUiLoaded = false;
 let bossAuthUnavailableUntil = 0;
+// Authoritative in-memory copy of the persisted boss state. chrome.storage is a
+// write-through cache; reading from memory avoids the read-modify-write race
+// between the refresh interval, the manual Refresh button, and near-high notify.
+let bossState = null;
 
 function clearBossRefreshTimer() {
   if (!bossRefreshTimer) return;
   clearInterval(bossRefreshTimer);
   bossRefreshTimer = null;
+}
+
+// Owned here so all boss auth-state mutation and timer control stays in boss.js
+// rather than being reached into from content.js.
+function markBossAuthUnavailable(durationMs, retry = false) {
+  bossAuthUnavailableUntil = Date.now() + durationMs;
+  clearBossRefreshTimer();
+  if (retry) setTrackedTimeout(() => resetBossRefreshTimer(true), durationMs);
 }
 
 function resetBossRefreshTimer(fetchNow = false) {
@@ -35,13 +47,16 @@ function requestBossProgress() {
     clearBossRefreshTimer();
     return;
   }
+  // Don't poll while the tab is hidden; the next visible tick will refresh.
+  if (document.hidden) return;
   requestApiJson(BOSS_PROGRESS_URL);
 }
 
 async function restoreBossPanel() {
   const stored = (await chromeGet(BOSS_KEY)) || {};
   if (enhancerStopped) return;
-  if (stored.state) renderBossPanel(stored.state);
+  bossState = stored.state || null;
+  if (bossState) renderBossPanel(bossState);
 }
 
 // ===========================================================================
@@ -59,9 +74,7 @@ async function handleBossProgress(json) {
     nextChestTier: getNextChestTier(rewards),
   };
 
-  const stored = (await chromeGet(BOSS_KEY)) || {};
-  if (enhancerStopped) return;
-  let state = stored.state || newEventState(cur.eventId);
+  let state = bossState || newEventState(cur.eventId);
 
   // Auto-detect a new event. Event stats reset, all-time high persists.
   if (state.eventId !== cur.eventId) {
@@ -83,6 +96,7 @@ async function handleBossProgress(json) {
   state.nextChestTier = cur.nextChestTier;
   state.updatedAt = Date.now();
 
+  bossState = state;
   await chromeSet(BOSS_KEY, { state });
   if (enhancerStopped) return;
   renderBossPanel(state);
@@ -210,6 +224,7 @@ function bindBossPanelControls(panel, state) {
     reset.onclick = async () => {
       const fresh = newEventState(state.eventId);
       fresh.allTimeHigh = state.allTimeHigh; // keep the all-time record
+      bossState = fresh;
       await chromeSet(BOSS_KEY, { state: fresh });
       renderBossPanel(fresh);
     };
@@ -243,6 +258,7 @@ function bindBossPanelControls(panel, state) {
       next.notifiedHigh = 0;
       next.updatedAt = Date.now();
 
+      bossState = next;
       await chromeSet(BOSS_KEY, { state: next });
       renderBossPanel(next);
     };

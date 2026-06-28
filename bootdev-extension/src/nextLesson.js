@@ -74,6 +74,8 @@ function renderNextLessonNav() {
 
   waitFor(() => findTopNavInsertionPoint(), 3000).then((anchor) => {
     if (!anchor || !nextLessonHref) return;
+    // FRAGILE: hashed class, may break on redeploy. `div.group` is the nav-item
+    // wrapper; the `li` fallback and the anchor itself keep this working if it goes.
     const target = anchor.closest("div.group, li") || anchor;
 
     let link = document.getElementById("be-next-lesson-nav");

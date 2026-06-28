@@ -206,7 +206,15 @@ function getCurrentUserDisplayName(navLink) {
     .trim();
 }
 
+// Memoized for the duration of one synchronous burst. A single render pass calls
+// this many times (per row, per delta), and each call ran a querySelectorAll plus
+// a getBoundingClientRect loop (forced layout). The microtask reset guarantees the
+// cache never survives an await, so it only collapses redundant calls in one stack.
+let cachedProfileLink = null;
+let cachedProfileLinkValid = false;
 function findCurrentUserProfileLink() {
+  if (cachedProfileLinkValid) return cachedProfileLink;
+
   const links = Array.from(document.querySelectorAll('a[href^="/u/"]'))
     .filter((link) => isVisible(link) && !link.closest("main, #be-alltime-leaderboard, #be-personal-leaderboards"));
   const topLinks = links
@@ -214,7 +222,10 @@ function findCurrentUserProfileLink() {
     .filter(({ rect }) => rect.top >= 0 && rect.top < 90 && rect.right > window.innerWidth / 2)
     .sort((a, b) => b.rect.right - a.rect.right);
 
-  return topLinks[0]?.link || null;
+  cachedProfileLink = topLinks[0]?.link || null;
+  cachedProfileLinkValid = true;
+  queueMicrotask(() => { cachedProfileLinkValid = false; });
+  return cachedProfileLink;
 }
 
 function getProfileHandleFromHref(href) {
@@ -230,6 +241,8 @@ function getProfileHandleFromHref(href) {
 }
 
 function findNativeCurrentUserHandle() {
+  // FRAGILE: hashed class, may break on redeploy. boot.dev marks the signed-in
+  // user's own leaderboard cards with this gold-glow utility class.
   const highlightedCards = Array.from(document.querySelectorAll(".box-shadow-glow-gold"))
     .filter((el) => isVisible(el) && !el.closest("#be-alltime-leaderboard, #be-personal-leaderboards"));
 
