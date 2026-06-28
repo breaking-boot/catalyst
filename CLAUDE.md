@@ -74,3 +74,9 @@ node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console
 - `/v1/leaderboard_xp/day` — used for personal leaderboard daily XP when a handle appears there
 
 Confirmed API response field names are documented in `reference_data/bootdev_api_info/bootdev_openapi.yaml`
+
+## Notes
+
+- Boss chest tier names are inferred from the rendered modal order because `boss_events_progress` contains chest UUIDs and thresholds, not display names.
+- Alerts are in-page toasts; the extension does not request Chrome's `"notifications"` permission.
+- Per-event boss stats reset automatically when `Event.UUID` changes. The all-time high persists across events.
