@@ -11,6 +11,7 @@ const TAG = "BOOTDEV_ENHANCER";
 const API_REQUEST_TIMEOUT_MS = 10_000;
 const AUTH_RETRY_MS = 5 * 60_000;
 const DASHBOARD_CONTENT_URL = "https://api.boot.dev/v1/dashboard_content";
+const SETTINGS_INTRO_KEY = "be_settings_introduced";
 
 let routeScanTimer = null;
 let domScanTimer = null;
@@ -114,6 +115,7 @@ async function initEnhancer() {
   requestDashboardContentIfUseful(900);
   bindNextLessonShortcut();
   startDomScan();
+  maybeShowSettingsIntro().catch((err) => handleAsyncError(err, "intro"));
 
   routeScanTimer = setTrackedInterval(() => {
     if (location.pathname === lastPath) return;
@@ -122,6 +124,18 @@ async function initEnhancer() {
     resetBossRefreshTimer(true);
     requestDashboardContentIfUseful(900);
   }, 350);
+}
+
+// One-time nudge so users discover the (otherwise hidden) toolbar icon as the
+// way into settings. Stored in storage.local so it shows once per device.
+async function maybeShowSettingsIntro() {
+  const seen = await chromeGet(SETTINGS_INTRO_KEY);
+  if (seen || enhancerStopped) return;
+  await waitFor(() => document.body);
+  if (enhancerStopped) return;
+  await chromeSet(SETTINGS_INTRO_KEY, { shownAt: Date.now() });
+  if (enhancerStopped) return;
+  toast("Catalyst is active. Click its toolbar icon (pin it from the puzzle-piece menu) to choose what's shown.");
 }
 
 function syncRouteScopedUi() {
