@@ -27,19 +27,20 @@ const DEFAULTS = {
 
 const FEATURES = [
   { key: "bossTracker", label: "Boss event tracker", desc: "Floating panel: boss aura, damage, and chest progress." },
-  { key: "allTimeLeaderboard", label: "All-Time Learners", desc: "Cumulative-XP standings boot.dev doesn't show natively." },
+  { key: "allTimeLeaderboard", label: "Top All-Time Learners Leaderboard", desc: "Cumulative-XP standings boot.dev doesn't show natively." },
   { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
-  { key: "diffs", label: "Leaderboard diffs", desc: "Show how far ahead/behind you are on XP and karma." },
+  { key: "diffs", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
 ];
 
+// Ordered top-to-bottom to match how the boards appear on the leaderboard page.
 const DIFF_BOARDS = [
-  { key: "diffsAllTime", label: "All-Time Learners (Catalyst panel)" },
-  { key: "diffsPersonal", label: "Personal Leaderboards (Catalyst panel)" },
+  { key: "diffsPersonal", label: "Personal Leaderboards (Catalyst added)" },
   { key: "diffsLeagueDaily", label: "League · Top Daily Learners" },
   { key: "diffsLeagueStanding", label: "League · Top League Learners" },
   { key: "diffsGlobalDaily", label: "Global · Top Daily Learners" },
+  { key: "diffsAllTime", label: "Global · Top All-Time Learners (Catalyst added)" },
   { key: "diffsGlobalKarma", label: "Global · Top Community Members" },
 ];
 
