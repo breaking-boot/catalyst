@@ -183,7 +183,9 @@ function applyFeatureSettings() {
     clearBossRefreshTimer();
   }
 
-  if (!isFeatureEnabled("profileXp")) removeProfileXpBadge();
+  // Re-render the profile badge/button from cached data (handles both on and off);
+  // unlike the other features it isn't redrawn by the standard sync pass.
+  reapplyProfileStats();
 
   syncRouteScopedUi();
   // Strip/redraw native deltas immediately rather than waiting for the next

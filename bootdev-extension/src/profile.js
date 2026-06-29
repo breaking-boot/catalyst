@@ -9,11 +9,22 @@ function isProfilePage() {
 // ===========================================================================
 // FEATURE 2: Cumulative XP on profiles
 // ===========================================================================
+// Last non-stats public-user response, kept so the badge can be re-rendered when
+// its toggle flips back on (no fresh API call happens on a settings change).
+let lastProfileStatsJson = null;
+
 function handlePublicUserResponse(username, isStats, json) {
   updatePersonalUserData(username, isStats, json);
   if (!isStats) {
+    lastProfileStatsJson = json;
     handleProfileStats(json);
   }
+}
+
+// Re-run the profile injection from cached data (used by applyFeatureSettings so
+// toggling Profile XP / Personal Leaderboards back on takes effect immediately).
+function reapplyProfileStats() {
+  if (isProfilePage() && lastProfileStatsJson) handleProfileStats(lastProfileStatsJson);
 }
 
 function handleProfileStats(json) {
