@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Catalyst settings</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body class="be-settings be-settings-options">
+    <main>
+      <header class="be-settings-head">
+        <h1>Catalyst settings</h1>
+        <p class="be-settings-sub">Show or hide what Catalyst adds to boot.dev.</p>
+      </header>
+
+      <section id="be-features" class="be-settings-group" aria-label="Features"></section>
+
+      <section class="be-settings-group be-diff-section" aria-label="Per-board diffs">
+        <h2 class="be-settings-group-title">XP / karma diffs by leaderboard</h2>
+        <p class="be-settings-note">
+          These apply only when <strong>Leaderboard diffs</strong> above is on.
+        </p>
+        <div id="be-diff-boards"></div>
+      </section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

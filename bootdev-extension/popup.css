@@ -1,0 +1,173 @@
+/* popup.css - styles for the toolbar popup and options page.
+   Matches the injected boss-modal aesthetic (dark gradient, gold edges, gold/
+   white text). Uses a plain gradient rather than boot.dev's remote map texture
+   so the page has no external dependency. */
+
+* {
+  box-sizing: border-box;
+}
+
+body.be-settings {
+  margin: 0;
+  color: #e8ecf1;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  background: linear-gradient(180deg, rgba(18, 22, 32, 0.99), rgba(24, 27, 38, 0.99));
+}
+
+body.be-settings-popup {
+  width: 320px;
+  padding: 14px 16px 12px;
+  border-top: 2px solid #e5ae3c;
+}
+
+body.be-settings-options {
+  min-height: 100vh;
+  padding: 28px 20px 40px;
+}
+body.be-settings-options main {
+  max-width: 560px;
+  margin: 0 auto;
+}
+
+.be-settings-head {
+  margin-bottom: 12px;
+}
+.be-settings-head h1 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.2px;
+  color: #fde9b0;
+}
+.be-settings-sub {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: #9ca3af;
+}
+
+.be-settings-group {
+  border: 1px solid rgba(229, 174, 60, 0.30);
+  border-radius: 8px;
+  background: rgba(17, 24, 39, 0.45);
+  padding: 4px 12px;
+}
+.be-settings-options .be-settings-group {
+  padding: 6px 16px;
+}
+.be-diff-section {
+  margin-top: 18px;
+}
+.be-settings-group-title {
+  margin: 12px 0 2px;
+  font-size: 14px;
+  font-weight: 700;
+  color: #fff;
+}
+.be-settings-note {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+.be-settings-note strong {
+  color: #fde9b0;
+  font-weight: 600;
+}
+
+.be-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 0;
+  border-bottom: 1px solid rgba(75, 85, 99, 0.35);
+  cursor: pointer;
+}
+.be-toggle:last-child {
+  border-bottom: 0;
+}
+.be-toggle-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.be-toggle-title {
+  color: #fff;
+  font-weight: 600;
+}
+.be-toggle-desc {
+  margin-top: 2px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+/* Switch: hide the native checkbox, style the adjacent knob span. */
+.be-toggle input[type="checkbox"] {
+  position: absolute;
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+.be-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 38px;
+  height: 20px;
+  border-radius: 999px;
+  border: 1px solid rgba(229, 174, 60, 0.45);
+  background: rgba(17, 24, 39, 0.72);
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.be-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #9ca3af;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.be-toggle input[type="checkbox"]:checked + .be-switch {
+  background: rgba(229, 174, 60, 0.30);
+  border-color: #e5ae3c;
+}
+.be-toggle input[type="checkbox"]:checked + .be-switch::after {
+  transform: translateX(18px);
+  background: #fde9b0;
+}
+.be-toggle input[type="checkbox"]:focus-visible + .be-switch {
+  box-shadow: 0 0 0 2px rgba(229, 174, 60, 0.55);
+}
+
+/* Per-board diffs disabled while the master diff toggle is off. */
+.be-disabled {
+  opacity: 0.5;
+}
+.be-disabled .be-toggle {
+  cursor: default;
+}
+
+.be-settings-foot {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+}
+.be-settings-link {
+  border: 1px solid rgba(229, 174, 60, 0.55);
+  border-radius: 4px;
+  background: rgba(229, 174, 60, 0.13);
+  color: #fde9b0;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 10px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+}
+.be-settings-link:hover {
+  border-color: #e5ae3c;
+  color: #fff;
+}
