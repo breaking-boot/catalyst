@@ -99,6 +99,7 @@ async function routeResponse({ url, status, json }) {
 }
 
 async function initEnhancer() {
+  await loadSettings();
   await loadBossUiState();
   await loadCachedAllTimeLeaderboard();
   await loadNextLessonHref();
@@ -106,6 +107,7 @@ async function initEnhancer() {
   await loadPersonalLeaderboard();
   await loadFrameDebugFlag();
   if (enhancerStopped) return;
+  chrome.storage.onChanged.addListener(handleSettingsChange);
   restoreBossPanel();
   syncRouteScopedUi();
   resetBossRefreshTimer(true);
@@ -130,7 +132,9 @@ function syncRouteScopedUi() {
   if (isLeaderboardPage()) {
     if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
     schedulePersonalLeaderboardRender();
-    setTrackedTimeout(() => requestApiJson(ALL_TIME_LEADERBOARD_URL), 50);
+    if (isFeatureEnabled("allTimeLeaderboard")) {
+      setTrackedTimeout(() => requestApiJson(ALL_TIME_LEADERBOARD_URL), 50);
+    }
     setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
     setTrackedTimeout(() => requestNativeLeaderboardData(), 150);
   } else {
@@ -140,6 +144,40 @@ function syncRouteScopedUi() {
 
   if (!isProfilePage()) {
     removeProfileXpBadge();
+  }
+}
+
+// Live-apply a settings change from the popup/options page. Settings live in
+// chrome.storage.sync; every feature's render/request path is already gated, so
+// applying is mostly a matter of re-running the standard passes and tearing down
+// anything that just turned off.
+function handleSettingsChange(changes, area) {
+  if (enhancerStopped) return;
+  if (area !== "sync" || !changes[SETTINGS_KEY]) return;
+  applyStoredSettings(changes[SETTINGS_KEY].newValue);
+  applyFeatureSettings();
+}
+
+function applyFeatureSettings() {
+  if (enhancerStopped) return;
+
+  if (isFeatureEnabled("bossTracker")) {
+    restoreBossPanel();
+    resetBossRefreshTimer(true);
+  } else {
+    removeBossPanel();
+    clearBossRefreshTimer();
+  }
+
+  if (!isFeatureEnabled("profileXp")) removeProfileXpBadge();
+
+  syncRouteScopedUi();
+  // Strip/redraw native deltas immediately rather than waiting for the next
+  // DOM scan, so a diff toggle feels instant. With the master off, strip them
+  // all; otherwise re-augment (which applies or strips each board per its flag).
+  if (isLeaderboardPage()) {
+    if (isFeatureEnabled("diffs")) augmentNativeLeaderboards();
+    else removeNativeDeltas();
   }
 }
 
@@ -154,6 +192,7 @@ function startDomScan() {
 }
 
 function requestDashboardContentIfUseful(delay = 0) {
+  if (!isFeatureEnabled("nextLesson")) return false;
   if (!shouldRefreshDashboardContent()) return false;
   if (Date.now() < dashboardAuthUnavailableUntil) return false;
 
@@ -256,6 +295,9 @@ function stopEnhancer() {
   if (enhancerStopped) return;
   enhancerStopped = true;
   window.removeEventListener("message", handleWindowMessage);
+  try {
+    chrome.storage.onChanged.removeListener(handleSettingsChange);
+  } catch (_) {}
   clearBossRefreshTimer();
   if (routeScanTimer) clearInterval(routeScanTimer);
   if (domScanTimer) clearInterval(domScanTimer);

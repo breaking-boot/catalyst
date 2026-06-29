@@ -201,6 +201,54 @@ function chromeSet(key, val) {
   });
 }
 
+// Settings live in chrome.storage.sync so they roam across a user's devices.
+// Mirrors chromeGet/chromeSet, including the graceful degradation on errors
+// (sync still works as a local store when the user isn't signed into Chrome).
+function chromeGetSync(key) {
+  return new Promise((resolve) => {
+    if (enhancerStopped || !key) {
+      resolve(undefined);
+      return;
+    }
+    try {
+      chrome.storage.sync.get(key, (o) => {
+        const err = getChromeLastError();
+        if (err) {
+          handleChromeApiError(err);
+          resolve(undefined);
+          return;
+        }
+        resolve(o?.[key]);
+      });
+    } catch (err) {
+      handleChromeApiError(err);
+      resolve(undefined);
+    }
+  });
+}
+function chromeSetSync(key, val) {
+  return new Promise((resolve) => {
+    if (enhancerStopped || !key || val === undefined) {
+      resolve(false);
+      return;
+    }
+    try {
+      chrome.storage.sync.set({ [key]: val }, () => {
+        const err = getChromeLastError();
+        if (err) {
+          handleChromeApiError(err);
+          resolve(false);
+          return;
+        }
+        resolve(true);
+      });
+    } catch (err) {
+      handleChromeApiError(err);
+      resolve(false);
+    }
+  });
+}
+
 function handleAsyncError(err, scope = "runtime") {
   if (isExtensionContextInvalidatedError(err)) {
     stopEnhancer();

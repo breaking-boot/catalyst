@@ -65,7 +65,15 @@ async function rememberNextLessonHref(href) {
   renderNextLessonNav();
 }
 
+function removeNextLessonNav() {
+  document.getElementById("be-next-lesson-nav")?.remove();
+}
+
 function renderNextLessonNav() {
+  if (!isFeatureEnabled("nextLesson")) {
+    removeNextLessonNav();
+    return;
+  }
   const existing = document.getElementById("be-next-lesson-nav");
   if (!nextLessonHref) {
     existing?.remove();
@@ -161,6 +169,7 @@ function findFirstIncompleteLesson(progress) {
 
 function bindNextLessonShortcut() {
   document.addEventListener("keydown", (event) => {
+    if (!isFeatureEnabled("nextLesson")) return;
     if (!nextLessonHref || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key.toLowerCase() !== "n") return;
     if (isEditableTarget(event.target)) return;

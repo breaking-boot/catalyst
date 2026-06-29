@@ -476,6 +476,10 @@ function setTextIfChanged(el, text) {
 }
 
 function renderAllTimeLeaderboard(entries) {
+  if (!isFeatureEnabled("allTimeLeaderboard")) {
+    removeAllTimeLeaderboard();
+    return;
+  }
   // Fast path: if panel already exists skip waitFor to avoid async races.
   const existingPanel = document.getElementById("be-alltime-leaderboard");
   if (existingPanel) {
@@ -553,7 +557,7 @@ function allTimeCardHTML(it, myXP) {
         <span class="be-leader-copy">
           <span class="be-leader-name">${escapeHtml(it.displayName)}</span>
           <span class="be-leader-xp">${fmtNum(it.xp)} xp</span>
-          ${deltaSpanHTML(myXP, it.xp, "xp", it.isCurrentUser)}
+          ${deltaSpanHTML(myXP, it.xp, "xp", it.isCurrentUser || !isDiffEnabled("diffsAllTime"))}
         </span>
       </a>
     </div>`;
@@ -566,7 +570,7 @@ function patchAllTimeCard(el, it, myXP) {
   setTextIfChanged(el.querySelector(".be-leader-rank"), String(it.rank));
   setTextIfChanged(el.querySelector(".be-leader-name"), it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-xp"), `${fmtNum(it.xp)} xp`);
-  patchDeltaEl(el.querySelector("[data-be-delta]"), myXP, it.xp, "xp", it.isCurrentUser);
+  patchDeltaEl(el.querySelector("[data-be-delta]"), myXP, it.xp, "xp", it.isCurrentUser || !isDiffEnabled("diffsAllTime"));
 }
 
 function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdentity()) {
@@ -709,6 +713,7 @@ function applyNativeDelta(column, myValue, theirValue, unit, skip) {
 
 function augmentNativeLeagueDaily() {
   const heading = findHeadingAfter(findHeadingByText("League Leaderboards"), "Top Daily Learners");
+  if (!isDiffEnabled("diffsLeagueDaily")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedLeagueDailyEntries, "XPEarned"),
@@ -719,6 +724,7 @@ function augmentNativeLeagueDaily() {
 
 function augmentNativeLeagueStanding() {
   const heading = findHeadingAfter(findHeadingByText("League Leaderboards"), "Top League Learners");
+  if (!isDiffEnabled("diffsLeagueStanding")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedLeagueEntries, "XPEarned"),
@@ -729,6 +735,7 @@ function augmentNativeLeagueStanding() {
 
 function augmentNativeDailyLeaderboard() {
   const heading = findHeadingAfter(findHeadingByText("Global Leaderboards"), "Top Daily Learners");
+  if (!isDiffEnabled("diffsGlobalDaily")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedDailyEntries, "XPEarned", "XP"),
@@ -739,12 +746,29 @@ function augmentNativeDailyLeaderboard() {
 
 function augmentNativeKarmaLeaderboard() {
   const heading = findHeadingAfter(findHeadingByText("Global Leaderboards"), "Top Community Members");
+  if (!isDiffEnabled("diffsGlobalKarma")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedKarmaEntries, "Karma"),
     getMyValue("karma"),
     "karma"
   );
+}
+
+// Remove the deltas this extension injected into one native board (used when a
+// board's diff toggle is off). The cards themselves are boot.dev's; we only
+// strip our own appended `.be-native-delta` spans.
+function stripNativeSection(heading) {
+  if (!heading) return;
+  for (const link of nativeCardsForHeading(heading)) {
+    link.querySelector(":scope > * > .be-native-delta")?.remove();
+  }
+}
+
+// Strip every injected native delta in one pass (used when the master toggle
+// goes off, regardless of which board is in view).
+function removeNativeDeltas() {
+  document.querySelectorAll(".be-native-delta").forEach((el) => el.remove());
 }
 
 function augmentNativeLeaderboards() {
@@ -890,6 +914,7 @@ async function loadPersonalLeaderboard() {
 }
 
 function requestPersonalLeaderboardData() {
+  if (!isFeatureEnabled("personalLeaderboards")) return;
   if (!isLeaderboardPage() || !personalHandles.length) return;
 
   // The daily board is requested by requestNativeLeaderboardData, which always
@@ -904,6 +929,9 @@ function requestPersonalLeaderboardData() {
 // extension loads into an already-open leaderboard page boot.dev won't re-fetch.
 function requestNativeLeaderboardData() {
   if (!isLeaderboardPage()) return;
+  // These boards exist only to compute deltas; with the master diff toggle off
+  // nothing consumes them, so skip the four requests entirely.
+  if (!isFeatureEnabled("diffs")) return;
   requestApiJson(DAILY_LEADERBOARD_URL);
   requestApiJson(KARMA_LEADERBOARD_URL);
   requestApiJson(LEAGUE_DAILY_LEADERBOARD_URL);
@@ -918,6 +946,10 @@ function schedulePersonalLeaderboardRender() {
 
 function renderPersonalLeaderboards() {
   personalRenderTimer = null;
+  if (!isFeatureEnabled("personalLeaderboards")) {
+    removePersonalLeaderboards();
+    return;
+  }
   if (!isLeaderboardPage()) return;
 
   // Fast path: if both panels already exist, render directly to avoid async races.
@@ -1044,7 +1076,7 @@ function personalRowHTML(it) {
     ? row.loading ? "loading" : "unavailable"
     : `${fmtNum(row.value)} ${unit}`;
   const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
-  const skipDelta = isCurrentUser || row.loading || row.value == null;
+  const skipDelta = isCurrentUser || row.loading || row.value == null || !isDiffEnabled("diffsPersonal");
 
   return `
     <a class="be-personal-row${isCurrentUser ? " be-current-user" : ""}" href="/u/${encodeURIComponent(row.handle)}">
@@ -1064,7 +1096,7 @@ function personalRowHTML(it) {
 function patchPersonalRow(el, it) {
   const { row, rank, unit, myValue } = it;
   const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
-  const skipDelta = isCurrentUser || row.loading || row.value == null;
+  const skipDelta = isCurrentUser || row.loading || row.value == null || !isDiffEnabled("diffsPersonal");
   const valueText = row.value == null
     ? row.loading ? "loading" : "unavailable"
     : `${fmtNum(row.value)} ${unit}`;

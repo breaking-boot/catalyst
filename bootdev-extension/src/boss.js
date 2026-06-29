@@ -25,6 +25,10 @@ function clearBossRefreshTimer() {
   bossRefreshTimer = null;
 }
 
+function removeBossPanel() {
+  document.getElementById("be-boss-panel")?.remove();
+}
+
 // Owned here so all boss auth-state mutation and timer control stays in boss.js
 // rather than being reached into from content.js.
 function markBossAuthUnavailable(durationMs, retry = false) {
@@ -35,6 +39,7 @@ function markBossAuthUnavailable(durationMs, retry = false) {
 
 function resetBossRefreshTimer(fetchNow = false) {
   clearBossRefreshTimer();
+  if (!isFeatureEnabled("bossTracker")) return;
   if (Date.now() < bossAuthUnavailableUntil) return;
   if (fetchNow) {
     setTrackedTimeout(requestBossProgress, 1200);
@@ -43,6 +48,10 @@ function resetBossRefreshTimer(fetchNow = false) {
 }
 
 function requestBossProgress() {
+  if (!isFeatureEnabled("bossTracker")) {
+    clearBossRefreshTimer();
+    return;
+  }
   if (Date.now() < bossAuthUnavailableUntil) {
     clearBossRefreshTimer();
     return;
@@ -53,6 +62,10 @@ function requestBossProgress() {
 }
 
 async function restoreBossPanel() {
+  if (!isFeatureEnabled("bossTracker")) {
+    removeBossPanel();
+    return;
+  }
   const stored = (await chromeGet(BOSS_KEY)) || {};
   if (enhancerStopped) return;
   bossState = stored.state || null;
@@ -63,6 +76,7 @@ async function restoreBossPanel() {
 // FEATURE 5: Boss-event tracker
 // ===========================================================================
 async function handleBossProgress(json) {
+  if (!isFeatureEnabled("bossTracker")) return;
   const rewards = getBossRewards(json);
   const cur = {
     eventId: json?.Event?.UUID ?? json?.Event?.StartsAt ?? "unknown-event",
@@ -120,6 +134,10 @@ function newEventState(eventId) {
 }
 
 async function renderBossPanel(s) {
+  if (!isFeatureEnabled("bossTracker")) {
+    removeBossPanel();
+    return;
+  }
   await loadBossUiState();
   if (enhancerStopped) return;
   waitFor(() => document.body).then(() => {

@@ -26,6 +26,7 @@
       "matches": ["https://www.boot.dev/*"],
       "js": [
         "src/utils.js",
+        "src/settings.js",
         "src/leaderboard.js",
         "src/profile.js",
         "src/boss.js",

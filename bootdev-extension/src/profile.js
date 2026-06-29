@@ -23,24 +23,44 @@ function handleProfileStats(json) {
   const totalXp = profile?.XP ?? null;
   if (totalXp == null) return;
 
+  const wantBadge = isFeatureEnabled("profileXp");
+  const wantAddButton = isFeatureEnabled("personalLeaderboards");
+  if (!wantBadge && !wantAddButton) {
+    removeProfileXpBadge();
+    return;
+  }
+
   waitFor(() => findProfileLevelAnchor(profile) || findProfileAnchor(profile)).then((anchor) => {
     if (!isProfilePage()) return;
     if (!anchor) return;
-    let badge = document.getElementById("be-total-xp");
-    if (!badge) {
-      badge = document.createElement("div");
-      badge.id = "be-total-xp";
-      badge.className = "be-profile-total-xp";
+
+    let badge = null;
+    if (wantBadge) {
+      badge = document.getElementById("be-total-xp");
+      if (!badge) {
+        badge = document.createElement("div");
+        badge.id = "be-total-xp";
+        badge.className = "be-profile-total-xp";
+      }
+      const progress = getLevelProgress(profile);
+      const progressMarkup = progress
+        ? `<div class="be-profile-level-xp">${fmtNum(progress.current)} / ${fmtNum(progress.total)} XP</div>
+           <div class="be-profile-remaining-xp">Remaining: <strong>${fmtNum(progress.remaining)} XP</strong></div>`
+        : "";
+      badge.innerHTML = `<div>Total XP: <strong>${fmtNum(totalXp)}</strong></div>${progressMarkup}`;
+      anchor.insertAdjacentElement("afterend", badge);
+      if (progress) removeNativeProfileLevelXp(anchor, progress.current);
+    } else {
+      document.getElementById("be-total-xp")?.remove();
     }
-    const progress = getLevelProgress(profile);
-    const progressMarkup = progress
-      ? `<div class="be-profile-level-xp">${fmtNum(progress.current)} / ${fmtNum(progress.total)} XP</div>
-         <div class="be-profile-remaining-xp">Remaining: <strong>${fmtNum(progress.remaining)} XP</strong></div>`
-      : "";
-    badge.innerHTML = `<div>Total XP: <strong>${fmtNum(totalXp)}</strong></div>${progressMarkup}`;
-    anchor.insertAdjacentElement("afterend", badge);
-    if (progress) removeNativeProfileLevelXp(anchor, progress.current);
-    renderProfilePersonalAddButton(profile, badge);
+
+    // The add button anchors after the badge when present, otherwise after the
+    // profile anchor, so it still works when only personal leaderboards are on.
+    if (wantAddButton) {
+      renderProfilePersonalAddButton(profile, badge || anchor);
+    } else {
+      document.getElementById("be-profile-personal-add")?.remove();
+    }
   });
 }
 
