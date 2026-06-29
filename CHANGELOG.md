@@ -1,7 +1,15 @@
 # Changelog
 
-## Unreleased
+## v0.5.0 - Per-feature settings, local avatar frames
 
+### Settings
+- Added a settings system to toggle every Catalyst feature on or off: the boss tracker, the All-Time Learners panel, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and XP/karma diffs. Click the toolbar icon for the popup, or open the options page for finer control.
+- XP/karma diffs use a master toggle plus a per-board toggle for each of the six boards (the two Catalyst panels and the four native boards), so diffs can be enabled on, say, just the league boards. The master acts as a global gate: turning it off hides all diffs and turning it back on restores each board's own setting.
+- Settings are stored in `chrome.storage.sync` (so they roam across a user's devices) and apply live, with no page reload. Turning a feature off also stops its background work — the boss poll halts and the native delta requests are skipped — so disabled features place no load on boot.dev.
+- A one-time prompt on first run points users to the toolbar icon (which Chrome hides until pinned) so the settings are discoverable. The popup and options page match the in-app boss-modal styling.
+- No new permissions were added; the existing `storage` permission covers `storage.sync`.
+
+### Avatar frames
 - Bundled the ten avatar role frames into `assets/frames` and resolved them with `chrome.runtime.getURL` instead of pointing at boot.dev's build-hashed Nuxt asset URLs, which are regenerated on every redeploy and would eventually 404. The frames now load from the extension and can no longer break on a boot.dev deploy.
 - Added an opt-in, maintainer-only detector (`checkFrameAssetsForRot`) that probes the original boot.dev frame URLs and warns (console + toast) when one stops resolving, signaling that the art changed upstream and the bundled copies should be refreshed. It does nothing unless `be_frame_debug` is set to `true` in `chrome.storage.local`, so ordinary users never see it.
 

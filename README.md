@@ -25,9 +25,15 @@ A Manifest V3 Chrome extension that augments boot.dev with a few quality-of-life
 catalyst/
   bootdev-extension/       Chrome "Load unpacked" target
     manifest.json
+    popup.html             Settings popup (toolbar icon)
+    options.html           Settings options page (adds per-board diffs)
+    popup.js               Shared settings UI logic
+    popup.css              Shared settings UI styles
     icons/                 Extension toolbar icons
+    assets/frames/         Bundled avatar role frames (0-9.png)
     src/
       utils.js             Shared helpers (loaded first)
+      settings.js          Feature on/off model (loaded second)
       leaderboard.js       All-time and personal leaderboard feature
       profile.js           Cumulative XP on public profile pages
       boss.js              Boss-event tracker
@@ -66,7 +72,7 @@ chrome://extensions
 
 3. Turn on **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.4.1`).
+5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.5.0`).
 6. Open or refresh `https://www.boot.dev`.
 
 ## Updating
@@ -80,6 +86,13 @@ chrome://extensions
 ## Usage
 
 The extension runs automatically on `www.boot.dev`. No extra sign-in flow is required — it reads JSON responses that the boot.dev page fetches using the existing boot.dev session.
+
+### Settings
+
+- Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chrome hides extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
+- The popup toggles the six features: Boss event tracker, All-Time Learners, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and leaderboard diffs.
+- The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds per-board control over the XP/karma diffs: a master toggle plus a checkbox for each of the six boards, so you can show diffs on just the boards you want.
+- Settings sync across your devices (`chrome.storage.sync`) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on boot.dev.
 
 ### Next Lesson
 
@@ -106,6 +119,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 - Every leaderboard entry other than your own shows a delta — how far ahead (green) or behind (red) you are in the same unit as that board's value.
 - Deltas appear on all extension panels (Top All-Time Learners and all three Personal Leaderboards boards) and on all four native boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. Recent Archmages is left untouched.
 - Your comparison value is read from the same API response that feeds each board, with a fallback to your saved personal record when absent.
+- Diffs are toggleable per board from the options page (see **Settings**), with a master switch in the popup to hide them all at once.
 
 ### Boss Event Tracker
 
@@ -114,7 +128,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 - Use the **−** / **+** button to minimize or expand the tracker. The minimized view still shows the current aura percentage.
 - Use the **gear** button to open the high settings panel. You can manually edit the event high and all-time high percentages — useful if you missed a high while the extension wasn't watching. Saving an event high above the all-time high also raises the all-time high.
 - The settings panel also includes a **Refresh** button and a **Reset** button. Reset clears the current event stats while keeping the all-time high.
-- Boss-event data refreshes in the background roughly every 30 seconds. Navigating within boot.dev resets that timer and triggers a fresh fetch immediately.
+- Boss-event data refreshes in the background roughly every 2 minutes, and pauses while the tab is hidden. Navigating within boot.dev resets that timer and triggers a fresh fetch immediately.
 
 ### Profile Pages
 
