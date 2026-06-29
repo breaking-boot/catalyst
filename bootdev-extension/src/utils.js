@@ -128,15 +128,29 @@ function isValidHandle(handle) {
   return /^[a-z0-9][a-z0-9_-]{0,39}$/i.test(String(handle || ""));
 }
 
+// Toasts stack in a shared bottom-centre container (like the site's own
+// notifications) so a newer toast no longer covers an older one. Newest is
+// appended at the bottom, nearest the corner; older ones float up.
 function toast(text) {
+  let stack = document.getElementById("be-toast-stack");
+  if (!stack) {
+    stack = document.createElement("div");
+    stack.id = "be-toast-stack";
+    stack.className = "be-toast-stack";
+    document.body.appendChild(stack);
+  }
+
   const t = document.createElement("div");
   t.className = "be-toast";
   t.textContent = text;
-  document.body.appendChild(t);
+  stack.appendChild(t);
   requestAnimationFrame(() => t.classList.add("be-toast-in"));
   setTimeout(() => {
     t.classList.remove("be-toast-in");
-    setTimeout(() => t.remove(), 400);
+    setTimeout(() => {
+      t.remove();
+      if (stack && !stack.childElementCount) stack.remove();
+    }, 400);
   }, 6000);
 }
 
