@@ -781,30 +781,31 @@ function augmentNativeLeaderboards() {
 function ensureLeaderboardUiState() {
   if (!isLeaderboardPage()) return;
 
-  const allTime = document.getElementById("be-alltime-leaderboard");
-  const personal = document.getElementById("be-personal-leaderboards");
   const currentIdentity = getCurrentUserIdentity();
 
-  if (allTime && cachedAllTimeEntries.some((entry) => isCurrentLeaderboardEntry(entry, currentIdentity)) &&
-      !allTime.querySelector(".be-current-user")) {
-    renderAllTimeLeaderboard(cachedAllTimeEntries);
-    return;
+  // All-Time: re-render if it's missing or its current-user highlight dropped.
+  if (isFeatureEnabled("allTimeLeaderboard")) {
+    const allTime = document.getElementById("be-alltime-leaderboard");
+    if (!allTime) {
+      if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
+    } else if (cachedAllTimeEntries.some((entry) => isCurrentLeaderboardEntry(entry, currentIdentity)) &&
+        !allTime.querySelector(".be-current-user")) {
+      renderAllTimeLeaderboard(cachedAllTimeEntries);
+    }
   }
 
-  if (!allTime) return;
-
-  if (!personal) {
-    schedulePersonalLeaderboardRender();
-    return;
-  }
-
-  // Reposition without re-rendering if boot.dev inserted elements between the panels.
-  const isAfterAllTime = !!(allTime.compareDocumentPosition(personal) & Node.DOCUMENT_POSITION_FOLLOWING);
-  if (!isAfterAllTime) allTime.insertAdjacentElement("afterend", personal);
-
-  if (personalHandles.some((handle) => isCurrentLeaderboardEntry({ handle }, currentIdentity)) &&
-      !personal.querySelector(".be-current-user")) {
-    schedulePersonalLeaderboardRender();
+  // Personal: ensure it exists and stays pinned above the native boards.
+  if (isFeatureEnabled("personalLeaderboards")) {
+    const personal = document.getElementById("be-personal-leaderboards");
+    if (!personal) {
+      schedulePersonalLeaderboardRender();
+    } else {
+      ensurePersonalPlacement(personal);
+      if (personalHandles.some((handle) => isCurrentLeaderboardEntry({ handle }, currentIdentity)) &&
+          !personal.querySelector(".be-current-user")) {
+        schedulePersonalLeaderboardRender();
+      }
+    }
   }
 
   augmentNativeLeaderboards();
@@ -823,6 +824,37 @@ function findAllTimeLeaderboardInsertionPoint() {
   if (dailyHeading?.parentElement) return dailyHeading.parentElement;
 
   return globalHeading?.parentElement || globalHeading;
+}
+
+// Personal Leaderboards is pinned to the very top of the leaderboard page, above
+// the native League/Global boards — users care most about their own list, and it
+// looked out of place wedged between the Global sections.
+function findPersonalLeaderboardInsertionPoint() {
+  const heading = findHeadingByText("League Leaderboards") || findHeadingByText("Global Leaderboards");
+  return heading ? topLevelBlockFor(heading) : null;
+}
+
+// The ancestor of `el` that sits directly inside <main> (or <body>) — the
+// top-level section block — so a panel can be inserted as a sibling above it.
+function topLevelBlockFor(el) {
+  const root = document.querySelector("main") || document.body;
+  let node = el;
+  while (node.parentElement && node.parentElement !== root && node.parentElement !== document.body) {
+    node = node.parentElement;
+  }
+  return node;
+}
+
+// Keep the personal panel as the sibling immediately before the native boards.
+function ensurePersonalPlacement(panel) {
+  const block = findPersonalLeaderboardInsertionPoint();
+  if (!block) {
+    if (!panel.isConnected) (document.querySelector("main") || document.body).prepend(panel);
+    return;
+  }
+  if (block.previousElementSibling !== panel) {
+    block.insertAdjacentElement("beforebegin", panel);
+  }
 }
 
 // ===========================================================================
@@ -952,37 +984,26 @@ function renderPersonalLeaderboards() {
   }
   if (!isLeaderboardPage()) return;
 
-  // Fast path: if both panels already exist, render directly to avoid async races.
-  const existingAllTime = document.getElementById("be-alltime-leaderboard");
-  const existingPersonal = document.getElementById("be-personal-leaderboards");
-  if (existingAllTime && existingPersonal) {
-    _applyPersonalContent(existingPersonal, existingAllTime);
+  // Fast path: panel already exists — render in place.
+  const existing = document.getElementById("be-personal-leaderboards");
+  if (existing) {
+    _applyPersonalContent(existing);
     return;
   }
 
-  // Also fast path if only the personal panel exists but alltime doesn't (shouldn't happen,
-  // but guards against the case where they were reordered by the 2-second scan).
-  if (!existingAllTime) {
-    const version = ++personalRenderVersion;
-    waitFor(() => document.getElementById("be-alltime-leaderboard"), 10000).then((allTime) => {
-      if (version !== personalRenderVersion) return; // superseded
-      if (!isLeaderboardPage() || !allTime) return;
-      let panel = document.getElementById("be-personal-leaderboards");
-      if (!panel) {
-        panel = document.createElement("section");
-        panel.id = "be-personal-leaderboards";
-        panel.className = "be-personal-leaderboards";
-      }
-      _applyPersonalContent(panel, allTime);
-    });
-    return;
-  }
-
-  // All-time exists but personal doesn't — create and insert personal, then render.
-  const panel = document.createElement("section");
-  panel.id = "be-personal-leaderboards";
-  panel.className = "be-personal-leaderboards";
-  _applyPersonalContent(panel, existingAllTime);
+  // Otherwise wait for the native boards to mount so we know where "above them" is.
+  const version = ++personalRenderVersion;
+  waitFor(() => findPersonalLeaderboardInsertionPoint(), 10000).then((block) => {
+    if (version !== personalRenderVersion) return; // superseded
+    if (!isLeaderboardPage() || !block) return;
+    let panel = document.getElementById("be-personal-leaderboards");
+    if (!panel) {
+      panel = document.createElement("section");
+      panel.id = "be-personal-leaderboards";
+      panel.className = "be-personal-leaderboards";
+    }
+    _applyPersonalContent(panel);
+  });
 }
 
 // Static board definitions: which kind of value each board shows and its unit.
@@ -1021,10 +1042,8 @@ function ensurePersonalSkeleton(panel) {
   bindPersonalLeaderboardControls(panel);
 }
 
-function _applyPersonalContent(panel, allTime) {
-  if (panel.previousElementSibling !== allTime) {
-    allTime.insertAdjacentElement("afterend", panel);
-  }
+function _applyPersonalContent(panel) {
+  ensurePersonalPlacement(panel);
   ensurePersonalSkeleton(panel);
 
   // Message slot (feedback / pending). Only touched when its markup changes.
