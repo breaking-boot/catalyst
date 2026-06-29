@@ -516,6 +516,7 @@ function _applyAllTimeContent(panel, entries) {
   if (!grid) {
     panel.innerHTML = `
       <h3 class="be-native-title">Top All-Time Learners</h3>
+      <p class="be-native-subtitle" data-be-subtitle hidden></p>
       <div class="be-native-grid-wrap">
         <div class="be-native-grid"></div>
       </div>`;
@@ -523,6 +524,7 @@ function _applyAllTimeContent(panel, entries) {
   }
 
   const currentIdentity = getCurrentUserIdentity();
+  updateAllTimeSubtitle(panel, entries, currentIdentity);
   const visibleEntries = getVisibleAllTimeEntries(entries, currentIdentity);
   const myXP = getMyValue("xp");
 
@@ -571,6 +573,29 @@ function patchAllTimeCard(el, it, myXP) {
   setTextIfChanged(el.querySelector(".be-leader-name"), it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-xp"), `${fmtNum(it.xp)} xp`);
   patchDeltaEl(el.querySelector("[data-be-delta]"), myXP, it.xp, "xp", it.isCurrentUser || !isDiffEnabled("diffsAllTime"));
+}
+
+// Mirror the native boards' "You are in position N" subtitle on our All-Time
+// panel. boot.dev's API returns no platform-wide student count, so we show the
+// position (the user's own Position from the all-time response) without the
+// "of N total students" tail the native boards add from data we can't see.
+function updateAllTimeSubtitle(panel, entries, currentIdentity) {
+  const sub = panel.querySelector("[data-be-subtitle]");
+  if (!sub) return;
+  const rank = currentUserAllTimePosition(entries, currentIdentity);
+  if (rank == null) {
+    sub.hidden = true;
+    setTextIfChanged(sub, "");
+    return;
+  }
+  sub.hidden = false;
+  setTextIfChanged(sub, `You are in position ${fmtNum(rank)}`);
+}
+
+function currentUserAllTimePosition(entries, currentIdentity) {
+  if (!normalizeHandle(currentIdentity.handle)) return null;
+  const current = entries.find((e) => isCurrentLeaderboardEntry(e, currentIdentity));
+  return current ? num(current.Position ?? current.Rank) : null;
 }
 
 function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdentity()) {
