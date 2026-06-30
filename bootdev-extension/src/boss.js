@@ -167,7 +167,7 @@ async function renderBossPanel(s) {
       return;
     }
 
-    const deltaToHigh =
+    const belowEventHigh =
       s.eventHigh > 0 ? Math.max(0, s.eventHigh - s.current).toFixed(0) : "0";
     const toNextChest =
       s.nextChestAt > 0 ? Math.max(0, s.nextChestAt - s.damage) : "?";
@@ -208,7 +208,7 @@ async function renderBossPanel(s) {
         <div><b>${fmtPct(s.current)}</b><span>Current aura</span></div>
         <div><b>${fmtPct(s.eventHigh)}</b><span>Event high</span></div>
         <div><b>${fmtPct(s.allTimeHigh)}</b><span>All-time high</span></div>
-        <div><b>${deltaToHigh}%</b><span>Below event high</span></div>
+        <div><b>${belowEventHigh}%</b><span>Below event high</span></div>
         <div><b>${fmtNum(s.damage)}</b><span>Boss damage</span></div>
         <div><b>${fmtNum(toNextChest)}</b><span>To next chest</span></div>
         <div><b>${fmtNum(toDefeat)}</b><span>To defeat boss</span></div>
