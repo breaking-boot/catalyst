@@ -20,8 +20,8 @@ Chrome extension (Manifest V3) that augments boot.dev. The Chrome-loadable direc
 | `assets/` | Bundled static art (loaded by Chrome, unlike `reference_data/`). `frames/0.png`–`9.png` are avatar role frames indexed to `ROLE_FRAME_INDEX_BY_ROLE` in `leaderboard.js`, loaded into the page via `chrome.runtime.getURL` + `web_accessible_resources` as the fallback when the API gives no frame URL. `maptexture2.webp` is the settings-page background, referenced by `popup.css` (extension page, so no `web_accessible_resources` needed). Both are copies of boot.dev art bundled to avoid a remote dependency. |
 | `manifest.json` | MV3 manifest. Do not add permissions without explaining why. Current permissions: `storage` only (covers both `storage.local` and `storage.sync`). Declares `action.default_popup` (popup.html) and `options_ui` (options.html). |
 
-## Hard architecture rule
-boot.dev is a Nuxt/Vue SPA. Its CSS class names are hashed and rebuilt on every redeploy. **Never read data by scraping the DOM.** All data comes from intercepted API responses. The DOM is used only for locating injection anchors and writing UI.
+## Architecture rule (DOM scraping is a last resort)
+boot.dev is a Nuxt/Vue SPA. Its CSS class names are hashed and rebuilt on every redeploy. **Avoid reading data by scraping the DOM unless absolutely necessary.** As much data as possible must come from intercepted API responses; the DOM is primarily for locating injection anchors and writing UI. When a value has no API source at all (e.g., the platform-wide student count, which boot.dev only server-renders into the page payload), reading it from rendered text is acceptable as a last resort — match on stable text landmarks, never hashed classes, and read only the minimum needed. See `src/leaderboard.js` `findTotalStudents` for the canonical example.
 
 Interception flow:
 ```
@@ -80,6 +80,9 @@ node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console
 - `/v1/leaderboard_xp/day` — used for personal leaderboard daily XP when a handle appears there
 
 Confirmed API response field names are documented in `reference_data/bootdev_api_info/bootdev_openapi.yaml`
+
+## Matching boot.dev's look / finding anchors
+`reference_data/bootdev_frontend_reference/` holds distilled front-end reference (its README explains usage): `bootdev_palette.css` is boot.dev's exact color/token set for styling injected UI to match the site, and `leaderboard_dom_notes.md` documents stable page structure, the native section divider/subtitle markup, and which selectors are volatile. Prefer these palette tokens over guessing hex values.
 
 ## Notes
 
