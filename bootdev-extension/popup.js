@@ -3,7 +3,7 @@
 // It reads/writes the same be_settings object in chrome.storage.sync that the
 // content script's settings.js consumes; the content script live-applies changes
 // via storage.onChanged. Renders whichever containers the host page provides:
-// #be-features (always) and #be-diff-boards (options page only).
+// #be-features (always) and #be-comparison-boards (options page only).
 //
 // No inline script/handlers (popup runs under the default MV3 CSP). Keep the key
 // and defaults below in sync with src/settings.js.
@@ -16,13 +16,13 @@ const DEFAULTS = {
   personalLeaderboards: true,
   profileXp: true,
   nextLesson: true,
-  diffs: true,
-  diffsAllTime: true,
-  diffsPersonal: true,
-  diffsLeagueDaily: true,
-  diffsLeagueStanding: true,
-  diffsGlobalDaily: true,
-  diffsGlobalKarma: true,
+  comparisons: true,
+  comparisonsAllTime: true,
+  comparisonsPersonal: true,
+  comparisonsLeagueDaily: true,
+  comparisonsLeagueStanding: true,
+  comparisonsGlobalDaily: true,
+  comparisonsGlobalKarma: true,
 };
 
 const FEATURES = [
@@ -31,17 +31,17 @@ const FEATURES = [
   { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
-  { key: "diffs", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
+  { key: "comparisons", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
 ];
 
 // Ordered top-to-bottom to match how the boards appear on the leaderboard page.
-const DIFF_BOARDS = [
-  { key: "diffsPersonal", label: "Personal Leaderboards (Catalyst added)" },
-  { key: "diffsLeagueDaily", label: "League · Top Daily Learners" },
-  { key: "diffsLeagueStanding", label: "League · Top League Learners" },
-  { key: "diffsGlobalDaily", label: "Global · Top Daily Learners" },
-  { key: "diffsAllTime", label: "Global · Top All-Time Learners (Catalyst added)" },
-  { key: "diffsGlobalKarma", label: "Global · Top Community Members" },
+const COMPARISON_BOARDS = [
+  { key: "comparisonsPersonal", label: "Personal Leaderboards (Catalyst added)" },
+  { key: "comparisonsLeagueDaily", label: "League · Top Daily Learners" },
+  { key: "comparisonsLeagueStanding", label: "League · Top League Learners" },
+  { key: "comparisonsGlobalDaily", label: "Global · Top Daily Learners" },
+  { key: "comparisonsAllTime", label: "Global · Top All-Time Learners (Catalyst added)" },
+  { key: "comparisonsGlobalKarma", label: "Global · Top Community Members" },
 ];
 
 let settings = { ...DEFAULTS };
@@ -50,7 +50,13 @@ function normalize(raw) {
   const out = { ...DEFAULTS };
   if (raw && typeof raw === "object") {
     for (const key of Object.keys(DEFAULTS)) {
-      if (typeof raw[key] === "boolean") out[key] = raw[key];
+      if (typeof raw[key] === "boolean") {
+        out[key] = raw[key];
+      } else if (key.startsWith("comparisons")) {
+        // Migrate 0.5.0's diffs* keys to the renamed comparisons* keys.
+        const legacy = key.replace(/^comparisons/, "diffs");
+        if (typeof raw[legacy] === "boolean") out[key] = raw[legacy];
+      }
     }
   }
   return out;
@@ -90,16 +96,16 @@ function makeToggle({ key, label, desc }) {
   input.addEventListener("change", () => {
     settings[key] = input.checked;
     persist();
-    if (key === "diffs") updateDiffDisabledState();
+    if (key === "comparisons") updateComparisonDisabledState();
   });
 
   row.append(text, input, knob);
   return row;
 }
 
-function updateDiffDisabledState() {
-  const masterOn = settings.diffs !== false;
-  const section = document.getElementById("be-diff-boards");
+function updateComparisonDisabledState() {
+  const masterOn = settings.comparisons !== false;
+  const section = document.getElementById("be-comparison-boards");
   if (!section) return;
   section.classList.toggle("be-disabled", !masterOn);
   section.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
@@ -111,10 +117,10 @@ function render() {
   const features = document.getElementById("be-features");
   if (features) features.replaceChildren(...FEATURES.map(makeToggle));
 
-  const boards = document.getElementById("be-diff-boards");
-  if (boards) boards.replaceChildren(...DIFF_BOARDS.map(makeToggle));
+  const boards = document.getElementById("be-comparison-boards");
+  if (boards) boards.replaceChildren(...COMPARISON_BOARDS.map(makeToggle));
 
-  updateDiffDisabledState();
+  updateComparisonDisabledState();
 
   const openOptions = document.getElementById("be-open-options");
   if (openOptions) {

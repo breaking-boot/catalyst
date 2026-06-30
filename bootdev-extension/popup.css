@@ -61,7 +61,7 @@ body.be-settings-options main {
 .be-settings-options .be-settings-group {
   padding: 6px 16px;
 }
-.be-diff-section {
+.be-comparison-section {
   margin-top: 18px;
 }
 .be-settings-group-title {
@@ -147,7 +147,7 @@ body.be-settings-options main {
   box-shadow: 0 0 0 2px rgba(229, 174, 60, 0.55);
 }
 
-/* Per-board diffs disabled while the master diff toggle is off. */
+/* Per-board comparisons disabled while the master comparison toggle is off. */
 .be-disabled {
   opacity: 0.5;
 }

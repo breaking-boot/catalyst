@@ -188,12 +188,12 @@ function applyFeatureSettings() {
   reapplyProfileStats();
 
   syncRouteScopedUi();
-  // Strip/redraw native deltas immediately rather than waiting for the next
-  // DOM scan, so a diff toggle feels instant. With the master off, strip them
-  // all; otherwise re-augment (which applies or strips each board per its flag).
+  // Strip/redraw native comparisons immediately rather than waiting for the next
+  // DOM scan, so a comparison toggle feels instant. With the master off, strip
+  // them all; otherwise re-augment (which applies or strips each board per its flag).
   if (isLeaderboardPage()) {
-    if (isFeatureEnabled("diffs")) augmentNativeLeaderboards();
-    else removeNativeDeltas();
+    if (isFeatureEnabled("comparisons")) augmentNativeLeaderboards();
+    else removeNativeComparisons();
   }
 }
 

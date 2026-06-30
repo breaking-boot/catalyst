@@ -257,7 +257,7 @@ function getCurrentUserDisplayName(navLink) {
 }
 
 // Memoized for the duration of one synchronous burst. A single render pass calls
-// this many times (per row, per delta), and each call ran a querySelectorAll plus
+// this many times (per row, per comparison), and each call ran a querySelectorAll plus
 // a getBoundingClientRect loop (forced layout). The microtask reset guarantees the
 // cache never survives an await, so it only collapses redundant calls in one stack.
 let cachedProfileLink = null;
@@ -362,7 +362,7 @@ function handleAllTimeLeaderboard(json) {
 }
 
 // Our own value for a given metric. Prefer the actual leaderboard responses
-// (which are exactly the numbers shown on those boards) so deltas always match
+// (which are exactly the numbers shown on those boards) so comparisons always match
 // the displayed values; fall back to the saved personal record only when we are
 // not present in any cached board.
 function getMyValue(kind) {
@@ -391,41 +391,35 @@ function getMyValue(kind) {
 }
 
 // ---------------------------------------------------------------------------
-// Delta helpers (shared by string templates and in-place DOM patching)
+// Comparison helpers (shared by string templates and in-place DOM patching)
 // ---------------------------------------------------------------------------
-function deltaParts(myValue, theirValue) {
+function comparisonParts(myValue, theirValue) {
   if (myValue == null || theirValue == null) return null;
-  const delta = myValue - theirValue;
-  if (delta === 0) return null;
+  const amount = myValue - theirValue;
+  if (amount === 0) return null;
   return {
-    text: `${delta > 0 ? "+" : "−"}${fmtNum(Math.abs(delta))}`,
-    cls: delta > 0 ? "be-leader-delta-ahead" : "be-leader-delta-behind",
+    text: `${amount > 0 ? "+" : "−"}${fmtNum(Math.abs(amount))}`,
+    cls: amount > 0 ? "be-leader-comparison-ahead" : "be-leader-comparison-behind",
   };
 }
 
-function deltaText(myValue, theirValue, unit, skip) {
-  if (skip) return "";
-  const parts = deltaParts(myValue, theirValue);
-  return parts ? `${parts.text} ${unit}` : "";
-}
-
-// An always-present, possibly empty, delta span. Empty spans are hidden via
-// `.be-delta:empty`. Keeping the node stable lets us patch text/class in place
+// An always-present, possibly empty, comparison span. Empty spans are hidden via
+// `.be-comparison:empty`. Keeping the node stable lets us patch text/class in place
 // instead of rebuilding the card, which is what eliminates the glow flicker.
-function deltaSpanHTML(myValue, theirValue, unit, skip) {
-  const parts = skip ? null : deltaParts(myValue, theirValue);
+function comparisonSpanHTML(myValue, theirValue, unit, skip) {
+  const parts = skip ? null : comparisonParts(myValue, theirValue);
   const cls = parts ? ` ${parts.cls}` : "";
   const text = parts ? `${parts.text} ${unit}` : "";
-  return `<span class="be-leader-delta be-delta${cls}" data-be-delta>${escapeHtml(text)}</span>`;
+  return `<span class="be-leader-comparison be-comparison${cls}" data-be-comparison>${escapeHtml(text)}</span>`;
 }
 
-function patchDeltaEl(el, myValue, theirValue, unit, skip) {
+function patchComparisonEl(el, myValue, theirValue, unit, skip) {
   if (!el) return;
-  const parts = skip ? null : deltaParts(myValue, theirValue);
+  const parts = skip ? null : comparisonParts(myValue, theirValue);
   const text = parts ? `${parts.text} ${unit}` : "";
   setTextIfChanged(el, text);
-  el.classList.toggle("be-leader-delta-ahead", !!parts && parts.cls === "be-leader-delta-ahead");
-  el.classList.toggle("be-leader-delta-behind", !!parts && parts.cls === "be-leader-delta-behind");
+  el.classList.toggle("be-leader-comparison-ahead", !!parts && parts.cls === "be-leader-comparison-ahead");
+  el.classList.toggle("be-leader-comparison-behind", !!parts && parts.cls === "be-leader-comparison-behind");
 }
 
 // ---------------------------------------------------------------------------
@@ -559,7 +553,7 @@ function allTimeCardHTML(it, myXP) {
         <span class="be-leader-copy">
           <span class="be-leader-name">${escapeHtml(it.displayName)}</span>
           <span class="be-leader-xp">${fmtNum(it.xp)} xp</span>
-          ${deltaSpanHTML(myXP, it.xp, "xp", it.isCurrentUser || !isDiffEnabled("diffsAllTime"))}
+          ${comparisonSpanHTML(myXP, it.xp, "xp", it.isCurrentUser || !isComparisonEnabled("comparisonsAllTime"))}
         </span>
       </a>
     </div>`;
@@ -572,7 +566,7 @@ function patchAllTimeCard(el, it, myXP) {
   setTextIfChanged(el.querySelector(".be-leader-rank"), String(it.rank));
   setTextIfChanged(el.querySelector(".be-leader-name"), it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-xp"), `${fmtNum(it.xp)} xp`);
-  patchDeltaEl(el.querySelector("[data-be-delta]"), myXP, it.xp, "xp", it.isCurrentUser || !isDiffEnabled("diffsAllTime"));
+  patchComparisonEl(el.querySelector("[data-be-comparison]"), myXP, it.xp, "xp", it.isCurrentUser || !isComparisonEnabled("comparisonsAllTime"));
 }
 
 // Mirror the native boards' "You are in position N of M total students" subtitle
@@ -652,13 +646,13 @@ function renderLeaderAvatar(entry, displayName) {
 }
 
 // ---------------------------------------------------------------------------
-// Native section delta augmentation
+// Native section comparison augmentation
 // ---------------------------------------------------------------------------
 // boot.dev renders four native leaderboard boards (League daily + standing,
 // Global daily + community). We can't read their values from the DOM, so each
-// board is matched to the API response that feeds it and a delta vs. our own
+// board is matched to the API response that feeds it and a comparison vs. our own
 // value is appended into the card's text column, beneath the native value.
-// Deltas are patched in place (never torn down) so they never flicker.
+// Comparisons are patched in place (never torn down) so they never flicker.
 
 // Titles that delimit a leaderboard board. Only these bound a section's cards —
 // the Global boards put a dynamic "You are in position N…" <h3> subtitle between
@@ -732,30 +726,30 @@ function augmentNativeSection(heading, dataByHandle, myValue, unit) {
     if (!column) continue;
     const handle = normalizeHandle(getProfileHandleFromHref(link.getAttribute("href")));
     const theirValue = handle ? dataByHandle[handle] : null;
-    applyNativeDelta(column, myValue, theirValue, unit, theirValue == null);
+    applyNativeComparison(column, myValue, theirValue, unit, theirValue == null);
   }
 }
 
-function applyNativeDelta(column, myValue, theirValue, unit, skip) {
-  let el = column.querySelector(":scope > .be-native-delta");
-  const parts = skip ? null : deltaParts(myValue, theirValue);
+function applyNativeComparison(column, myValue, theirValue, unit, skip) {
+  let el = column.querySelector(":scope > .be-native-comparison");
+  const parts = skip ? null : comparisonParts(myValue, theirValue);
   if (!parts) {
     if (el) el.remove();
     return;
   }
   if (!el) {
     el = document.createElement("span");
-    el.className = "be-leader-delta be-native-delta";
+    el.className = "be-leader-comparison be-native-comparison";
     column.appendChild(el);
   }
   setTextIfChanged(el, `${parts.text} ${unit}`);
-  el.classList.toggle("be-leader-delta-ahead", parts.cls === "be-leader-delta-ahead");
-  el.classList.toggle("be-leader-delta-behind", parts.cls === "be-leader-delta-behind");
+  el.classList.toggle("be-leader-comparison-ahead", parts.cls === "be-leader-comparison-ahead");
+  el.classList.toggle("be-leader-comparison-behind", parts.cls === "be-leader-comparison-behind");
 }
 
 function augmentNativeLeagueDaily() {
   const heading = findHeadingAfter(findHeadingByText("League Leaderboards"), "Top Daily Learners");
-  if (!isDiffEnabled("diffsLeagueDaily")) return stripNativeSection(heading);
+  if (!isComparisonEnabled("comparisonsLeagueDaily")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedLeagueDailyEntries, "XPEarned"),
@@ -766,7 +760,7 @@ function augmentNativeLeagueDaily() {
 
 function augmentNativeLeagueStanding() {
   const heading = findHeadingAfter(findHeadingByText("League Leaderboards"), "Top League Learners");
-  if (!isDiffEnabled("diffsLeagueStanding")) return stripNativeSection(heading);
+  if (!isComparisonEnabled("comparisonsLeagueStanding")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedLeagueEntries, "XPEarned"),
@@ -777,7 +771,7 @@ function augmentNativeLeagueStanding() {
 
 function augmentNativeDailyLeaderboard() {
   const heading = findHeadingAfter(findHeadingByText("Global Leaderboards"), "Top Daily Learners");
-  if (!isDiffEnabled("diffsGlobalDaily")) return stripNativeSection(heading);
+  if (!isComparisonEnabled("comparisonsGlobalDaily")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedDailyEntries, "XPEarned", "XP"),
@@ -788,7 +782,7 @@ function augmentNativeDailyLeaderboard() {
 
 function augmentNativeKarmaLeaderboard() {
   const heading = findHeadingAfter(findHeadingByText("Global Leaderboards"), "Top Community Members");
-  if (!isDiffEnabled("diffsGlobalKarma")) return stripNativeSection(heading);
+  if (!isComparisonEnabled("comparisonsGlobalKarma")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedKarmaEntries, "Karma"),
@@ -797,20 +791,20 @@ function augmentNativeKarmaLeaderboard() {
   );
 }
 
-// Remove the deltas this extension injected into one native board (used when a
-// board's diff toggle is off). The cards themselves are boot.dev's; we only
-// strip our own appended `.be-native-delta` spans.
+// Remove the comparisons this extension injected into one native board (used when a
+// board's comparison toggle is off). The cards themselves are boot.dev's; we only
+// strip our own appended `.be-native-comparison` spans.
 function stripNativeSection(heading) {
   if (!heading) return;
   for (const link of nativeCardsForHeading(heading)) {
-    link.querySelector(":scope > * > .be-native-delta")?.remove();
+    link.querySelector(":scope > * > .be-native-comparison")?.remove();
   }
 }
 
-// Strip every injected native delta in one pass (used when the master toggle
+// Strip every injected native comparison in one pass (used when the master toggle
 // goes off, regardless of which board is in view).
-function removeNativeDeltas() {
-  document.querySelectorAll(".be-native-delta").forEach((el) => el.remove());
+function removeNativeComparisons() {
+  document.querySelectorAll(".be-native-comparison").forEach((el) => el.remove());
 }
 
 function augmentNativeLeaderboards() {
@@ -1012,14 +1006,14 @@ function requestPersonalLeaderboardData() {
   }
 }
 
-// Source data for native-section deltas (karma + league boards). Independent of
-// personal handles so deltas show even with no saved handles, and useful when the
+// Source data for native-section comparisons (karma + league boards). Independent of
+// personal handles so comparisons show even with no saved handles, and useful when the
 // extension loads into an already-open leaderboard page boot.dev won't re-fetch.
 function requestNativeLeaderboardData() {
   if (!isLeaderboardPage()) return;
-  // These boards exist only to compute deltas; with the master diff toggle off
+  // These boards exist only to compute comparisons; with the master toggle off
   // nothing consumes them, so skip the four requests entirely.
-  if (!isFeatureEnabled("diffs")) return;
+  if (!isFeatureEnabled("comparisons")) return;
   requestApiJson(DAILY_LEADERBOARD_URL);
   requestApiJson(KARMA_LEADERBOARD_URL);
   requestApiJson(LEAGUE_DAILY_LEADERBOARD_URL);
@@ -1151,7 +1145,7 @@ function personalRowHTML(it) {
     ? row.loading ? "loading" : "unavailable"
     : `${fmtNum(row.value)} ${unit}`;
   const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
-  const skipDelta = isCurrentUser || row.loading || row.value == null || !isDiffEnabled("diffsPersonal");
+  const skipComparison = isCurrentUser || row.loading || row.value == null || !isComparisonEnabled("comparisonsPersonal");
 
   return `
     <a class="be-personal-row${isCurrentUser ? " be-current-user" : ""}" href="/u/${encodeURIComponent(row.handle)}">
@@ -1163,7 +1157,7 @@ function personalRowHTML(it) {
       </span>
       <span class="be-personal-value-col">
         <span class="be-personal-value">${escapeHtml(valueText)}</span>
-        ${deltaSpanHTML(myValue, row.value, unit, skipDelta)}
+        ${comparisonSpanHTML(myValue, row.value, unit, skipComparison)}
       </span>
     </a>`;
 }
@@ -1171,7 +1165,7 @@ function personalRowHTML(it) {
 function patchPersonalRow(el, it) {
   const { row, rank, unit, myValue } = it;
   const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
-  const skipDelta = isCurrentUser || row.loading || row.value == null || !isDiffEnabled("diffsPersonal");
+  const skipComparison = isCurrentUser || row.loading || row.value == null || !isComparisonEnabled("comparisonsPersonal");
   const valueText = row.value == null
     ? row.loading ? "loading" : "unavailable"
     : `${fmtNum(row.value)} ${unit}`;
@@ -1183,7 +1177,7 @@ function patchPersonalRow(el, it) {
   setTextIfChanged(el.querySelector(".be-personal-name"), row.name);
   setTextIfChanged(el.querySelector(".be-personal-handle"), `@${row.displayHandle}`);
   setTextIfChanged(el.querySelector(".be-personal-value"), valueText);
-  patchDeltaEl(el.querySelector("[data-be-delta]"), myValue, row.value, unit, skipDelta);
+  patchComparisonEl(el.querySelector("[data-be-comparison]"), myValue, row.value, unit, skipComparison);
 }
 
 function bindPersonalLeaderboardControls(panel) {

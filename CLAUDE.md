@@ -10,8 +10,8 @@ Chrome extension (Manifest V3) that augments boot.dev. The Chrome-loadable direc
 | `src/injected.js` | Runs in the page's JS context. Wraps `fetch` and `XMLHttpRequest` to clone `api.boot.dev` JSON responses and relay them to the content script via `window.postMessage`. No feature logic here. |
 | `src/content.js` | Isolated-world content script. `window.postMessage` listener and URL router only. Calls handlers defined in the feature files below. Also owns the `storage.onChanged` listener that live-applies settings (`applyFeatureSettings`) and the first-run settings prompt. Must be listed last in `manifest.json`. |
 | `src/utils.js` | Shared helpers: `waitFor`, `chromeGet`/`chromeSet` (local) and `chromeGetSync`/`chromeSetSync` (sync), `toast`, `escapeHtml`, number formatters. No feature logic. Must be listed first in `manifest.json`. |
-| `src/settings.js` | Feature on/off model. `be_settings` in `chrome.storage.sync`, default-on. `loadSettings`, `isFeatureEnabled(key)`, `isDiffEnabled(boardKey)` (master `diffs` AND the per-board flag). No feature logic. Loaded second, right after `utils.js`. Keep `DEFAULT_SETTINGS` in sync with `popup.js`. |
-| `popup.html` / `options.html` / `popup.js` / `popup.css` | Settings UI (extension pages, not injected). `popup.html` is the toolbar popup (`action.default_popup`); `options.html` is the options page (`options_ui`) and adds the per-board diff toggles. Both share `popup.js`/`popup.css`. They write `be_settings` to `storage.sync`; `content.js` live-applies via `storage.onChanged`. |
+| `src/settings.js` | Feature on/off model. `be_settings` in `chrome.storage.sync`, default-on. `loadSettings`, `isFeatureEnabled(key)`, `isComparisonEnabled(boardKey)` (master `comparisons` AND the per-board flag). No feature logic. Loaded second, right after `utils.js`. Keep `DEFAULT_SETTINGS` in sync with `popup.js`. |
+| `popup.html` / `options.html` / `popup.js` / `popup.css` | Settings UI (extension pages, not injected). `popup.html` is the toolbar popup (`action.default_popup`); `options.html` is the options page (`options_ui`) and adds the per-board comparison toggles. Both share `popup.js`/`popup.css`. They write `be_settings` to `storage.sync`; `content.js` live-applies via `storage.onChanged`. |
 | `src/leaderboard.js` | All-time leaderboard injection and personal leaderboards feature. |
 | `src/profile.js` | Cumulative XP display on public profile pages. |
 | `src/boss.js` | Boss-event tracker: state management, render, drag-to-reposition, background refresh, settings panel, near-high notification. |
@@ -44,14 +44,14 @@ Files share a single global scope — no ES module syntax (`import`/`export`), n
 utils.js → settings.js → leaderboard.js → profile.js → boss.js → nextLesson.js → content.js
 ```
 
-`utils.js` first so helpers are available everywhere; `settings.js` second so `isFeatureEnabled`/`isDiffEnabled` are available to every feature. `content.js` last so the router can call handlers already defined by the feature files.
+`utils.js` first so helpers are available everywhere; `settings.js` second so `isFeatureEnabled`/`isComparisonEnabled` are available to every feature. `content.js` last so the router can call handlers already defined by the feature files.
 
 (`popup.js` runs in the extension-page context, not the content-script scope, so it can't see these files — it keeps its own copy of the settings key and defaults.)
 
 ## Conventions
 - `FIXME` comments mark field names inferred from context that should be verified against real API responses in `reference_data/`.
 - `chrome.storage.local` key for boss state: `be_boss_state`. Feature settings live in `chrome.storage.sync` under `be_settings`.
-- Gate any new feature behind a flag in `settings.js` (`DEFAULT_SETTINGS`, default-on) and a toggle in `popup.js`; check `isFeatureEnabled`/`isDiffEnabled` at its render/request entry and tear down cleanly when off.
+- Gate any new feature behind a flag in `settings.js` (`DEFAULT_SETTINGS`, default-on) and a toggle in `popup.js`; check `isFeatureEnabled`/`isComparisonEnabled` at its render/request entry and tear down cleanly when off.
 - All injected DOM elements use the `be-` CSS class prefix.
 - Do not add `console.log` for debugging; use `console.debug` so it can be filtered.
 

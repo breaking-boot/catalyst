@@ -242,19 +242,19 @@
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
-.be-leader-delta {
+.be-leader-comparison {
   font-size: 11px;
   line-height: 1.1;
   margin-top: 2px;
   font-variant-numeric: tabular-nums;
 }
-.be-leader-delta-ahead { color: #6ee7b7; }
-.be-leader-delta-behind { color: #f87171; }
-/* Empty (current-user / no-data) delta spans take no space. */
-.be-delta:empty { display: none; }
+.be-leader-comparison-ahead { color: #6ee7b7; }
+.be-leader-comparison-behind { color: #f87171; }
+/* Empty (current-user / no-data) comparison spans take no space. */
+.be-comparison:empty { display: none; }
 /* Native overlay: an in-flow line appended to the card's text column, so it sits
    directly beneath the native value and shares its left edge. */
-.be-native-delta {
+.be-native-comparison {
   display: block;
   margin-top: 1px;
   line-height: 1.1;
