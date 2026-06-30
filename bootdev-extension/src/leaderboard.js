@@ -851,35 +851,49 @@ function findAllTimeLeaderboardInsertionPoint() {
   return globalHeading?.parentElement || globalHeading;
 }
 
-// Personal Leaderboards is pinned to the very top of the leaderboard page, above
+// Personal Leaderboards is pinned to the top of the leaderboard content, above
 // the native League/Global boards — users care most about their own list, and it
-// looked out of place wedged between the Global sections.
+// looked out of place wedged between the Global sections. Native sections are
+// separated by <hr> dividers, so we anchor to that sibling level; this keeps the
+// panel in the content and can't escape into the nav (a previous walk-to-<main>
+// heuristic did exactly that).
 function findPersonalLeaderboardInsertionPoint() {
   const heading = findHeadingByText("League Leaderboards") || findHeadingByText("Global Leaderboards");
-  return heading ? topLevelBlockFor(heading) : null;
-}
-
-// The ancestor of `el` that sits directly inside <main> (or <body>) — the
-// top-level section block — so a panel can be inserted as a sibling above it.
-function topLevelBlockFor(el) {
-  const root = document.querySelector("main") || document.body;
-  let node = el;
-  while (node.parentElement && node.parentElement !== root && node.parentElement !== document.body) {
+  if (!heading) return null;
+  // Walk up to the section block whose parent also holds the <hr> dividers.
+  let node = heading;
+  while (node.parentElement && node.parentElement !== document.body) {
+    if (Array.from(node.parentElement.children).some((c) => c.tagName === "HR")) {
+      return node;
+    }
     node = node.parentElement;
   }
-  return node;
+  return heading;
 }
 
-// Keep the personal panel as the sibling immediately before the native boards.
+// Keep [personal panel] [divider] [native boards] in order, idempotently, so the
+// 2-second scan never thrashes the DOM once everything is in place.
 function ensurePersonalPlacement(panel) {
   const block = findPersonalLeaderboardInsertionPoint();
-  if (!block) {
-    if (!panel.isConnected) (document.querySelector("main") || document.body).prepend(panel);
-    return;
+  if (!block) return;
+  const divider = ensurePersonalDivider();
+  if (block.previousElementSibling !== divider) {
+    block.insertAdjacentElement("beforebegin", divider);
   }
-  if (block.previousElementSibling !== panel) {
-    block.insertAdjacentElement("beforebegin", panel);
+  if (divider.previousElementSibling !== panel) {
+    divider.insertAdjacentElement("beforebegin", panel);
   }
+}
+
+// A gray rule matching the native section dividers (<hr class="mx-8 border-gray-600">).
+function ensurePersonalDivider() {
+  let divider = document.getElementById("be-personal-divider");
+  if (!divider) {
+    divider = document.createElement("hr");
+    divider.id = "be-personal-divider";
+    divider.className = "be-section-divider";
+  }
+  return divider;
 }
 
 // ===========================================================================
@@ -1425,4 +1439,5 @@ function savePersonalCache() {
 
 function removePersonalLeaderboards() {
   document.getElementById("be-personal-leaderboards")?.remove();
+  document.getElementById("be-personal-divider")?.remove();
 }
