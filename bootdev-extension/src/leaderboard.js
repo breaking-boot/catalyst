@@ -575,10 +575,11 @@ function patchAllTimeCard(el, it, myXP) {
   patchDeltaEl(el.querySelector("[data-be-delta]"), myXP, it.xp, "xp", it.isCurrentUser || !isDiffEnabled("diffsAllTime"));
 }
 
-// Mirror the native boards' "You are in position N" subtitle on our All-Time
-// panel. boot.dev's API returns no platform-wide student count, so we show the
-// position (the user's own Position from the all-time response) without the
-// "of N total students" tail the native boards add from data we can't see.
+// Mirror the native boards' "You are in position N of M total students" subtitle
+// on our All-Time panel. The position is the user's own Position from the
+// all-time response; the student count has no API source (boot.dev only
+// server-renders it), so it's read from a native board's rendered subtitle. The
+// count falls away gracefully when that text isn't on the page yet.
 function updateAllTimeSubtitle(panel, entries, currentIdentity) {
   const sub = panel.querySelector("[data-be-subtitle]");
   if (!sub) return;
@@ -588,14 +589,30 @@ function updateAllTimeSubtitle(panel, entries, currentIdentity) {
     setTextIfChanged(sub, "");
     return;
   }
+  const total = findTotalStudents();
   sub.hidden = false;
-  setTextIfChanged(sub, `You are in position ${fmtNum(rank)}`);
+  setTextIfChanged(sub, total != null
+    ? `You are in position ${fmtNum(rank)} of ${fmtNum(total)} total students`
+    : `You are in position ${fmtNum(rank)}`);
 }
 
 function currentUserAllTimePosition(entries, currentIdentity) {
   if (!normalizeHandle(currentIdentity.handle)) return null;
   const current = entries.find((e) => isCurrentLeaderboardEntry(e, currentIdentity));
   return current ? num(current.Position ?? current.Rank) : null;
+}
+
+// The platform-wide student count is only in the server-rendered page payload,
+// never an api.boot.dev response, so read it from a native board's rendered
+// subtitle. Text-based so it survives class-name churn; skips our own panels so
+// it can't read back its own output.
+function findTotalStudents() {
+  for (const el of document.querySelectorAll("p")) {
+    if (el.closest("#be-alltime-leaderboard, #be-personal-leaderboards")) continue;
+    const m = /of\s+([\d,]+)\s+total students/i.exec(normalizeText(el.textContent));
+    if (m) return num(m[1].replace(/,/g, ""));
+  }
+  return null;
 }
 
 function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdentity()) {
