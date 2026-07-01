@@ -601,7 +601,9 @@ function currentUserAllTimePosition(entries, currentIdentity) {
 // subtitle. Text-based so it survives class-name churn; skips our own panels so
 // it can't read back its own output.
 function findTotalStudents() {
-  for (const el of document.querySelectorAll("p")) {
+  // The count sits in a subtitle that boot.dev renders as a <p> (League boards)
+  // or <h3> (Global boards), so search both paragraphs and headings.
+  for (const el of document.querySelectorAll("p, h1, h2, h3, h4, h5, h6")) {
     if (el.closest("#be-alltime-leaderboard, #be-personal-leaderboards")) continue;
     const m = /of\s+([\d,]+)\s+total students/i.exec(normalizeText(el.textContent));
     if (m) return num(m[1].replace(/,/g, ""));
@@ -753,7 +755,8 @@ function augmentNativeLeagueDaily() {
   augmentNativeSection(
     heading,
     mapByHandle(cachedLeagueDailyEntries, "XPEarned"),
-    myValueFromEntries(cachedLeagueDailyEntries, "XPEarned"),
+    // A league is a small pool, so if we aren't on the board we've earned 0 today.
+    leagueMyValueOrZero(cachedLeagueDailyEntries, "XPEarned"),
     "xp"
   );
 }
@@ -764,9 +767,18 @@ function augmentNativeLeagueStanding() {
   augmentNativeSection(
     heading,
     mapByHandle(cachedLeagueEntries, "XPEarned"),
-    myValueFromEntries(cachedLeagueEntries, "XPEarned"),
+    // Newly assigned to a league with no XP yet -> not listed -> treat as 0.
+    leagueMyValueOrZero(cachedLeagueEntries, "XPEarned"),
     "xp"
   );
+}
+
+// Our own value on a league board. Absence means 0 (small pool), but only once
+// the board data has actually loaded — with an empty cache there are no cards to
+// annotate anyway, so returning null there avoids a misleading "0" comparison.
+function leagueMyValueOrZero(entries, ...fields) {
+  if (!entries.length) return null;
+  return myValueFromEntries(entries, ...fields) ?? 0;
 }
 
 function augmentNativeDailyLeaderboard() {
