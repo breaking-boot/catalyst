@@ -1212,9 +1212,16 @@ function bindPersonalLeaderboardControls(panel) {
     };
   }
 
-  panel.querySelectorAll("[data-be-remove-handle]").forEach((button) => {
-    button.onclick = () => removePersonalHandle(button.getAttribute("data-be-remove-handle"));
-  });
+  // Delegate on the persistent chips container: the chip buttons are swapped in
+  // via innerHTML after this runs, so a per-button handler bound here would never
+  // attach. One listener on the container survives every chip re-render.
+  const chips = panel.querySelector(".be-personal-chips");
+  if (chips) {
+    chips.onclick = (event) => {
+      const button = event.target.closest("[data-be-remove-handle]");
+      if (button) removePersonalHandle(button.getAttribute("data-be-remove-handle"));
+    };
+  }
 }
 
 async function addPersonalHandle(handle) {
