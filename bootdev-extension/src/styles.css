@@ -90,7 +90,10 @@
 
 .be-native-leaderboard {
   width: 100%;
-  margin: 16px 0 22px;
+  /* Top gap ~= 16px. The section below us ("Top Community Members") adds its own
+     pt-6 (24px), so a small negative bottom margin evens the two gaps out to the
+     smaller (top) amount instead of leaving a larger gap below. */
+  margin: 16px 0 -4px;
   color: #fff;
   font-family: inherit;
 }

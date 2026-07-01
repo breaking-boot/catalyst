@@ -585,9 +585,10 @@ function updateAllTimeSubtitle(panel, entries, currentIdentity) {
   }
   const total = findTotalStudents();
   sub.hidden = false;
+  // Raw numbers (no thousands separators) to match the native subtitle exactly.
   setTextIfChanged(sub, total != null
-    ? `You are in position ${fmtNum(rank)} of ${fmtNum(total)} total students`
-    : `You are in position ${fmtNum(rank)}`);
+    ? `You are in position ${rank} of ${total} total students`
+    : `You are in position ${rank}`);
 }
 
 function currentUserAllTimePosition(entries, currentIdentity) {
