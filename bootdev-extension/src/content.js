@@ -138,7 +138,14 @@ async function maybeShowSettingsIntro() {
   toast("Catalyst is active. Click its toolbar icon (pin it from the puzzle-piece menu) to choose what's shown.");
 }
 
+// A route change / initial load both renders the UI and fetches fresh data.
 function syncRouteScopedUi() {
+  renderRouteScopedUi();
+  requestRouteScopedData();
+}
+
+// Render/teardown only, from cached data — never issues network requests.
+function renderRouteScopedUi() {
   renderNextLessonNav();
   captureNextLessonFromDom();
   learnCurrentUserHandleFromDom();
@@ -146,11 +153,6 @@ function syncRouteScopedUi() {
   if (isLeaderboardPage()) {
     if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
     schedulePersonalLeaderboardRender();
-    if (isFeatureEnabled("allTimeLeaderboard")) {
-      setTrackedTimeout(() => requestApiJson(ALL_TIME_LEADERBOARD_URL), 50);
-    }
-    setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
-    setTrackedTimeout(() => requestNativeLeaderboardData(), 150);
   } else {
     removeAllTimeLeaderboard();
     removePersonalLeaderboards();
@@ -161,18 +163,27 @@ function syncRouteScopedUi() {
   }
 }
 
-// Live-apply a settings change from the popup/options page. Settings live in
-// chrome.storage.sync; every feature's render/request path is already gated, so
-// applying is mostly a matter of re-running the standard passes and tearing down
-// anything that just turned off.
+// The leaderboard-page fetches, kept separate so settings changes can re-render
+// without re-pulling everything.
+function requestRouteScopedData() {
+  if (!isLeaderboardPage()) return;
+  if (isFeatureEnabled("allTimeLeaderboard")) {
+    setTrackedTimeout(() => requestApiJson(ALL_TIME_LEADERBOARD_URL), 50);
+  }
+  setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
+  setTrackedTimeout(() => requestNativeLeaderboardData(), 150);
+}
+
+// Live-apply a settings change from the popup/options page (chrome.storage.sync).
 function handleSettingsChange(changes, area) {
   if (enhancerStopped) return;
   if (area !== "sync" || !changes[SETTINGS_KEY]) return;
+  const before = getSettings();
   applyStoredSettings(changes[SETTINGS_KEY].newValue);
-  applyFeatureSettings();
+  applyFeatureSettings(before, getSettings());
 }
 
-function applyFeatureSettings() {
+function applyFeatureSettings(before, after) {
   if (enhancerStopped) return;
 
   if (isFeatureEnabled("bossTracker")) {
@@ -184,16 +195,28 @@ function applyFeatureSettings() {
   }
 
   // Re-render the profile badge/button from cached data (handles both on and off);
-  // unlike the other features it isn't redrawn by the standard sync pass.
+  // unlike the other features it isn't redrawn by the standard render pass.
   reapplyProfileStats();
 
-  syncRouteScopedUi();
-  // Strip/redraw native comparisons immediately rather than waiting for the next
-  // DOM scan, so a comparison toggle feels instant. With the master off, strip
-  // them all; otherwise re-augment (which applies or strips each board per its flag).
+  // Render from cache only. Fetching here would re-pull every Personal
+  // Leaderboards handle (2 calls each) on every unrelated toggle.
+  renderRouteScopedUi();
   if (isLeaderboardPage()) {
     if (isFeatureEnabled("comparisons")) augmentNativeLeaderboards();
     else removeNativeComparisons();
+  }
+
+  // Fetch only when a feature just turned on AND its data isn't already cached.
+  if (!before || !after || !isLeaderboardPage()) return;
+  const turnedOn = (key) => before[key] === false && after[key] !== false;
+  if (turnedOn("allTimeLeaderboard") && !cachedAllTimeEntries.length) {
+    requestApiJson(ALL_TIME_LEADERBOARD_URL);
+  }
+  if (turnedOn("personalLeaderboards") && personalDataMissing()) {
+    requestPersonalLeaderboardData();
+  }
+  if (turnedOn("comparisons") && !hasNativeComparisonData()) {
+    requestNativeLeaderboardData();
   }
 }
 

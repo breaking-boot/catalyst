@@ -1007,6 +1007,24 @@ async function loadPersonalLeaderboard() {
   }
 }
 
+// True when at least one saved handle has no fetched profile yet, i.e. we'd need
+// to pull data. Used to skip refetching when re-enabling a feature whose data is
+// already in memory (records persist through storage cache across sessions).
+function personalDataMissing() {
+  return personalHandles.some((handle) => !personalRecords[normalizeHandle(handle)]?.profile);
+}
+
+// True when any native-board data is already cached (turning comparisons back on
+// then needs no fetch).
+function hasNativeComparisonData() {
+  return Boolean(
+    cachedDailyEntries.length ||
+    cachedKarmaEntries.length ||
+    cachedLeagueDailyEntries.length ||
+    cachedLeagueEntries.length
+  );
+}
+
 function requestPersonalLeaderboardData() {
   if (!isFeatureEnabled("personalLeaderboards")) return;
   if (!isLeaderboardPage() || !personalHandles.length) return;
