@@ -102,15 +102,17 @@
   border: 0;
   border-top: 1px solid #4e5564;
 }
-/* Board title, matches native global "Top Daily Learners" (text-lg font-semibold, pl-4). */
+/* Board title, matches native global "Top Daily Learners" (pl-4 text-lg
+   font-semibold): 18px/28px, weight 600, and NO bottom margin — the gap to the
+   subtitle comes from line-height alone, like the native board. */
 .be-native-title {
-  margin: 0 0 8px;
+  margin: 0;
   padding-left: 16px;
   color: #fff;
   font-family: Arcuata, serif;
   font-size: 18px;
   font-weight: 600;
-  line-height: 1.25;
+  line-height: 1.556;
 }
 /* Section heading, matches native "Global Leaderboards" (text-2xl font-bold, pb-2 pl-4). */
 .be-personal-heading {
@@ -127,9 +129,9 @@
    palette). No `display` here, so the `hidden` attribute can collapse it. */
 .be-native-subtitle {
   margin: 0;
-  padding: 0 0 8px 16px;
+  padding: 0 0 16px 16px;
   color: #919dab;
-  font-family: inherit;
+  font-family: DMSans, sans-serif;
   font-size: 14px;
   font-weight: 500;
   font-style: italic;
