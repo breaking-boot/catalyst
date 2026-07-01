@@ -127,7 +127,7 @@
    palette). No `display` here, so the `hidden` attribute can collapse it. */
 .be-native-subtitle {
   margin: 0;
-  padding: 0 0 16px 16px;
+  padding: 0 0 8px 16px;
   color: #919dab;
   font-family: inherit;
   font-size: 14px;
