@@ -1108,7 +1108,7 @@ function ensurePersonalSkeleton(panel) {
     .join("");
 
   panel.innerHTML = `
-    <h3 class="be-native-title">Personal Leaderboards</h3>
+    <h3 class="be-personal-heading">Personal Leaderboards</h3>
     <div class="be-personal-shell">
       <form id="be-personal-form" class="be-personal-form">
         <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="boot.dev handle or profile URL" aria-label="boot.dev handle or profile URL">
