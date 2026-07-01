@@ -1,11 +1,34 @@
 # Changelog
 
+## v0.5.1 - Leaderboard layout, settings polish, and fixes
+
+### Layout
+- Moved **Personal Leaderboards** to the top of the leaderboard page, above the native League Leaderboards section, with a divider matching the native sections (it previously sat between the Global sections).
+- Added a **"You are in position N of M total students"** subtitle to the Top All-Time Learners section, matching the native boards (italic). The position comes from the all-time response; the student count has no API source, so it's read from the native board's rendered subtitle (falling back to position-only when unavailable).
+- Restyled Personal Leaderboards and the section/board titles to match the native leaderboards: bigger bold section heading, semibold board titles, native username sizing, and transparent cell/section backgrounds (they were noticeably darker than boot.dev's).
+
+### Settings
+- Renamed the master XP/karma toggle to **"Leaderboard comparisons"** and the **"All-Time Learners"** feature toggle to **"Top All-Time Learners Leaderboard"** (the underlying setting keys were renamed too, with the previous values migrated so existing choices are preserved).
+- Clarified the Catalyst-added per-board labels and reordered the per-board comparison toggles top-to-bottom to match how the boards appear on the page.
+- Bundled boot.dev's map texture behind the settings popup and options page for visual consistency with the in-app panels (kept local, no remote dependency).
+
+### Fixes
+- Toasts now stack instead of covering one another, so the first-run settings prompt is no longer immediately hidden by the boss near-high notification.
+- Fixed the **Profile cumulative XP** toggle not re-rendering the badge when switched back on; it no longer requires navigating away and back.
+- Fixed **removing people from Personal Leaderboards** — the chip's × did nothing because its click handler was bound before the chips existed; it's now a delegated listener on the persistent container.
+- Stopped a burst of **redundant API calls** on every settings change (two per saved handle, even for unrelated toggles). Settings now re-render from cache and only fetch when a feature turns on and its data isn't already in memory.
+- League-board comparisons now show even when you're **not yet listed** (e.g. no XP earned today, or freshly assigned to a league): your value is treated as 0 for those small pools. Global boards are unaffected, where being absent means "outside the top 25," not zero.
+- The total-students count now actually appears — it lives in an `<h3>` on the Global boards, which the reader previously skipped.
+
+### Refactor
+- Unified the terminology for the XP/karma comparison feature: every "diff" and "delta" reference (settings keys, functions, CSS classes, comments, and docs) is now "comparison". Older changelog entries were rewritten retroactively to match, for readability. The boss panel's unrelated "below event high" value was renamed for clarity too. No behavior change.
+
 ## v0.5.0 - Per-feature settings, local avatar frames
 
 ### Settings
-- Added a settings system to toggle every Catalyst feature on or off: the boss tracker, the All-Time Learners panel, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and XP/karma diffs. Click the toolbar icon for the popup, or open the options page for finer control.
-- XP/karma diffs use a master toggle plus a per-board toggle for each of the six boards (the two Catalyst panels and the four native boards), so diffs can be enabled on, say, just the league boards. The master acts as a global gate: turning it off hides all diffs and turning it back on restores each board's own setting.
-- Settings are stored in `chrome.storage.sync` (so they roam across a user's devices) and apply live, with no page reload. Turning a feature off also stops its background work — the boss poll halts and the native delta requests are skipped — so disabled features place no load on boot.dev.
+- Added a settings system to toggle every Catalyst feature on or off: the boss tracker, the All-Time Learners panel, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and XP/karma comparisons. Click the toolbar icon for the popup, or open the options page for finer control.
+- XP/karma comparisons use a master toggle plus a per-board toggle for each of the six boards (the two Catalyst panels and the four native boards), so comparisons can be enabled on, say, just the league boards. The master acts as a global gate: turning it off hides all comparisons and turning it back on restores each board's own setting.
+- Settings are stored in `chrome.storage.sync` (so they roam across a user's devices) and apply live, with no page reload. Turning a feature off also stops its background work — the boss poll halts and the native comparison requests are skipped — so disabled features place no load on boot.dev.
 - A one-time prompt on first run points users to the toolbar icon (which Chrome hides until pinned) so the settings are discoverable. The popup and options page match the in-app boss-modal styling.
 - No new permissions were added; the existing `storage` permission covers `storage.sync`.
 
@@ -30,14 +53,14 @@
 - Marked the hashed-class injection anchors with `FRAGILE` comments per project convention and documented the build-hashed frame asset list as expected to rot.
 - Removed dead code (`normalizeImageUrl`, `ARCHMAGE_FRAME_URL`), dropped a duplicate daily-leaderboard request, documented `waitFor`'s null-on-timeout contract, and annotated inline threshold constants.
 
-## v0.4.0 - XP and karma delta display on all leaderboards, stability fixes
+## v0.4.0 - XP and karma comparison display on all leaderboards, stability fixes
 
-- Added XP and karma delta to every leaderboard entry — each card other than your own shows how far ahead (green) or behind (red) you are. Shown on the extension's Top All-Time Learners panel, all three Personal Leaderboards boards (daily XP, all-time XP, karma), and all four native boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. (Recent Archmages is left untouched — it lists no XP or karma.)
-- Each delta is aligned with the value it compares against: native deltas are appended into the card's text column directly beneath the native value, and the extension panels' deltas sit with their own value. Dropped the redundant " today" suffix from daily deltas.
-- Intercepted `/v1/leaderboard_karma/alltime` and `/v1/league_leaderboard_xp/{day,alltime}`. Each board is matched to the API response that feeds it, and the current user's own value is read from that same response (XPEarned for league/daily, Karma for community, XP for all-time), so deltas always match the displayed numbers; `getMyValue` prefers these responses and falls back to the saved personal record only when absent.
-- Scoped native cards by document position between known section titles, so the dynamic "You are in position N…" subtitle (an `<h3>` in the Global boards) no longer truncates a section's card range and blanks its deltas.
-- Eliminated leaderboard flicker: each panel is rendered once and then reconciled in place keyed by handle instead of replacing `innerHTML`, so the current-user card and its gold glow are never destroyed and recreated, unchanged rows are untouched, and only changed values patch a single text node (native deltas included). Supporting changes: a 50 ms debounced render scheduler, a fast-path and version-guarded `waitFor` so stale resolutions can't overwrite a newer render, a persistent Personal Leaderboards skeleton that keeps the input's value and focus, and a `compareDocumentPosition` check that repositions the personal panel without re-rendering.
-- Stabilized current-user identity, the deeper cause of the residual glow flicker and intermittently wrong deltas. boot.dev's leaderboard cards are not inside `<main>`, so the nav-link heuristic could match a scrolled-past profile card and overwrite the stored handle mid-scroll. The handle is now sticky once known and taken authoritatively from the native gold-glow highlight (which only ever marks your own cards); the nav heuristic can no longer overwrite a known handle.
+- Added XP and karma comparison to every leaderboard entry — each card other than your own shows how far ahead (green) or behind (red) you are. Shown on the extension's Top All-Time Learners panel, all three Personal Leaderboards boards (daily XP, all-time XP, karma), and all four native boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. (Recent Archmages is left untouched — it lists no XP or karma.)
+- Each comparison is aligned with the value it compares against: native comparisons are appended into the card's text column directly beneath the native value, and the extension panels' comparisons sit with their own value. Dropped the redundant " today" suffix from daily comparisons.
+- Intercepted `/v1/leaderboard_karma/alltime` and `/v1/league_leaderboard_xp/{day,alltime}`. Each board is matched to the API response that feeds it, and the current user's own value is read from that same response (XPEarned for league/daily, Karma for community, XP for all-time), so comparisons always match the displayed numbers; `getMyValue` prefers these responses and falls back to the saved personal record only when absent.
+- Scoped native cards by document position between known section titles, so the dynamic "You are in position N…" subtitle (an `<h3>` in the Global boards) no longer truncates a section's card range and blanks its comparisons.
+- Eliminated leaderboard flicker: each panel is rendered once and then reconciled in place keyed by handle instead of replacing `innerHTML`, so the current-user card and its gold glow are never destroyed and recreated, unchanged rows are untouched, and only changed values patch a single text node (native comparisons included). Supporting changes: a 50 ms debounced render scheduler, a fast-path and version-guarded `waitFor` so stale resolutions can't overwrite a newer render, a persistent Personal Leaderboards skeleton that keeps the input's value and focus, and a `compareDocumentPosition` check that repositions the personal panel without re-rendering.
+- Stabilized current-user identity, the deeper cause of the residual glow flicker and intermittently wrong comparisons. boot.dev's leaderboard cards are not inside `<main>`, so the nav-link heuristic could match a scrolled-past profile card and overwrite the stored handle mid-scroll. The handle is now sticky once known and taken authoritatively from the native gold-glow highlight (which only ever marks your own cards); the nav heuristic can no longer overwrite a known handle.
 - Corrected the avatar role-frame tier map using confirmed API data: added the missing Mage tier (level 90–99), restored the Archmage index (level 100+), and shifted the level formula down one step so all tiers render the correct frame; entries with no recognized role and a level below 10 (or no level) show no frame.
 - Matched the current-user card glow to the native site value (`0 0 15px 1px #e5a012`) on both the all-time and personal rows.
 - Matched the boss panel minimized-state title font size to the expanded title (both 16 px) and widened the panel to prevent title truncation at maximum aura length.

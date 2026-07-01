@@ -26,7 +26,7 @@ catalyst/
   bootdev-extension/       Chrome "Load unpacked" target
     manifest.json
     popup.html             Settings popup (toolbar icon)
-    options.html           Settings options page (adds per-board diffs)
+    options.html           Settings options page (adds per-board comparisons)
     popup.js               Shared settings UI logic
     popup.css              Shared settings UI styles
     icons/                 Extension toolbar icons
@@ -72,7 +72,7 @@ chrome://extensions
 
 3. Turn on **Developer mode**.
 4. Click **Load unpacked**.
-5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.5.0`).
+5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.5.1`).
 6. Open or refresh `https://www.boot.dev`.
 
 ## Updating
@@ -90,8 +90,8 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 ### Settings
 
 - Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chrome hides extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
-- The popup toggles the six features: Boss event tracker, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and leaderboard comparisons (XP/karma diffs).
-- The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds per-board control over the XP/karma diffs: a master toggle plus a checkbox for each of the six boards, so you can show diffs on just the boards you want.
+- The popup toggles the six features: Boss event tracker, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and leaderboard comparisons (XP/karma).
+- The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds per-board control over the XP/karma comparisons: a master toggle plus a checkbox for each of the six boards, so you can show comparisons on just the boards you want.
 - Settings sync across your devices (`chrome.storage.sync`) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on boot.dev.
 
 ### Next Lesson
@@ -114,12 +114,12 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 - Personal **Top Daily Learners** uses `/v1/leaderboard_xp/day` when a saved handle appears there; otherwise it shows observed XP gained today from saved profile snapshots. **Top All-Time Learners** uses public profile XP. **Top Community Members** uses public stats karma.
 - Invalid, empty, duplicate, or nonexistent handles are rejected before being saved. If boot.dev returns an auth error, Catalyst retries once and then asks you to refresh the page.
 
-#### XP and Karma Deltas
+#### XP and Karma Comparisons
 
-- Every leaderboard entry other than your own shows a delta — how far ahead (green) or behind (red) you are in the same unit as that board's value.
-- Deltas appear on all extension panels (Top All-Time Learners and all three Personal Leaderboards boards) and on all four native boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. Recent Archmages is left untouched.
+- Every leaderboard entry other than your own shows a comparison — how far ahead (green) or behind (red) you are in the same unit as that board's value.
+- Comparisons appear on all extension panels (Top All-Time Learners and all three Personal Leaderboards boards) and on all four native boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. Recent Archmages is left untouched.
 - Your comparison value is read from the same API response that feeds each board, with a fallback to your saved personal record when absent.
-- Diffs are toggleable per board from the options page (see **Settings**), with a master switch in the popup to hide them all at once.
+- Comparisons are toggleable per board from the options page (see **Settings**), with a master switch in the popup to hide them all at once.
 
 ### Boss Event Tracker
 
@@ -144,7 +144,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 ## How It Works
 
-boot.dev is a Nuxt/Vue single-page app with rebuilt CSS class names, so the extension does not scrape data from the DOM. Instead:
+boot.dev is a Nuxt/Vue single-page app with rebuilt CSS class names, so the extension reads its data from intercepted API responses rather than scraping the DOM (DOM scraping is a last resort, used only for the one value boot.dev exposes nowhere else — the platform-wide student count). The main flow:
 
 ```text
 page fetch/XHR -> injected.js clone -> window.postMessage -> content.js router -> UI/storage
