@@ -169,9 +169,7 @@ function renderRouteScopedUi() {
 // without re-pulling everything.
 function requestRouteScopedData() {
   if (!isLeaderboardPage()) return;
-  if (isFeatureEnabled("allTimeLeaderboard")) {
-    setTrackedTimeout(() => requestApiJson(ALL_TIME_LEADERBOARD_URL), 50);
-  }
+  setTrackedTimeout(() => requestAllTimeLeaderboardData(), 50);
   setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
   setTrackedTimeout(() => requestNativeLeaderboardData(), 150);
 }
@@ -350,6 +348,8 @@ function stopEnhancer() {
   if (enhancerStopped) return;
   enhancerStopped = true;
   window.removeEventListener("message", handleWindowMessage);
+  document.removeEventListener("visibilitychange", handleVisibilityChange);
+  unbindNextLessonShortcut();
   try {
     chrome.storage.onChanged.removeListener(handleSettingsChange);
   } catch (_) {}

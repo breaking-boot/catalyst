@@ -6,6 +6,7 @@ const NEXT_LESSON_KEY = "be_next_lesson_href";
 
 let nextLessonHref = null;
 let nextLessonRefreshRequestedAt = 0;
+let nextLessonKeydownHandler = null;
 
 function isDashboardPage() {
   return /^\/dashboard\/?$/.test(location.pathname);
@@ -168,7 +169,8 @@ function findFirstIncompleteLesson(progress) {
 }
 
 function bindNextLessonShortcut() {
-  document.addEventListener("keydown", (event) => {
+  if (nextLessonKeydownHandler) return;
+  nextLessonKeydownHandler = (event) => {
     if (!isFeatureEnabled("nextLesson")) return;
     if (!nextLessonHref || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key.toLowerCase() !== "n") return;
@@ -176,7 +178,15 @@ function bindNextLessonShortcut() {
 
     event.preventDefault();
     location.href = nextLessonHref;
-  });
+  };
+  document.addEventListener("keydown", nextLessonKeydownHandler);
+}
+
+// Called from stopEnhancer so the listener doesn't outlive an invalidated context.
+function unbindNextLessonShortcut() {
+  if (!nextLessonKeydownHandler) return;
+  document.removeEventListener("keydown", nextLessonKeydownHandler);
+  nextLessonKeydownHandler = null;
 }
 
 function findTopNavInsertionPoint() {
@@ -190,8 +200,8 @@ function findTopNavInsertionPoint() {
   for (const selector of desktopCandidates) {
     const link = Array.from(document.querySelectorAll(selector)).find((el) => {
       const rect = el.getBoundingClientRect();
-      // top < 90: keep to links in the top nav band, not duplicates lower in the page
-      return isVisible(el) && rect.top >= 0 && rect.top < 90;
+      // Keep to links in the top nav band, not duplicates lower in the page.
+      return isVisible(el) && rect.top >= 0 && rect.top < TOP_NAV_BAND_PX;
     });
     if (link) return link;
   }

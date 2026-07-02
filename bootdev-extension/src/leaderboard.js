@@ -60,6 +60,19 @@ let cachedDailyEntries = [];
 let cachedKarmaEntries = [];
 let cachedLeagueDailyEntries = [];
 let cachedLeagueEntries = [];
+
+// Timestamps of the last passively-received (or actively-fetched) board data, so
+// an active refetch on load/route change is skipped when boot.dev just fetched
+// the same board — avoiding the initial double-fetch — while a stale, already-open
+// page (no recent data) still refetches.
+const BOARD_FETCH_FRESH_MS = 10_000;
+let boardSeenAt = {};
+function markBoardSeen(key) {
+  boardSeenAt[key] = Date.now();
+}
+function boardFresh(key) {
+  return Date.now() - (boardSeenAt[key] || 0) < BOARD_FETCH_FRESH_MS;
+}
 let personalHandles = [];
 let personalRecords = {};
 let personalFeedback = null;
@@ -269,7 +282,7 @@ function findCurrentUserProfileLink() {
     .filter((link) => isVisible(link) && !link.closest("main, #be-alltime-leaderboard, #be-personal-leaderboards"));
   const topLinks = links
     .map((link) => ({ link, rect: link.getBoundingClientRect() }))
-    .filter(({ rect }) => rect.top >= 0 && rect.top < 90 && rect.right > window.innerWidth / 2)
+    .filter(({ rect }) => rect.top >= 0 && rect.top < TOP_NAV_BAND_PX && rect.right > window.innerWidth / 2)
     .sort((a, b) => b.rect.right - a.rect.right);
 
   cachedProfileLink = topLinks[0]?.link || null;
@@ -356,6 +369,7 @@ function handleAllTimeLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
   if (!entries.length) return;
   cachedAllTimeEntries = entries;
+  markBoardSeen("alltime");
   chromeSet(LEADERBOARD_CACHE_KEY, { entries, updatedAt: Date.now() });
 
   renderAllTimeLeaderboard(entries);
@@ -725,7 +739,11 @@ function myValueFromEntries(entries, ...fields) {
 function augmentNativeSection(heading, dataByHandle, myValue, unit) {
   if (!heading || myValue == null) return;
   for (const link of nativeCardsForHeading(heading)) {
-    const column = link.lastElementChild; // [rank, avatar, textColumn]
+    // FRAGILE: positional DOM assumption. boot.dev's native card lays out as
+    // [rank, avatar, textColumn]; we append the comparison into that last text
+    // column so it sits beneath the native value. A card-layout change on a
+    // redeploy would land the comparison in the wrong place (or nowhere).
+    const column = link.lastElementChild;
     if (!column) continue;
     const handle = normalizeHandle(getProfileHandleFromHref(link.getAttribute("href")));
     const theirValue = handle ? dataByHandle[handle] : null;
@@ -884,7 +902,10 @@ function findAllTimeLeaderboardInsertionPoint() {
 function findPersonalLeaderboardInsertionPoint() {
   const heading = findHeadingByText("League Leaderboards") || findHeadingByText("Global Leaderboards");
   if (!heading) return null;
-  // Walk up to the section block whose parent also holds the <hr> dividers.
+  // FRAGILE: structural assumption. Native leaderboard sections are separated by
+  // <hr> elements; we anchor to the section block whose parent also holds those
+  // dividers. Anchored to the semantic HR tag (not a hashed class), so it's more
+  // durable than class-based anchoring but still depends on that divider layout.
   let node = heading;
   while (node.parentElement && node.parentElement !== document.body) {
     if (Array.from(node.parentElement.children).some((c) => c.tagName === "HR")) {
@@ -926,6 +947,7 @@ function ensurePersonalDivider() {
 function handleDailyXpLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
   cachedDailyEntries = entries;
+  markBoardSeen("daily");
   let changed = false;
 
   for (const entry of entries) {
@@ -952,11 +974,13 @@ function handleKarmaLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
   if (!entries.length) return;
   cachedKarmaEntries = entries;
+  markBoardSeen("karma");
   if (isLeaderboardPage()) augmentNativeKarmaLeaderboard();
 }
 
 function handleLeagueDailyLeaderboard(json) {
   cachedLeagueDailyEntries = getLeaderboardEntries(json);
+  markBoardSeen("leagueDaily");
   if (isLeaderboardPage()) {
     augmentNativeLeagueDaily();
     augmentNativeDailyLeaderboard(); // league-daily is a fallback for our own daily value
@@ -965,6 +989,7 @@ function handleLeagueDailyLeaderboard(json) {
 
 function handleLeagueLeaderboard(json) {
   cachedLeagueEntries = getLeaderboardEntries(json);
+  markBoardSeen("league");
   if (isLeaderboardPage()) augmentNativeLeagueStanding();
 }
 
@@ -1037,6 +1062,14 @@ function requestPersonalLeaderboardData() {
   }
 }
 
+// The extension's own All-Time board. boot.dev has no native all-time board, so
+// only we ever fetch this; the freshness gate collapses rapid route re-entries.
+function requestAllTimeLeaderboardData() {
+  if (!isLeaderboardPage() || !isFeatureEnabled("allTimeLeaderboard")) return;
+  if (boardFresh("alltime")) return;
+  requestApiJson(ALL_TIME_LEADERBOARD_URL);
+}
+
 // Source data for native-section comparisons (karma + league boards). Independent of
 // personal handles so comparisons show even with no saved handles, and useful when the
 // extension loads into an already-open leaderboard page boot.dev won't re-fetch.
@@ -1045,10 +1078,12 @@ function requestNativeLeaderboardData() {
   // These boards exist only to compute comparisons; with the master toggle off
   // nothing consumes them, so skip the four requests entirely.
   if (!isFeatureEnabled("comparisons")) return;
-  requestApiJson(DAILY_LEADERBOARD_URL);
-  requestApiJson(KARMA_LEADERBOARD_URL);
-  requestApiJson(LEAGUE_DAILY_LEADERBOARD_URL);
-  requestApiJson(LEAGUE_LEADERBOARD_URL);
+  // Skip a board boot.dev just fetched (we caught it passively) to avoid the
+  // initial-load double-fetch; a stale open page has no recent data and refetches.
+  if (!boardFresh("daily")) requestApiJson(DAILY_LEADERBOARD_URL);
+  if (!boardFresh("karma")) requestApiJson(KARMA_LEADERBOARD_URL);
+  if (!boardFresh("leagueDaily")) requestApiJson(LEAGUE_DAILY_LEADERBOARD_URL);
+  if (!boardFresh("league")) requestApiJson(LEAGUE_LEADERBOARD_URL);
 }
 
 function schedulePersonalLeaderboardRender() {

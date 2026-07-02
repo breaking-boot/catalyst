@@ -5,6 +5,20 @@
 let enhancerStopped = false;
 let trackedTimeouts = new Set();
 
+// Pixels from the top within which a link is treated as part of the top nav band,
+// used to tell the real nav links from scrolled-past duplicates lower in the page.
+const TOP_NAV_BAND_PX = 90;
+
+// Maintainer-only preview of the "boot.dev declined asset bundling" fallback:
+// set be_use_bundled_native_art to false in chrome.storage.local to drop the
+// bundled map texture and rank frames (they revert to a plain gradient / no
+// frame). Default on. Loaded once at startup by loadNativeArtFlag.
+const NATIVE_ART_FLAG_KEY = "be_use_bundled_native_art";
+let useBundledNativeArt = true;
+async function loadNativeArtFlag() {
+  if ((await chromeGet(NATIVE_ART_FLAG_KEY)) === false) useBundledNativeArt = false;
+}
+
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
@@ -300,12 +314,15 @@ function findElementByText(text) {
     (el) => normalizeText(el.textContent).toLowerCase() === target
   );
 }
+// Longest text an element may contain and still count as a "small" leaf label
+// rather than a wrapping container.
+const SMALL_TEXT_MAX_LEN = 80;
 function findSmallTextElement(root, text, exact) {
   const target = normalizeText(text).toLowerCase();
   return Array.from(root.querySelectorAll("*")).find((el) => {
     if (el.id === "be-total-xp") return false;
     const value = normalizeText(el.textContent);
-    if (value.length > 80) return false; // skip containers; we want a leaf label, not a section
+    if (value.length > SMALL_TEXT_MAX_LEN) return false; // skip containers; want a leaf label
     const lowered = value.toLowerCase();
     return exact ? lowered === target : lowered.includes(target);
   });
