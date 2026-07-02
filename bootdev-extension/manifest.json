@@ -31,6 +31,7 @@
       "matches": ["https://www.boot.dev/*"],
       "js": [
         "src/utils.js",
+        "src/settings-schema.js",
         "src/settings.js",
         "src/leaderboard.js",
         "src/profile.js",
