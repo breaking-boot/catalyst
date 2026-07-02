@@ -109,6 +109,7 @@ async function initEnhancer() {
   await loadFrameDebugFlag();
   if (enhancerStopped) return;
   chrome.storage.onChanged.addListener(handleSettingsChange);
+  document.addEventListener("visibilitychange", handleVisibilityChange);
   restoreBossPanel();
   syncRouteScopedUi();
   resetBossRefreshTimer(true);
@@ -173,6 +174,15 @@ function requestRouteScopedData() {
   }
   setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
   setTrackedTimeout(() => requestNativeLeaderboardData(), 150);
+}
+
+// Refresh boss data when the tab regains focus. Forced, so a new event that
+// began while the tab was hidden is picked up too (matches the documented
+// "tab focus resumes polling" behavior). Tab focus is infrequent and
+// user-driven, so the one request it costs during downtime is negligible.
+function handleVisibilityChange() {
+  if (enhancerStopped || document.hidden) return;
+  requestBossProgress(true);
 }
 
 // Live-apply a settings change from the popup/options page (chrome.storage.sync).

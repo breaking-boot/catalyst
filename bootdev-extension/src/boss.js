@@ -14,6 +14,11 @@ let bossRefreshTimer = null;
 let bossUiState = { minimized: false, settingsOpen: false, x: null, y: null };
 let bossUiLoaded = false;
 let bossAuthUnavailableUntil = 0;
+// Whether the last response described an active event. null = unknown (poll to
+// find out); false = between events, so routine polls are skipped until a forced
+// re-check (navigation / manual Refresh) or boot.dev's own fetch shows a new one.
+let bossEventActive = null;
+let bossInactiveNotified = false; // dedupe the "no active event" toast per session
 // Authoritative in-memory copy of the persisted boss state. chrome.storage is a
 // write-through cache; reading from memory avoids the read-modify-write race
 // between the refresh interval, the manual Refresh button, and near-high notify.
@@ -42,12 +47,22 @@ function resetBossRefreshTimer(fetchNow = false) {
   if (!isFeatureEnabled("bossTracker")) return;
   if (Date.now() < bossAuthUnavailableUntil) return;
   if (fetchNow) {
-    setTrackedTimeout(requestBossProgress, 1200);
+    // A forced re-check: confirms whether an event is running even between events.
+    setTrackedTimeout(() => requestBossProgress(true), 1200);
   }
   bossRefreshTimer = setTrackedInterval(requestBossProgress, BOSS_REFRESH_MS);
 }
 
-function requestBossProgress() {
+// Start (or keep) the poll interval for an active event, without an immediate
+// fetch — used after a response reveals a newly-active event so polling resumes.
+function ensureBossPollingActive() {
+  if (bossRefreshTimer) return;
+  if (!isFeatureEnabled("bossTracker")) return;
+  if (Date.now() < bossAuthUnavailableUntil) return;
+  bossRefreshTimer = setTrackedInterval(requestBossProgress, BOSS_REFRESH_MS);
+}
+
+function requestBossProgress(force = false) {
   if (!isFeatureEnabled("bossTracker")) {
     clearBossRefreshTimer();
     return;
@@ -58,6 +73,10 @@ function requestBossProgress() {
   }
   // Don't poll while the tab is hidden; the next visible tick will refresh.
   if (document.hidden) return;
+  // Between events (known inactive), only forced re-checks (navigation, manual
+  // Refresh, tab focus) fetch — routine ticks stay quiet so downtime is near-zero
+  // standing load until a new event begins.
+  if (!force && bossEventActive === false) return;
   requestApiJson(BOSS_PROGRESS_URL);
 }
 
@@ -77,6 +96,8 @@ async function restoreBossPanel() {
 // ===========================================================================
 async function handleBossProgress(json) {
   if (!isFeatureEnabled("bossTracker")) return;
+  const active = isBossEventActive(json);
+  bossEventActive = active;
   const rewards = getBossRewards(json);
   const cur = {
     eventId: json?.Event?.UUID ?? json?.Event?.StartsAt ?? "unknown-event",
@@ -86,6 +107,7 @@ async function handleBossProgress(json) {
     bossMaxHp: num(json?.Event?.HealthPoints),
     lastChestTier: getLastChestTier(rewards),
     nextChestTier: getNextChestTier(rewards),
+    expiresAt: getEventExpiry(json),
   };
 
   let state = bossState || newEventState(cur.eventId);
@@ -108,13 +130,45 @@ async function handleBossProgress(json) {
   if (cur.bossMaxHp != null) state.bossMaxHp = cur.bossMaxHp;
   state.lastChestTier = cur.lastChestTier;
   state.nextChestTier = cur.nextChestTier;
+  state.eventActive = active;
+  state.expiresAt = cur.expiresAt;
   state.updatedAt = Date.now();
+
+  if (active) {
+    // A live event: keep polling and watch for the near-high moment.
+    bossInactiveNotified = false;
+    ensureBossPollingActive();
+  } else {
+    // Between events: stop the standing poll and say so once.
+    clearBossRefreshTimer();
+    notifyBossInactiveOnce();
+  }
 
   bossState = state;
   await chromeSet(BOSS_KEY, { state });
   if (enhancerStopped) return;
   renderBossPanel(state);
-  maybeNotifyNearHigh(state);
+  if (active) maybeNotifyNearHigh(state);
+}
+
+// An event is active until its ExpiresAt passes. Missing/unparseable expiry is
+// treated as active so a schema change never wrongly hides a running event.
+function getEventExpiry(json) {
+  const raw = json?.Event?.ExpiresAt;
+  const t = raw ? Date.parse(raw) : NaN;
+  return Number.isFinite(t) ? t : null;
+}
+
+function isBossEventActive(json) {
+  const expiry = getEventExpiry(json);
+  if (expiry == null) return true;
+  return Date.now() < expiry;
+}
+
+function notifyBossInactiveOnce() {
+  if (bossInactiveNotified) return;
+  bossInactiveNotified = true;
+  toast("No active boss event right now. The tracker will resume when the next event starts.");
 }
 
 function newEventState(eventId) {
@@ -176,6 +230,11 @@ async function renderBossPanel(s) {
     const nextChestProgress = getProgressPct(s.damage, s.nextChestAt);
     const bossProgress = getProgressPct(s.damage, s.bossMaxHp);
     const lastUpdated = s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "unknown";
+    const metaText = s.eventActive === false
+      ? (s.expiresAt
+          ? `No active event — ended ${new Date(s.expiresAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
+          : "No active event")
+      : `Last updated ${lastUpdated}`;
     const settingsMarkup = bossUiState.settingsOpen
       ? `<div class="be-boss-settings-panel">
           <div class="be-boss-manual">
@@ -218,7 +277,7 @@ async function renderBossPanel(s) {
         ${renderBossProgress("Next chest", nextChestProgress)}
         ${renderBossProgress("Boss defeat", bossProgress)}
       </div>
-      <div class="be-boss-meta">Last updated ${escapeHtml(lastUpdated)}</div>
+      <div class="be-boss-meta">${escapeHtml(metaText)}</div>
       ${settingsMarkup}`;
 
     applyBossPanelPosition(panel);
@@ -258,7 +317,8 @@ function bindBossPanelControls(panel, state) {
 
   const refresh = panel.querySelector("#be-boss-refresh");
   if (refresh) {
-    refresh.onclick = () => requestBossProgress();
+    // A manual refresh is a forced re-check, even between events.
+    refresh.onclick = () => requestBossProgress(true);
   }
 
   const saveHighs = panel.querySelector("#be-boss-save-highs");
