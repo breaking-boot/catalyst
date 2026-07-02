@@ -158,7 +158,18 @@ body.be-settings-options main {
 .be-settings-foot {
   margin-top: 12px;
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.be-settings-version {
+  color: #9ca3af;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.be-settings-options .be-settings-foot {
+  justify-content: flex-start;
+  margin-top: 18px;
 }
 .be-settings-link {
   border: 1px solid rgba(229, 174, 60, 0.55);
@@ -175,4 +186,14 @@ body.be-settings-options main {
 .be-settings-link:hover {
   border-color: #e5ae3c;
   color: #fff;
+}
+.be-settings-link:focus-visible {
+  outline: 2px solid #e5ae3c;
+  outline-offset: 2px;
+}
+
+/* Maintainer preview: drop the bundled boot.dev texture, gradient only. */
+body.be-settings.be-native-art-off {
+  background: linear-gradient(180deg, rgba(18, 22, 32, 0.97), rgba(24, 27, 38, 0.95));
+  background-blend-mode: normal;
 }

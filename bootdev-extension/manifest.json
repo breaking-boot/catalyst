@@ -37,6 +37,7 @@
         "src/profile.js",
         "src/boss.js",
         "src/nextLesson.js",
+        "src/updateCheck.js",
         "src/content.js"
       ],
       "css": ["src/styles.css"],

@@ -3,45 +3,25 @@
 // It reads/writes the same be_settings object in chrome.storage.sync that the
 // content script's settings.js consumes; the content script live-applies changes
 // via storage.onChanged. Renders whichever containers the host page provides:
-// #be-features (always) and #be-comparison-boards (options page only).
+// #be-features (always), #be-comparison-boards + #be-update-settings (options only).
 //
-// No inline script/handlers (popup runs under the default MV3 CSP). Keep the key
-// and defaults below in sync with src/settings.js.
+// No inline script/handlers (popup runs under the default MV3 CSP). Defaults,
+// feature labels, and board ordering come from settings-schema.js, the single
+// source of truth shared with the content script.
 
 const SETTINGS_KEY = "be_settings";
+const NATIVE_ART_FLAG_KEY = "be_use_bundled_native_art";
 
-const DEFAULTS = {
-  bossTracker: true,
-  allTimeLeaderboard: true,
-  personalLeaderboards: true,
-  profileXp: true,
-  nextLesson: true,
-  comparisons: true,
-  comparisonsAllTime: true,
-  comparisonsPersonal: true,
-  comparisonsLeagueDaily: true,
-  comparisonsLeagueStanding: true,
-  comparisonsGlobalDaily: true,
-  comparisonsGlobalKarma: true,
-};
+const DEFAULTS = SETTINGS_DEFAULTS;
+const FEATURES = FEATURE_TOGGLES;
 
-const FEATURES = [
-  { key: "bossTracker", label: "Boss event tracker", desc: "Floating panel: boss aura, damage, and chest progress." },
-  { key: "allTimeLeaderboard", label: "Top All-Time Learners Leaderboard", desc: "Cumulative-XP standings boot.dev doesn't show natively." },
-  { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
-  { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
-  { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
-  { key: "comparisons", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
-];
-
-// Ordered top-to-bottom to match how the boards appear on the leaderboard page.
-const COMPARISON_BOARDS = [
-  { key: "comparisonsPersonal", label: "Personal Leaderboards (Catalyst added)" },
-  { key: "comparisonsLeagueDaily", label: "League · Top Daily Learners" },
-  { key: "comparisonsLeagueStanding", label: "League · Top League Learners" },
-  { key: "comparisonsGlobalDaily", label: "Global · Top Daily Learners" },
-  { key: "comparisonsAllTime", label: "Global · Top All-Time Learners (Catalyst added)" },
-  { key: "comparisonsGlobalKarma", label: "Global · Top Community Members" },
+// Options-page-only opt-in. Default OFF; the only setting that reaches off-device.
+const UPDATE_SETTINGS = [
+  {
+    key: "versionCheck",
+    label: "Automatic update checks",
+    desc: "Once a day, ask GitHub if a newer Catalyst release exists and notify you. Off by default; makes one request to github.com and nothing else.",
+  },
 ];
 
 let settings = { ...DEFAULTS };
@@ -50,13 +30,7 @@ function normalize(raw) {
   const out = { ...DEFAULTS };
   if (raw && typeof raw === "object") {
     for (const key of Object.keys(DEFAULTS)) {
-      if (typeof raw[key] === "boolean") {
-        out[key] = raw[key];
-      } else if (key.startsWith("comparisons")) {
-        // Migrate 0.5.0's diffs* keys to the renamed comparisons* keys.
-        const legacy = key.replace(/^comparisons/, "diffs");
-        if (typeof raw[legacy] === "boolean") out[key] = raw[legacy];
-      }
+      if (typeof raw[key] === "boolean") out[key] = raw[key];
     }
   }
   return out;
@@ -87,7 +61,7 @@ function makeToggle({ key, label, desc }) {
 
   const input = document.createElement("input");
   input.type = "checkbox";
-  input.checked = settings[key] !== false;
+  input.checked = settings[key] === true;
   input.dataset.key = key;
 
   const knob = document.createElement("span");
@@ -108,9 +82,20 @@ function updateComparisonDisabledState() {
   const section = document.getElementById("be-comparison-boards");
   if (!section) return;
   section.classList.toggle("be-disabled", !masterOn);
+  section.setAttribute("aria-disabled", masterOn ? "false" : "true");
   section.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
     cb.disabled = !masterOn;
   });
+}
+
+function renderVersionBanner() {
+  const el = document.getElementById("be-version");
+  if (!el) return;
+  let version = "";
+  try {
+    version = chrome.runtime.getManifest().version;
+  } catch (_) {}
+  el.textContent = version ? `Version ${version}` : "";
 }
 
 function render() {
@@ -120,13 +105,24 @@ function render() {
   const boards = document.getElementById("be-comparison-boards");
   if (boards) boards.replaceChildren(...COMPARISON_BOARDS.map(makeToggle));
 
+  const updates = document.getElementById("be-update-settings");
+  if (updates) updates.replaceChildren(...UPDATE_SETTINGS.map(makeToggle));
+
   updateComparisonDisabledState();
+  renderVersionBanner();
 
   const openOptions = document.getElementById("be-open-options");
   if (openOptions) {
     openOptions.addEventListener("click", () => chrome.runtime.openOptionsPage());
   }
 }
+
+// Maintainer-only preview of the "boot.dev declined asset bundling" fallback:
+// set be_use_bundled_native_art=false in chrome.storage.local to drop the
+// bundled map texture from the settings pages (mirrors the in-page behavior).
+chrome.storage.local.get(NATIVE_ART_FLAG_KEY, (o) => {
+  if (o?.[NATIVE_ART_FLAG_KEY] === false) document.body.classList.add("be-native-art-off");
+});
 
 chrome.storage.sync.get(SETTINGS_KEY, (o) => {
   settings = normalize(o?.[SETTINGS_KEY]);
