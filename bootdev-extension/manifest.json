@@ -52,7 +52,8 @@
     },
     {
       "resources": ["assets/frames/*.png"],
-      "matches": ["https://www.boot.dev/*"]
+      "matches": ["https://www.boot.dev/*"],
+      "use_dynamic_url": true
     }
   ]
 }

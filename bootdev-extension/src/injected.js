@@ -15,6 +15,30 @@
     "/v1/boss_events_progress",
     "/v1/dashboard_content",
   ]);
+  // Passively-observed responses are only broadcast for the handful of paths the
+  // content-script router actually consumes, so unrelated (and possibly
+  // sensitive) api.boot.dev payloads are never re-exposed on the window bus.
+  // Responses to our own explicit requests (those carry a requestId) always
+  // relay regardless. Keep in sync with the router in content.js.
+  const RELAY_PATH_PATTERNS = [
+    /^\/v1\/leaderboard_xp\/[^/]+$/,
+    /^\/v1\/leaderboard_karma\/[^/]+$/,
+    /^\/v1\/league_leaderboard_xp\/[^/]+$/,
+    /^\/v1\/users\/public\/[^/]+(?:\/stats)?$/,
+    /^\/v1\/boss_events_progress$/,
+    /^\/v1\/dashboard_content$/,
+    /^\/v1\/users\/lessons\/[^/]+$/,
+    /^\/v1\/course_progress_by_lesson\/[^/]+$/,
+  ];
+
+  function shouldRelay(url) {
+    try {
+      const pathname = new URL(url, window.location.origin).pathname;
+      return RELAY_PATH_PATTERNS.some((re) => re.test(pathname));
+    } catch (_) {
+      return false;
+    }
+  }
   const HEADER_ALLOWLIST = new Set([
     "accept",
     "authorization",
@@ -32,6 +56,9 @@
     } catch (_) {
       return; // not JSON, ignore
     }
+    // Passive broadcasts (no requestId) are limited to consumed paths; explicit
+    // request responses (with a requestId) always go through to their caller.
+    if (!requestId && !shouldRelay(url)) return;
     window.postMessage(
       { source: TAG, payload: { url, method, status, json, requestId } },
       window.location.origin
@@ -171,6 +198,13 @@
     try {
       const parsed = new URL(url, window.location.origin);
       if (parsed.hostname !== API) return;
+      // The bridge replays authenticated GETs, so restrict it to the same paths
+      // the extension actually consumes. Any same-origin script can post
+      // BE_FETCH_JSON, but it can only reach the allowlisted endpoints (which it
+      // could already read from the page's own session anyway) — not arbitrary
+      // boot.dev API paths. Catalyst only ever requests allowlisted paths, so
+      // there is no functional cost.
+      if (!shouldRelay(parsed.href)) return;
 
       if (requiresAuth(parsed.pathname) && !hasAuthHeaders()) {
         queueAuthFetch(parsed.href, requestId);

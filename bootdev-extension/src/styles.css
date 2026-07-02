@@ -479,8 +479,11 @@
   padding: 12px 14px;
   border-radius: 8px;
   border: 1px solid rgba(229, 174, 60, 0.35);
+  /* Bundled locally (assets/maptexture2.webp), resolved relative to this CSS file
+     in the extension, so there is no remote dependency and nothing to 404 on a
+     boot.dev redeploy. Content-script CSS assets need no web_accessible_resources. */
   background:
-    url("https://www.boot.dev/img/maptexture2.webp") 50% / cover no-repeat,
+    url("../assets/maptexture2.webp") 50% / cover no-repeat,
     linear-gradient(180deg, rgba(18, 22, 32, 0.97), rgba(24, 27, 38, 0.95));
   background-blend-mode: overlay;
   color: #e8ecf1;
@@ -550,6 +553,17 @@
 .be-boss-head button:hover {
   border-color: #e5ae3c;
   background: rgba(229, 174, 60, 0.12);
+}
+.be-boss-head button:focus-visible,
+.be-boss-manual button:focus-visible {
+  outline: 2px solid #e5ae3c;
+  outline-offset: 2px;
+}
+/* Maintainer preview (be_use_bundled_native_art=false): drop the bundled
+   boot.dev map texture, leaving just the gradient. */
+.be-boss-panel.be-native-art-off {
+  background: linear-gradient(180deg, rgba(18, 22, 32, 0.97), rgba(24, 27, 38, 0.95));
+  background-blend-mode: normal;
 }
 #be-boss-settings-toggle {
   font-size: 17px;

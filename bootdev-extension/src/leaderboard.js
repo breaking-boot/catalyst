@@ -133,6 +133,11 @@ function getAvatarUrl(entry) {
 }
 
 function getRoleFrameUrl(entry) {
+  // The rank frames are bundled boot.dev art; the maintainer preview flag drops
+  // the bundled copies to show the no-frame fallback (see useBundledNativeArt in
+  // utils.js). An API-supplied frame URL, if one ever appears, is still honored —
+  // so this mirrors a genuine removal of just the bundled assets.
+  if (!useBundledNativeArt) return getExplicitFrameUrl(entry);
   return (
     getExplicitFrameUrl(entry) ||
     ROLE_FRAME_URLS[getRoleFrameIndex(entry)] ||
