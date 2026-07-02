@@ -55,6 +55,28 @@ const ROLE_FRAME_INDEX_BY_ROLE = {
   archmage: 9,
 };
 
+// Per-tier avatar geometry, indexed like ROLE_FRAME_URLS. boot.dev keeps every
+// rank badge the same overall size by varying ring thickness: low tiers have a
+// thin ring in a small footprint, archmage a thick ring filling the frame. The
+// bundled PNGs reflect that — the opaque ring's outer diameter grows from ~146px
+// (apprentice) to ~253px (archmage) within the same 256px canvas, while the
+// transparent hole stays ~42–46%. Scaling every canvas uniformly therefore makes
+// low-tier badges render small. These values (measured from the PNGs) scale each
+// frame so the ring outer lands at a consistent ~49px and size the inner avatar
+// to that frame's hole, so combos match across tiers like the native site.
+// FRAME_DISPLAY_SCALE is the CSS transform scale for the frame <img>;
+// FRAME_INNER_PCT is the inner avatar diameter as a % of the 40px avatar box.
+// Values are trimmed ~10% of the boost above Archmage's 1.25 (Archmage is
+// unchanged, the anchor that already matched native); low tiers were rendering
+// a touch larger than the native ring, so their outer edge is pulled in slightly.
+const FRAME_DISPLAY_SCALE = [2.08, 2.01, 1.73, 1.68, 1.67, 1.54, 1.57, 1.37, 1.33, 1.25];
+// Inner % comes from each frame's fully-opaque hole, but the thick top-tier rings
+// have a soft inner edge, so their true visual hole is a little larger than measured
+// and the avatar left a small gap. Bump the top tiers (archsage, mage, archmage) to
+// close it; the lower tiers already fill their ring cleanly.
+const FRAME_INNER_PCT = [96, 92, 80, 77, 77, 69, 70, 64, 59, 57];
+const DEFAULT_INNER_PCT = 62.5; // legacy fixed size, for an unrecognized frame
+
 let cachedAllTimeEntries = [];
 let cachedDailyEntries = [];
 let cachedKarmaEntries = [];
@@ -657,12 +679,30 @@ function renderLeaderAvatar(entry, displayName) {
     ? `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(name)} avatar" class="be-leader-avatar-img">`
     : `<span class="be-leader-avatar-fallback">${escapeHtml(name.slice(0, 1).toUpperCase() || "?")}</span>`;
 
-  const frameMarkup = frameUrl
-    ? `<img src="${escapeHtml(frameUrl)}" alt="" class="be-leader-frame" aria-hidden="true">`
+  // Size the frame and the inner avatar to this tier's ring geometry so combos
+  // match across tiers. With no frame (unrecognized tier, or the no-art preview)
+  // the avatar fills the box at the combo's overall size instead of the small
+  // ring-hole size, so it doesn't look shrunken next to framed rows.
+  const frameIndex = getRoleFrameIndex(entry);
+  const hasFrame = Boolean(frameUrl);
+  let avatarClass = "be-leader-avatar";
+  let innerStyle = "";
+  let frameStyle = "";
+  if (!hasFrame) {
+    avatarClass += " be-no-frame";
+  } else if (frameIndex >= 0 && frameIndex < FRAME_INNER_PCT.length) {
+    innerStyle = ` style="--be-avatar-inner: ${FRAME_INNER_PCT[frameIndex]}%"`;
+    frameStyle = ` style="--be-frame-scale: ${FRAME_DISPLAY_SCALE[frameIndex]}"`;
+  } else {
+    innerStyle = ` style="--be-avatar-inner: ${DEFAULT_INNER_PCT}%"`;
+  }
+
+  const frameMarkup = hasFrame
+    ? `<img src="${escapeHtml(frameUrl)}" alt="" class="be-leader-frame"${frameStyle} aria-hidden="true">`
     : "";
 
-  return `<span class="be-leader-avatar">
-    <span class="be-leader-avatar-inner">${avatarMarkup}</span>
+  return `<span class="${avatarClass}">
+    <span class="be-leader-avatar-inner"${innerStyle}>${avatarMarkup}</span>
     ${frameMarkup}
   </span>`;
 }

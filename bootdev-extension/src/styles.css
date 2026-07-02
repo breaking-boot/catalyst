@@ -199,22 +199,26 @@
   border-radius: 50%;
   background: transparent;
 }
+/* Inner avatar diameter is per-tier (set via --be-avatar-inner) so it fills each
+   frame's ring hole; centered with translate so the size can vary freely. */
 .be-leader-avatar-inner {
   position: absolute;
-  top: 25%;
-  left: 25%;
-  width: 50%;
-  height: 50%;
+  top: 50%;
+  left: 50%;
+  width: var(--be-avatar-inner, 62.5%);
+  height: var(--be-avatar-inner, 62.5%);
   overflow: hidden;
   border-radius: 50%;
   background: #1f2937;
-  transform: scale(1.25);
+  transform: translate(-50%, -50%);
 }
 .be-leader-avatar-img {
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
+/* Frame scale is per-tier (--be-frame-scale) so each ring's outer edge lands at a
+   consistent size and low-tier badges no longer render small. */
 .be-leader-frame {
   position: absolute;
   inset: 0;
@@ -222,7 +226,14 @@
   height: 100%;
   object-fit: cover;
   pointer-events: none;
-  transform: scale(1.25);
+  transform: scale(var(--be-frame-scale, 1.25));
+}
+/* No frame (unrecognized tier or the no-art preview): fill the box at roughly the
+   combo's overall size, rather than the small ring-hole size. */
+.be-leader-avatar.be-no-frame .be-leader-avatar-inner {
+  width: 100%;
+  height: 100%;
+  transform: translate(-50%, -50%) scale(1.2);
 }
 .be-leader-avatar-fallback {
   display: flex;
