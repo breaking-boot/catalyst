@@ -671,13 +671,24 @@ function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdent
   return top25;
 }
 
+// Default avatar for users with no profile image, matching boot.dev's native
+// look (a generic silhouette) instead of an initial-letter tile. Inline SVG so
+// there is no remote dependency: boot.dev hot-links a third-party image for this,
+// which we deliberately avoid (keeps the "transmits nothing off-device" guarantee).
+const DEFAULT_AVATAR_MARKUP =
+  '<span class="be-leader-avatar-fallback" aria-hidden="true">' +
+  '<svg viewBox="0 0 24 24" class="be-leader-avatar-silhouette" focusable="false">' +
+  '<circle cx="12" cy="9" r="5.7"/>' +
+  '<circle cx="12" cy="24.3" r="10"/>' +
+  '</svg></span>';
+
 function renderLeaderAvatar(entry, displayName) {
   const avatar = getAvatarUrl(entry);
   const frameUrl = getRoleFrameUrl(entry);
   const name = displayName || getDisplayName(entry, getHandle(entry));
   const avatarMarkup = avatar
     ? `<img src="${escapeHtml(avatar)}" alt="${escapeHtml(name)} avatar" class="be-leader-avatar-img">`
-    : `<span class="be-leader-avatar-fallback">${escapeHtml(name.slice(0, 1).toUpperCase() || "?")}</span>`;
+    : DEFAULT_AVATAR_MARKUP;
 
   // Size the frame and the inner avatar to this tier's ring geometry so combos
   // match across tiers. With no frame (unrecognized tier, or the no-art preview)
