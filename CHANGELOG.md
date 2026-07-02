@@ -1,5 +1,31 @@
 # Changelog
 
+## v0.6.0 - Boss downtime, update checks, privacy/security hardening
+
+### Boss tracker
+- The tracker now detects **when no event is running** (via the event's `ExpiresAt`) and **stops polling between events**, showing a one-time "no active boss event" toast and keeping the last event's stats visible with an "ended" note. Polling resumes automatically when a new event starts — on navigation, a manual Refresh, tab focus, or boot.dev's own fetch. Standing API load between events is now effectively zero.
+- Boss data now also refreshes when you return to a backgrounded tab, instead of waiting up to two minutes for the next poll.
+
+### Updates
+- Added an **opt-in automatic update check** (options page, off by default). When enabled it asks GitHub once a day whether a newer Catalyst release exists and toasts a link if so. It uses GitHub's public API over standard CORS, so **no new permission** was added. When it's off, a one-time tip points to the opt-in, and both settings pages now show the installed version.
+- Renamed the popup's link to the options page from "Per-board comparison options" to **"Additional options"**.
+
+### Fixes
+- **Learners with no profile image now show a default silhouette** (matching the native site) instead of an initial-letter tile. It is an inline SVG, so unlike the native site it adds no third-party image request.
+- **Leaderboard avatars are now sized per rank tier.** boot.dev keeps every rank badge the same overall size by varying ring thickness; Catalyst was scaling all frames uniformly, so lower-tier learners (below Archmage) rendered noticeably smaller than their neighbors. Each frame and its inner avatar are now sized to that tier's ring geometry, and an avatar with no frame (unrecognized tier, or the no-art preview) fills the box at the combo's size instead of the small ring-hole size.
+
+### Security & privacy
+- The page interceptor now **only rebroadcasts the API responses Catalyst actually uses**, instead of every `api.boot.dev` response, shrinking what any other extension on the page could observe. The page-context request bridge is likewise **restricted to those same endpoints**, so it can't be used by another script on the page as a proxy to arbitrary authenticated boot.dev API paths.
+- The bundled avatar frames are now served via a **dynamic resource URL** (`use_dynamic_url`), so the extension ID no longer leaks into boot.dev's DOM through frame image URLs.
+- The **boss panel's background texture is now bundled locally** instead of hot-linked from boot.dev — the last remote dependency is gone.
+- Added a plain-language **Privacy** section to the README, an "unofficial / not affiliated" note, an art-attribution note, and an MIT `LICENSE`.
+
+### Maintainability
+- Settings **defaults, labels, and board ordering now live in one shared `settings-schema.js`** used by both the content script and the settings pages, removing the two-copies drift risk. Dropped the now-unneeded `diffs*`→`comparisons*` migration.
+- Skipped the redundant **initial-load double-fetch** of native leaderboards (a board boot.dev just fetched is no longer re-requested within 10s).
+- The Alt+N key listener is now torn down on context invalidation; added `FRAGILE`/resilience comments to the native-card and personal-panel DOM anchors; extracted magic numbers into named constants; added `:focus-visible` outlines and `aria-disabled` to the settings UI.
+- Added a maintainer-only `be_use_bundled_native_art` flag (chrome.storage.local) to preview the no-bundled-art fallback (gradient boss panel, no rank frames) — the path taken if boot.dev declines asset bundling.
+
 ## v0.5.1 - Leaderboard layout, settings polish, and fixes
 
 ### Layout

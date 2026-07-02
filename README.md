@@ -4,6 +4,8 @@
 
 # Catalyst for Boot.dev
 
+> **Unofficial.** Catalyst is a community project and is not affiliated with, endorsed by, or supported by Boot.dev. It reads only your own boot.dev session data, locally in your browser.
+
 A Manifest V3 Chrome extension that augments boot.dev with a few quality-of-life additions:
 
 1. **All-time XP leaderboard** - adds a global all-time XP section to the leaderboard page.
@@ -76,6 +78,10 @@ chrome://extensions
 6. Open or refresh `https://www.boot.dev`.
 
 ## Updating
+
+Catalyst is installed manually, so it does not update itself. The installed version is shown at the bottom of the settings popup and options page; compare it against the latest release on the [releases page](https://github.com/breaking-boot/catalyst/releases). You can also turn on **Automatic update checks** in the options page (off by default) to be notified in-app when a newer release is available — this makes one request a day to GitHub and nothing else.
+
+To update:
 
 1. Remove or replace the old unzipped `catalyst-v<old-version>` folder.
 2. Unzip the new `catalyst-v<version>.zip`.
@@ -153,6 +159,21 @@ page fetch/XHR -> injected.js clone -> window.postMessage -> content.js router -
 `injected.js` runs in the page context and wraps `fetch` plus `XMLHttpRequest`. It clones JSON responses from `api.boot.dev` and relays them to `content.js`. `content.js` runs as the content script, routes each response by URL, injects UI, stores boss-event state in `chrome.storage.local`, and requests route-specific refreshes through the page-context script when needed.
 
 For Next Lesson, `/v1/dashboard_content` is treated as the authoritative source because its `CurrentLessonUUID` matches the dashboard Continue Learning target. Lesson-page APIs such as `/v1/users/lessons/{lessonId}` and `/v1/course_progress_by_lesson/{lessonId}` are used only as signals to refresh dashboard content.
+
+## Privacy
+
+Catalyst is built to keep your data on your device:
+
+- **It reads only your own boot.dev session data.** The extension observes the JSON responses that the boot.dev page already fetches with your existing session (leaderboards, public profiles, boss progress, dashboard content) and, on the leaderboard page, requests a few of those same public endpoints itself. It never asks for or handles your password, and your auth token is never stored, logged, or copied out of the page.
+- **It stores only settings and small caches locally.** Feature on/off flags live in `chrome.storage.sync` (so they roam across your Chrome profile) as plain booleans — no personal data. Small caches (boss state, saved personal-leaderboard handles, your current handle, the next-lesson link) live in `chrome.storage.local` on your machine.
+- **It transmits nothing off-device** — with one opt-in exception: if you enable **Automatic update checks**, it makes one request a day to GitHub's public API to compare version numbers. That request contains no personal data. It is off by default.
+- **Permissions are minimal:** `storage`, and host access to `https://www.boot.dev/*` only. Catalyst adds no analytics and no tracking.
+
+## Attribution & License
+
+- Catalyst's own code is released under the [MIT License](LICENSE) © Aaron Fleming.
+- The bundled avatar role frames (`assets/frames/`) and map texture (`assets/maptexture2.webp`) are Boot.dev's artwork, included so the injected UI matches the site and does not break when boot.dev redeploys. They remain the property of Boot.dev and are used with that understanding; they are not covered by the MIT license above.
+- "Boot.dev" is a trademark of its owner. Catalyst is an unofficial, unaffiliated project (see the note at the top of this README).
 
 ## Development
 
