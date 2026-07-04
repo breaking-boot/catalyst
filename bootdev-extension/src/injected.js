@@ -24,7 +24,7 @@
     /^\/v1\/leaderboard_xp\/[^/]+$/,
     /^\/v1\/leaderboard_karma\/[^/]+$/,
     /^\/v1\/league_leaderboard_xp\/[^/]+$/,
-    /^\/v1\/users\/public\/[^/]+(?:\/stats)?$/,
+    /^\/v1\/users\/public\/[^/]+(?:\/stats|\/activity_heatmap)?$/,
     /^\/v1\/boss_events_progress$/,
     /^\/v1\/dashboard_content$/,
     /^\/v1\/users\/lessons\/[^/]+$/,

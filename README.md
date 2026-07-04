@@ -117,7 +117,13 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 - Also on the leaderboard page, a **Personal Leaderboards** section lets you track specific boot.dev handles across three boards: daily XP, all-time XP, and karma. Handles are stored in `chrome.storage.local`.
 - On any public profile page (`https://www.boot.dev/u/<username>`), an **Add to Personal Leaderboards** button lets you save that user directly.
-- Personal **Top Daily Learners** uses `/v1/leaderboard_xp/day` when a saved handle appears there; otherwise it shows observed XP gained today from saved profile snapshots. **Top All-Time Learners** uses public profile XP. **Top Community Members** uses public stats karma.
+- **Top All-Time Learners** uses public profile XP. **Top Community Members** uses public stats karma. Both are exact.
+- Personal **Top Daily Learners** is a **best-effort estimate for users other than yourself**, because boot.dev's daily board is a rolling last-24-hours window and there is no public API for another user's daily XP unless they are on a daily leaderboard (global top-25, or your league's). Each value is labeled with how it was obtained (the label sits to the left of the value), in decreasing accuracy:
+  - **Plain value** — exact: the user is on the live global or league daily leaderboard right now, so Catalyst shows the same number boot.dev does.
+  - **`past Nhr` note** — measured: the difference between Catalyst's own oldest and newest total-XP observations of that user within the last 24 hours. Accurate for what it saw, but blind to XP earned before the window started. Seeing a user on a daily board even once seeds a full 24h window (the board response reveals their total from exactly 24h ago), so these get good fast.
+  - **`est.` note** — estimated from the user's public activity heatmap: completions today x an average XP per lesson (`ESTIMATED_XP_PER_LESSON`, currently a placeholder of 115 — being calibrated against real base-XP data), plus the daily first-clear bonus and streak multiplier. Resubmitted lessons count as activity but grant no XP, so this can overestimate. The heatmap buckets by calendar day, so activity from late yesterday that is still inside the rolling 24h window is not counted.
+  - **`–`** — unavailable: Catalyst does not have enough data to show a value yet. Values improve the more you (and the boot.dev page itself) load data Catalyst can observe; hover any value for an explanation.
+- All observations stay on your device (see **Privacy**); Catalyst never reports anything anywhere.
 - Invalid, empty, duplicate, or nonexistent handles are rejected before being saved. If boot.dev returns an auth error, Catalyst retries once and then asks you to refresh the page.
 
 #### XP and Karma Comparisons

@@ -468,6 +468,21 @@
   align-items: flex-end;
   gap: 2px;
 }
+/* Value line: the XP source label ("past 17hr" / "est.") sits on the same line
+   as the daily value, to its left, so all three boards keep matching row
+   heights. */
+.be-personal-value-line {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.be-personal-value-note {
+  color: #6b7280;
+  font-size: 11px;
+  line-height: 1.1;
+  white-space: nowrap;
+}
+.be-personal-value-note:empty { display: none; }
 
 @media (min-width: 1280px) {
   .be-native-grid {

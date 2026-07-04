@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.6.1 - Honest daily XP for tracked users
+
+### Personal Leaderboards
+- **Fixed Top Daily Learners showing 0 xp for everyone but yourself.** The old logic set a total-XP baseline at your *first sighting* of each tracked user each day, so anything they earned before you opened the leaderboard was invisible — every browser showed its own owner correct and all friends at 0. Daily XP for others is now derived from a rolling store of total-XP snapshots (boot.dev's daily board is a rolling last-24-hours window), and every value carries an XP source label:
+  - **exact** (plain) when the user is on the live global **or league** daily board;
+  - **measured** (`past Nhr` note) — the XP delta between Catalyst's oldest and newest observations inside the 24h window. A single daily-board sighting seeds a full window: the board reports both `XPEarned` and total `XP`, so their total from exactly 24h ago is `XP − XPEarned` (recorded as a backdated snapshot);
+  - **estimated** (`est.` note) from the user's public **activity heatmap** (`/v1/users/public/{u}/activity_heatmap`, a new consumed endpoint): completions today × an average XP per lesson (placeholder `ESTIMATED_XP_PER_LESSON = 115`, pending calibration) with the daily first-clear bonus and streak multiplier. Resubmits count as activity but grant no XP, so estimates can run high — hence the label;
+  - **unavailable** (`–`) when Catalyst does not have enough data to show a value. Tooltips on every value explain the number. Source labels render on the same line as the value, to its left, so the three personal boards keep matching row heights.
+- Snapshots are harvested from every XP source Catalyst already sees (profile fetches, global/league daily boards, all-time boards), capped at 60 per user, and pruned past ~24h; worst-case storage cost is a few KB per tracked user in `chrome.storage.local`. Adding a handle immediately re-harvests boards already received this session, so a league-mate shows their exact daily value on add instead of an estimate until the next reload. The latest daily-board values also persist for a few minutes, so exact values survive a page refresh instead of briefly showing the measured label while the boards re-fetch.
+- A measured window shorter than 18h defers to a larger heatmap estimate (a short window understates the day); at 18h+ the measurement wins.
+- The interceptor relay/request-bridge allowlist and router gained the activity-heatmap path (public endpoint, same class as the profile/stats calls; no new permissions).
+- README now documents the accuracy ladder in plain language.
+
 ## v0.6.0 - Boss downtime, update checks, privacy/security hardening
 
 ### Boss tracker
