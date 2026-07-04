@@ -11,6 +11,39 @@ const LEAGUE_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/al
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
 const PERSONAL_CACHE_KEY = "be_personal_leaderboard_cache";
 const CURRENT_USER_HANDLE_KEY = "be_current_user_handle";
+
+// --- Personal daily-XP measurement (see computeDailyXpView) ---
+// The native daily board is a rolling last-24-hours window, so a tracked user's
+// "daily XP" can only be measured by diffing total-XP snapshots taken inside
+// that window. Snapshots are [timestampMs, totalXp] pairs per tracked user.
+const DAY_WINDOW_MS = 24 * 60 * 60 * 1000;
+// Keep a little slack past 24h so a backdated board snapshot (taken at exactly
+// now-24h) is still usable a few minutes later instead of being pruned instantly.
+const SNAPSHOT_MAX_AGE_MS = DAY_WINDOW_MS + 30 * 60 * 1000;
+const SNAPSHOT_CAP = 60;
+// A measured window narrower than this says nothing about the day; fall through
+// to the heatmap estimate instead of confidently showing "0 xp".
+const SNAPSHOT_MIN_WINDOW_MS = 30 * 60 * 1000;
+// A window at least this wide covers enough of the day to trust the measurement
+// over the (resubmit-inflated) heatmap estimate.
+const FULL_WINDOW_TRUST_MS = 18 * 60 * 60 * 1000;
+// Heatmap-based estimate inputs. Lesson/challenge completions have no public
+// per-day XP source, so the estimate is completions x average XP, plus boot.dev's
+// bonuses: a flat once-a-day first-clear bonus and a +1%/streak-day multiplier.
+// FIXME: ESTIMATED_XP_PER_LESSON is a placeholder — calibrate from the base-XP
+// spreadsheet as amounts are collected (see README "Top Daily Learners").
+const ESTIMATED_XP_PER_LESSON = 115;
+const DAILY_FIRST_CLEAR_BONUS_XP = 200;
+const STREAK_BONUS_CAP = 20; // percent; +1% per consecutive active day, capped
+const HEATMAP_REFRESH_MS = 10 * 60 * 1000;
+// The daily-board caches live in memory, but personal records (snapshots) are
+// persisted, so for a moment after a page refresh the measured tier has data
+// while the exact tier does not, and rows flash "past 24hr" until the boards
+// re-fetch. Persist a distilled handle->XPEarned map per daily board and honor
+// it briefly at load. Kept short: XPEarned drifts as the rolling window slides,
+// and live data (once received) is authoritative anyway.
+const DAILY_BOARD_CACHE_KEY = "be_daily_board_cache";
+const DAILY_BOARD_PERSIST_TTL_MS = 5 * 60 * 1000;
 // Avatar role frames, indexed to match ROLE_FRAME_INDEX_BY_ROLE below. Bundled
 // locally (assets/frames/<index>.png) and resolved to extension URLs so the
 // fallback never depends on boot.dev's build-hashed asset paths, which are
@@ -89,6 +122,8 @@ let cachedLeagueEntries = [];
 // page (no recent data) still refetches.
 const BOARD_FETCH_FRESH_MS = 10_000;
 let boardSeenAt = {};
+// Restored copy of DAILY_BOARD_CACHE_KEY: { daily|leagueDaily: { byHandle, seenAt } }.
+let persistedDailyBoards = {};
 function markBoardSeen(key) {
   boardSeenAt[key] = Date.now();
 }
@@ -398,6 +433,7 @@ function handleAllTimeLeaderboard(json) {
   cachedAllTimeEntries = entries;
   markBoardSeen("alltime");
   chromeSet(LEADERBOARD_CACHE_KEY, { entries, updatedAt: Date.now() });
+  harvestPersonalSnapshots(entries);
 
   renderAllTimeLeaderboard(entries);
 }
@@ -1000,22 +1036,35 @@ function ensurePersonalDivider() {
 // ===========================================================================
 // FEATURE 4: Manual personal leaderboards
 // ===========================================================================
-function handleDailyXpLeaderboard(json) {
-  const entries = getLeaderboardEntries(json);
-  cachedDailyEntries = entries;
-  markBoardSeen("daily");
+// Harvest total-XP snapshots for tracked users from any leaderboard response.
+// With `backdate` (daily boards only), each sighting also yields a second,
+// backdated point: XPEarned is the trailing-24h XP as of the response, so the
+// user's total exactly 24h ago was XP - XPEarned. That single sighting gives a
+// near-full measurement window even after the user drops off the board. Never
+// backdate an alltime board — there XPEarned equals XP, which would fabricate
+// a zero-XP point 24h ago. `asOf` is when the response was received; it anchors
+// the snapshot timestamps when harvesting a board cached earlier in the session.
+function harvestPersonalSnapshots(entries, { backdate = false, asOf = 0 } = {}) {
   let changed = false;
+  const now = Date.now();
+  const at = asOf || now;
 
   for (const entry of entries) {
     const handle = normalizeHandle(getHandle(entry));
     if (!handle || !isPersonalHandle(handle)) continue;
 
-    const dailyXp = num(entry?.XPEarned ?? entry?.XP ?? entry?.TotalXP);
-    if (dailyXp == null) continue;
+    const total = num(entry?.XP ?? entry?.TotalXP);
+    if (total == null) continue;
 
     const record = ensurePersonalRecord(handle);
-    record.dailyXp = dailyXp;
-    record.updatedAt = Date.now();
+    recordXpSnapshot(record, total, at);
+    if (backdate) {
+      const earned = num(entry?.XPEarned);
+      if (earned != null && earned >= 0 && earned <= total) {
+        recordXpSnapshot(record, total - earned, at - DAY_WINDOW_MS);
+      }
+    }
+    record.updatedAt = now;
     changed = true;
   }
 
@@ -1023,6 +1072,41 @@ function handleDailyXpLeaderboard(json) {
     savePersonalCache();
     schedulePersonalLeaderboardRender();
   }
+}
+
+// Re-harvest every board response received this session. Run when a handle is
+// added: the per-response harvests only cover handles tracked at arrival time,
+// so without this a new user already sitting on a cached board (a league-mate
+// especially) would show an estimate until the next page load refetches. The
+// boardSeenAt guard matters — cachedAllTimeEntries is restored from storage,
+// and harvesting a previous session's totals with a fresh timestamp would
+// poison the measured tier with stale points.
+function harvestCachedBoardSnapshots() {
+  if (boardSeenAt.daily) harvestPersonalSnapshots(cachedDailyEntries, { backdate: true, asOf: boardSeenAt.daily });
+  if (boardSeenAt.leagueDaily) harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true, asOf: boardSeenAt.leagueDaily });
+  if (boardSeenAt.alltime) harvestPersonalSnapshots(cachedAllTimeEntries, { asOf: boardSeenAt.alltime });
+  if (boardSeenAt.league) harvestPersonalSnapshots(cachedLeagueEntries, { asOf: boardSeenAt.league });
+}
+
+// Persist a distilled handle->XPEarned lookup for a daily board so the exact
+// tier survives a page refresh (see DAILY_BOARD_PERSIST_TTL_MS).
+function persistDailyBoardLookup(boardKey, entries) {
+  const byHandle = {};
+  for (const entry of entries) {
+    const handle = normalizeHandle(getHandle(entry));
+    const earned = num(entry?.XPEarned);
+    if (handle && earned != null) byHandle[handle] = earned;
+  }
+  persistedDailyBoards[boardKey] = { byHandle, seenAt: Date.now() };
+  chromeSet(DAILY_BOARD_CACHE_KEY, persistedDailyBoards);
+}
+
+function handleDailyXpLeaderboard(json) {
+  const entries = getLeaderboardEntries(json);
+  cachedDailyEntries = entries;
+  markBoardSeen("daily");
+  persistDailyBoardLookup("daily", entries);
+  harvestPersonalSnapshots(entries, { backdate: true });
   if (isLeaderboardPage()) augmentNativeDailyLeaderboard();
 }
 
@@ -1037,6 +1121,8 @@ function handleKarmaLeaderboard(json) {
 function handleLeagueDailyLeaderboard(json) {
   cachedLeagueDailyEntries = getLeaderboardEntries(json);
   markBoardSeen("leagueDaily");
+  persistDailyBoardLookup("leagueDaily", cachedLeagueDailyEntries);
+  harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true });
   if (isLeaderboardPage()) {
     augmentNativeLeagueDaily();
     augmentNativeDailyLeaderboard(); // league-daily is a fallback for our own daily value
@@ -1046,6 +1132,7 @@ function handleLeagueDailyLeaderboard(json) {
 function handleLeagueLeaderboard(json) {
   cachedLeagueEntries = getLeaderboardEntries(json);
   markBoardSeen("league");
+  harvestPersonalSnapshots(cachedLeagueEntries);
   if (isLeaderboardPage()) augmentNativeLeagueStanding();
 }
 
@@ -1062,7 +1149,7 @@ function updatePersonalUserData(username, isStats, json) {
     record.stats = data;
   } else {
     record.profile = data;
-    updateObservedDailyXp(record, data);
+    recordXpSnapshot(record, data?.XP);
   }
   record.updatedAt = Date.now();
 
@@ -1073,7 +1160,9 @@ function updatePersonalUserData(username, isStats, json) {
 async function loadPersonalLeaderboard() {
   const storedHandles = (await chromeGet(PERSONAL_HANDLES_KEY)) || {};
   const storedCache = (await chromeGet(PERSONAL_CACHE_KEY)) || {};
+  const storedBoards = await chromeGet(DAILY_BOARD_CACHE_KEY);
   if (enhancerStopped) return;
+  persistedDailyBoards = isPlainObject(storedBoards) ? storedBoards : {};
   const rawHandles = Array.isArray(storedHandles)
     ? storedHandles
     : Array.isArray(storedHandles.handles)
@@ -1083,8 +1172,23 @@ async function loadPersonalLeaderboard() {
   personalHandles = uniqueHandles(rawHandles).filter(isValidHandle);
   personalRecords = isPlainObject(storedCache.records) ? storedCache.records : {};
   for (const handle of personalHandles) ensurePersonalRecord(handle);
+
+  // Drop fields from the pre-0.6.1 single-baseline daily model (replaced by
+  // xpSnapshots) so stale values can't leak into the new display ladder.
+  let droppedLegacyFields = false;
+  for (const record of Object.values(personalRecords)) {
+    for (const key of ["dailyXp", "dailyBaselineDate", "dailyBaselineXp", "dailyObservedXp"]) {
+      if (key in record) {
+        delete record[key];
+        droppedLegacyFields = true;
+      }
+    }
+  }
+
   if (personalHandles.length !== rawHandles.length) {
     savePersonalHandles();
+    savePersonalCache();
+  } else if (droppedLegacyFields) {
     savePersonalCache();
   }
 }
@@ -1261,11 +1365,14 @@ function _applyPersonalContent(panel) {
   }
 }
 
+function personalValueText(row, unit) {
+  if (row.value == null) return row.loading ? "loading" : row.nullText || "unavailable";
+  return `${fmtNum(row.value)} ${unit}`;
+}
+
 function personalRowHTML(it) {
   const { row, rank, unit, myValue } = it;
-  const valueText = row.value == null
-    ? row.loading ? "loading" : "unavailable"
-    : `${fmtNum(row.value)} ${unit}`;
+  const valueText = personalValueText(row, unit);
   const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
   const skipComparison = isCurrentUser || row.loading || row.value == null || !isComparisonEnabled("comparisonsPersonal");
 
@@ -1277,8 +1384,11 @@ function personalRowHTML(it) {
         <span class="be-personal-name">${escapeHtml(row.name)}</span>
         <span class="be-personal-handle">@${escapeHtml(row.displayHandle)}</span>
       </span>
-      <span class="be-personal-value-col">
-        <span class="be-personal-value">${escapeHtml(valueText)}</span>
+      <span class="be-personal-value-col"${row.tooltip ? ` title="${escapeHtml(row.tooltip)}"` : ""}>
+        <span class="be-personal-value-line">
+          <span class="be-personal-value-note">${escapeHtml(row.note)}</span>
+          <span class="be-personal-value">${escapeHtml(valueText)}</span>
+        </span>
         ${comparisonSpanHTML(myValue, row.value, unit, skipComparison)}
       </span>
     </a>`;
@@ -1288,9 +1398,7 @@ function patchPersonalRow(el, it) {
   const { row, rank, unit, myValue } = it;
   const isCurrentUser = isCurrentLeaderboardEntry(row, getCurrentUserIdentity());
   const skipComparison = isCurrentUser || row.loading || row.value == null || !isComparisonEnabled("comparisonsPersonal");
-  const valueText = row.value == null
-    ? row.loading ? "loading" : "unavailable"
-    : `${fmtNum(row.value)} ${unit}`;
+  const valueText = personalValueText(row, unit);
 
   el.classList.toggle("be-current-user", isCurrentUser);
   const href = `/u/${encodeURIComponent(row.handle)}`;
@@ -1299,6 +1407,15 @@ function patchPersonalRow(el, it) {
   setTextIfChanged(el.querySelector(".be-personal-name"), row.name);
   setTextIfChanged(el.querySelector(".be-personal-handle"), `@${row.displayHandle}`);
   setTextIfChanged(el.querySelector(".be-personal-value"), valueText);
+  setTextIfChanged(el.querySelector(".be-personal-value-note"), row.note);
+  const valueCol = el.querySelector(".be-personal-value-col");
+  if (valueCol) {
+    if (row.tooltip) {
+      if (valueCol.getAttribute("title") !== row.tooltip) valueCol.setAttribute("title", row.tooltip);
+    } else {
+      valueCol.removeAttribute("title");
+    }
+  }
   patchComparisonEl(el.querySelector("[data-be-comparison]"), myValue, row.value, unit, skipComparison);
 }
 
@@ -1373,7 +1490,11 @@ async function addPersonalHandle(handle) {
   record.handle = profile.Handle || canonical;
   record.profile = profile;
   record.profileError = null;
-  updateObservedDailyXp(record, profile);
+  recordXpSnapshot(record, profile.XP);
+  // The new handle may already sit on a board received earlier this session
+  // (league-daily especially) — harvest those now so the exact/measured tiers
+  // apply immediately instead of after the next page load.
+  harvestCachedBoardSnapshots();
 
   if (await savePersonalHandles()) {
     savePersonalCache();
@@ -1385,6 +1506,7 @@ async function addPersonalHandle(handle) {
   personalPendingHandle = null;
   schedulePersonalLeaderboardRender();
   void refreshPersonalStats(canonical);
+  void refreshPersonalHeatmap(canonical);
 }
 
 async function removePersonalHandle(handle) {
@@ -1403,7 +1525,7 @@ function getPersonalRows(kind) {
     .map((handle) => {
       const record = ensurePersonalRecord(handle);
       const profile = record.profile || {};
-      const value = getPersonalValue(record, kind);
+      const view = kind === "daily" ? computeDailyXpView(record) : null;
       return {
         handle,
         displayHandle: getPersonalDisplayHandle(handle),
@@ -1412,7 +1534,10 @@ function getPersonalRows(kind) {
         Handle: record.handle || handle,
         Level: profile.Level,
         Role: profile.Role,
-        value,
+        value: view ? view.value : getPersonalValue(record, kind),
+        note: view?.note || "",
+        tooltip: view?.tooltip || "",
+        nullText: view ? "–" : "",
         loading: personalPendingHandle === handle,
       };
     })
@@ -1420,9 +1545,140 @@ function getPersonalRows(kind) {
 }
 
 function getPersonalValue(record, kind) {
-  if (kind === "daily") return record.dailyXp ?? record.dailyObservedXp ?? null;
+  if (kind === "daily") return computeDailyXpView(record).value;
   if (kind === "karma") return num(record.stats?.Karma ?? record.profile?.Karma);
   return num(record.profile?.XP);
+}
+
+// ---------------------------------------------------------------------------
+// Daily-XP view ladder. The native daily board is a rolling 24h window with no
+// per-user API, so accuracy degrades in tiers:
+//   1. exact       — the user is on a currently-cached daily board (XPEarned)
+//   2. measured    — diff of our own total-XP snapshots inside the 24h window
+//   3. estimated   — heatmap completions x avg XP + bonuses (labeled "est.")
+//   4. unavailable — "–"
+// A short measured window understates the day (it misses XP earned before we
+// started watching), so below FULL_WINDOW_TRUST_MS a larger heatmap estimate
+// outranks it; at/above that the measurement covers the day and wins.
+// ---------------------------------------------------------------------------
+function computeDailyXpView(record) {
+  const exact = dailyBoardXpFor(record);
+  if (exact != null) {
+    return { value: exact, note: "", tooltip: "From the live daily leaderboard." };
+  }
+
+  const measured = measuredDailyXp(record);
+  const estimate = heatmapDailyEstimate(record);
+
+  if (measured && measured.windowMs >= FULL_WINDOW_TRUST_MS) return measuredDailyView(measured);
+  if (estimate && estimate.value > 0 && (!measured || estimate.value > measured.delta)) {
+    return estimateDailyView(estimate, measured);
+  }
+  if (measured && measured.delta > 0) return measuredDailyView(measured);
+  if (estimate) {
+    // Zero-activity heatmap (and no larger measurement): confidently ~0.
+    return estimateDailyView(estimate, measured);
+  }
+  if (measured) return measuredDailyView(measured); // measured 0 with no heatmap signal
+
+  return {
+    value: null,
+    note: "",
+    tooltip: "Not enough data yet. Catalyst accumulates XP observations for tracked users as you browse.",
+  };
+}
+
+// Exact daily XP when the user is on a currently-cached daily board. The
+// league-daily board counts too: XP earned is universal, so a league-mate's
+// XPEarned there is exactly what the global daily board would report. Until a
+// board has been received this session, the recently-persisted copy of its
+// lookup stands in, so a page refresh doesn't flash the measured tier while
+// the boards re-fetch. Once live data arrives it is authoritative for that
+// board, including the user's absence from it.
+function dailyBoardXpFor(record) {
+  const handle = normalizeHandle(record.handle);
+  if (!handle) return null;
+
+  for (const { entries, key } of [
+    { entries: cachedDailyEntries, key: "daily" },
+    { entries: cachedLeagueDailyEntries, key: "leagueDaily" },
+  ]) {
+    if (boardSeenAt[key]) {
+      for (const entry of entries) {
+        if (normalizeHandle(getHandle(entry)) === handle) {
+          const earned = num(entry?.XPEarned);
+          if (earned != null) return earned;
+        }
+      }
+      continue;
+    }
+    const persisted = persistedDailyBoards[key];
+    const earned = num(persisted?.byHandle?.[handle]);
+    if (earned != null && Date.now() - (num(persisted.seenAt) || 0) <= DAILY_BOARD_PERSIST_TTL_MS) {
+      return earned;
+    }
+  }
+  return null;
+}
+
+// XP measured between our oldest and newest snapshot inside the rolling 24h
+// window. A lower bound on the user's true daily XP: exact when the window
+// spans the full day (e.g. seeded by a backdated board sighting). Reads with
+// the same slack the pruner keeps, so a backdated point at exactly now-24h
+// stays usable instead of aging out of the window the moment it's written;
+// the display caps the labeled hours at 24.
+function measuredDailyXp(record) {
+  const windowStart = Date.now() - SNAPSHOT_MAX_AGE_MS;
+  const snaps = (Array.isArray(record.xpSnapshots) ? record.xpSnapshots : []).filter(
+    (s) => Array.isArray(s) && num(s[0]) != null && num(s[1]) != null && s[0] >= windowStart
+  );
+  if (snaps.length < 2) return null;
+
+  const oldest = snaps[0];
+  const newest = snaps[snaps.length - 1];
+  const windowMs = newest[0] - oldest[0];
+  const delta = newest[1] - oldest[1];
+  if (windowMs < SNAPSHOT_MIN_WINDOW_MS || delta < 0) return null;
+
+  return { delta, windowMs, sinceMs: Date.now() - oldest[0] };
+}
+
+function heatmapDailyEstimate(record) {
+  const heatmap = record.heatmap;
+  // Only today's distillate is usable — yesterday's lesson count says nothing
+  // about today.
+  if (!heatmap || heatmap.dayKey !== localDateKey()) return null;
+
+  const lessons = num(heatmap.lessonsToday) || 0;
+  const streakPct = Math.min(num(heatmap.streakDays) || 0, STREAK_BONUS_CAP) / 100;
+  const value = lessons > 0
+    ? Math.round(DAILY_FIRST_CLEAR_BONUS_XP + lessons * ESTIMATED_XP_PER_LESSON * (1 + streakPct))
+    : 0;
+  return { value, lessons };
+}
+
+function measuredDailyView(measured) {
+  const hours = Math.min(24, Math.max(1, Math.round(measured.sinceMs / 3_600_000)));
+  return {
+    value: measured.delta,
+    note: `past ${hours}hr`,
+    tooltip: hours >= 22
+      ? `XP observed by Catalyst over the past ${hours} hours.`
+      : `XP observed by Catalyst over the past ${hours} hours. XP earned earlier in the day isn't visible.`,
+  };
+}
+
+function estimateDailyView(estimate, measured) {
+  const floor = measured && measured.delta > 0
+    ? ` At least ${fmtNum(measured.delta)} xp was directly observed.`
+    : "";
+  return {
+    value: estimate.value,
+    note: "est.",
+    tooltip: estimate.lessons > 0
+      ? `Estimated from ${fmtNum(estimate.lessons)} lesson/challenge completion${estimate.lessons === 1 ? "" : "s"} today (resubmits count but give no XP, so this can overestimate).${floor}`
+      : "No lessons or challenges completed today (per activity heatmap).",
+  };
 }
 
 async function refreshPersonalHandle(handle) {
@@ -1436,11 +1692,12 @@ async function refreshPersonalHandle(handle) {
   record.handle = profile.Handle || record.handle || normalized;
   record.profile = profile;
   record.profileError = null;
-  updateObservedDailyXp(record, profile);
+  recordXpSnapshot(record, profile.XP);
   savePersonalCache();
   schedulePersonalLeaderboardRender();
 
   await refreshPersonalStats(normalized);
+  await refreshPersonalHeatmap(normalized);
 }
 
 async function refreshPersonalStats(handle) {
@@ -1465,6 +1722,91 @@ async function refreshPersonalStats(handle) {
     savePersonalCache();
     schedulePersonalLeaderboardRender();
   }
+}
+
+// The activity heatmap is the only public per-day activity source for another
+// user: completion counts per calendar day (0-XP resubmits included) plus a
+// separate GitHub-commit series that never grants XP but does extend streaks.
+// It powers the estimate tier of computeDailyXpView.
+async function refreshPersonalHeatmap(handle) {
+  const normalized = normalizeHandle(handle);
+  if (!isValidHandle(normalized) || !isPersonalHandle(normalized)) return;
+
+  const existing = personalRecords[normalized]?.heatmap;
+  if (
+    existing?.fetchedAt &&
+    Date.now() - existing.fetchedAt < HEATMAP_REFRESH_MS &&
+    existing.dayKey === localDateKey()
+  ) {
+    return;
+  }
+
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+  const result = await fetchApiJsonWithAuthRetry(
+    `https://api.boot.dev/v1/users/public/${encodeURIComponent(normalized)}/activity_heatmap?timezone=${encodeURIComponent(timezone)}`
+  );
+  if (result.status < 200 || result.status >= 300) return;
+  handlePersonalHeatmap(normalized, result.json);
+}
+
+// Router entry (also fed passively when the viewer browses someone's profile).
+function handlePersonalHeatmap(username, json) {
+  const normalized = normalizeHandle(username);
+  if (!isPersonalHandle(normalized)) return;
+
+  const distilled = distillHeatmap(json);
+  if (!distilled) return;
+
+  const record = ensurePersonalRecord(normalized);
+  record.heatmap = distilled;
+  record.updatedAt = Date.now();
+  savePersonalCache();
+  schedulePersonalLeaderboardRender();
+}
+
+// Store only today's completion count and the streak length — the raw calendar
+// is ~350 entries per user and everything else it says is derivable again.
+function distillHeatmap(json) {
+  const data = json?.data ?? json;
+  const calendar = Array.isArray(data?.Calendar) ? data.Calendar : null;
+  if (!calendar) return null;
+  const commits = Array.isArray(data?.GithubCommits) ? data.GithubCommits : [];
+
+  // Dates arrive as "YYYY-MM-DDT00:00:00Z" but are bucketed by the timezone we
+  // requested (the viewer's), so the YYYY-MM-DD prefix compares against the
+  // viewer's local date key.
+  const today = localDateKey();
+  const activeDays = new Set();
+  let lessonsToday = 0;
+  for (const entry of calendar) {
+    const key = String(entry?.Date || "").slice(0, 10);
+    const count = num(entry?.Count);
+    if (!key || !count) continue;
+    activeDays.add(key);
+    if (key === today) lessonsToday = count;
+  }
+  for (const entry of commits) {
+    const key = String(entry?.Date || "").slice(0, 10);
+    if (key && num(entry?.Count)) activeDays.add(key);
+  }
+
+  // Streak = consecutive active days ending today, or ending yesterday when
+  // today has no activity yet (the streak isn't broken until the day ends).
+  let streakDays = 0;
+  let cursor = activeDays.has(today) ? today : shiftDateKey(today, -1);
+  while (activeDays.has(cursor)) {
+    streakDays++;
+    cursor = shiftDateKey(cursor, -1);
+  }
+
+  return { dayKey: today, lessonsToday, streakDays, fetchedAt: Date.now() };
+}
+
+function shiftDateKey(key, days) {
+  const date = new Date(`${key}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return "";
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
 }
 
 async function loadPublicUserProfile(handle, options = {}) {
@@ -1504,19 +1846,47 @@ async function loadPublicUserProfile(handle, options = {}) {
   return profile;
 }
 
-function updateObservedDailyXp(record, profile) {
-  const xp = num(profile?.XP);
-  if (xp == null) return;
+// Record an observed lifetime-XP total for a tracked user, as a [t, xp] pair.
+// Snapshots are the only way to measure the rolling-24h "daily XP" of someone
+// outside the top-25 daily board: measured daily XP = newest total minus the
+// oldest total observed inside the 24h window. `atMs` may lie in the past —
+// a daily-board sighting yields a backdated point (XP - XPEarned at now-24h).
+function recordXpSnapshot(record, xp, atMs = Date.now()) {
+  const total = num(xp);
+  if (total == null || total < 0) return;
 
-  const today = localDateKey();
-  if (record.dailyBaselineDate !== today || record.dailyBaselineXp == null || record.dailyBaselineXp > xp) {
-    record.dailyBaselineDate = today;
-    record.dailyBaselineXp = xp;
-    record.dailyObservedXp = 0;
-    return;
+  const cutoff = Date.now() - SNAPSHOT_MAX_AGE_MS;
+  let snaps = (Array.isArray(record.xpSnapshots) ? record.xpSnapshots : []).filter(
+    (s) => Array.isArray(s) && num(s[0]) != null && num(s[1]) != null && s[0] >= cutoff
+  );
+
+  // XP totals never decrease. If the new point contradicts stored ones (in
+  // either timeline direction — API glitch, or window skew on a backdated
+  // point), dropping the contradicting points is the cheapest safe repair.
+  snaps = snaps.filter((s) => (s[0] <= atMs ? s[1] <= total : s[1] >= total));
+
+  const insertAt = snaps.findIndex((s) => s[0] > atMs);
+  if (insertAt === -1) {
+    const last = snaps[snaps.length - 1];
+    const prev = snaps[snaps.length - 2];
+    if (last && last[0] === atMs && last[1] === total) {
+      // exact duplicate, nothing to do
+    } else if (last && prev && last[1] === total && prev[1] === total) {
+      // Run-length dedupe: a flat stretch only needs its first and latest
+      // point for a sliding window boundary to still read the right total.
+      last[0] = atMs;
+    } else {
+      snaps.push([atMs, total]);
+    }
+  } else {
+    snaps.splice(insertAt, 0, [atMs, total]);
   }
 
-  record.dailyObservedXp = Math.max(record.dailyObservedXp || 0, xp - record.dailyBaselineXp);
+  if (snaps.length > SNAPSHOT_CAP) {
+    // Thin interior points, keeping the endpoints (they carry the window).
+    snaps = snaps.filter((s, i, arr) => i === 0 || i === arr.length - 1 || i % 2 === 1);
+  }
+  record.xpSnapshots = snaps;
 }
 
 function ensurePersonalRecord(handle) {

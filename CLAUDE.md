@@ -79,12 +79,13 @@ node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console
 ```
 
 ## API endpoints used (summary)
-- `/v1/leaderboard_xp/{period}` and `/v1/league_leaderboard_xp/{period}` — leaderboard data; period = day | week | month | alltime
+- `/v1/leaderboard_xp/{period}` and `/v1/league_leaderboard_xp/{period}` — leaderboard data; period = day | week | month | alltime. The `day` boards are **rolling last-24-hours** windows (user-reported), and their entries carry both `XPEarned` (trailing-24h XP) and `XP` (lifetime total)
 - `/v1/users/public/{username}` — public profile; cumulative XP is at `data.XP`
 - `/v1/users/public/{username}/stats` — public stats including karma
+- `/v1/users/public/{username}/activity_heatmap?timezone={IANA}` — per-day activity counts (`data.Calendar`; includes 0-XP resubmits) plus a separate `data.GithubCommits` series (streak-only, no XP); feeds the personal daily-XP estimate tier
 - `/v1/boss_events_progress` — boss tracker source of truth; new-event detection keys off `Event.UUID`
 - `/v1/dashboard_content` — Next Lesson source via `CurrentLessonUUID`
-- `/v1/leaderboard_xp/day` — used for personal leaderboard daily XP when a handle appears there
+- `/v1/leaderboard_xp/day` — exact personal-board daily XP when a handle appears there; every sighting also yields a backdated total-XP snapshot (`XP − XPEarned` at now−24h)
 
 Confirmed API response field names are documented in `reference_data/bootdev_api_info/bootdev_openapi.yaml`
 
@@ -99,3 +100,4 @@ Confirmed API response field names are documented in `reference_data/bootdev_api
 - Boss polling stops between events: a response whose `Event.ExpiresAt` is in the past marks the event inactive, halts the 2-min poll, and shows a one-time "no active event" toast. A forced re-check (navigation, manual Refresh, tab focus) or boot.dev's own passive `boss_events_progress` fetch resumes polling when a new event starts.
 - The interceptor (`injected.js`) only rebroadcasts passively-observed responses for the paths the router consumes (`RELAY_PATH_PATTERNS`); keep that allowlist in sync with the router in `content.js`.
 - The opt-in update check hits `api.github.com` (CORS-open, no host permission). The extension still requests only `storage` + `https://www.boot.dev/*`.
+- Personal-board daily XP for other users has no exact API source (the daily board is rolling-24h). `leaderboard.js` keeps per-user total-XP snapshots (`record.xpSnapshots`, `[t, xp]` pairs, ≤60, pruned >24.5h) harvested from every response that reveals a total, and `computeDailyXpView` picks the best of: live board value → snapshot-window delta → heatmap estimate → "–". `ESTIMATED_XP_PER_LESSON` (115) is a placeholder awaiting calibration from the maintainer's base-XP spreadsheet — update that one constant when real data lands.

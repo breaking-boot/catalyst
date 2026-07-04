@@ -63,6 +63,7 @@ async function routeResponse({ url, status, json }) {
   try {
     const path = new URL(url, window.location.origin).pathname;
     const publicUserMatch = /^\/v1\/users\/public\/([^/]+)(\/stats)?$/.exec(path);
+    const heatmapMatch = /^\/v1\/users\/public\/([^/]+)\/activity_heatmap$/.exec(path);
 
     if (status === 0 && json?.error === "auth_headers_unavailable") {
       handleAuthUnavailable(path);
@@ -84,6 +85,8 @@ async function routeResponse({ url, status, json }) {
       handleLeagueDailyLeaderboard(json);
     } else if (/^\/v1\/league_leaderboard_xp\/[^/]+$/.test(path)) {
       handleLeagueLeaderboard(json);
+    } else if (heatmapMatch) {
+      handlePersonalHeatmap(decodeURIComponent(heatmapMatch[1]), json);
     } else if (publicUserMatch) {
       handlePublicUserResponse(decodeURIComponent(publicUserMatch[1]), Boolean(publicUserMatch[2]), json);
     } else if (path === "/v1/boss_events_progress") {
