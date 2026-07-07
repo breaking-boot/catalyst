@@ -135,7 +135,10 @@ function isValidHandle(handle) {
 // Toasts stack in a shared bottom-centre container (like the site's own
 // notifications) so a newer toast no longer covers an older one. Newest is
 // appended at the bottom, nearest the corner; older ones float up.
-function toast(text) {
+// Optional `actions` ({ label, onClick, primary }[]) render as buttons below the
+// text; clicking one runs its handler and closes the toast. Returns a close()
+// function so callers can dismiss the toast early (plain callers can ignore it).
+function toast(text, { actions = [], durationMs = 6000 } = {}) {
   let stack = document.getElementById("be-toast-stack");
   if (!stack) {
     stack = document.createElement("div");
@@ -146,16 +149,52 @@ function toast(text) {
 
   const t = document.createElement("div");
   t.className = "be-toast";
-  t.textContent = text;
-  stack.appendChild(t);
-  requestAnimationFrame(() => t.classList.add("be-toast-in"));
-  setTimeout(() => {
+
+  let closed = false;
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    clearTimeout(hideTimer);
     t.classList.remove("be-toast-in");
     setTimeout(() => {
       t.remove();
       if (stack && !stack.childElementCount) stack.remove();
     }, 400);
-  }, 6000);
+  };
+
+  if (actions.length) {
+    const textEl = document.createElement("span");
+    textEl.className = "be-toast-text";
+    textEl.textContent = text;
+
+    const row = document.createElement("div");
+    row.className = "be-toast-actions";
+    for (const action of actions) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = `be-toast-btn${action.primary ? " be-toast-btn-primary" : ""}`;
+      btn.textContent = action.label;
+      btn.addEventListener("click", () => {
+        try {
+          action.onClick?.();
+        } catch (err) {
+          handleAsyncError(err, "toast-action");
+        }
+        close();
+      });
+      row.appendChild(btn);
+    }
+    t.append(textEl, row);
+  } else {
+    t.textContent = text;
+  }
+
+  stack.appendChild(t);
+  requestAnimationFrame(() => t.classList.add("be-toast-in"));
+  // Plain setTimeout (not tracked): close() only touches DOM, so it stays safe
+  // — and useful — even after the extension context is invalidated.
+  const hideTimer = setTimeout(close, durationMs);
+  return close;
 }
 
 function getChromeLastError() {

@@ -3,12 +3,18 @@
 // settings (manual high editing), and near-high toast notification.
 // Persistent state key: be_boss_state in chrome.storage.local.
 // New-event detection keys off Event.UUID.
+// Also owns the boss-event reminder: with the tracker hidden (its default),
+// a live event surfaces as a small action toast instead of the panel.
 
 const BOSS_KEY = "be_boss_state";
 const BOSS_UI_KEY = "be_boss_ui_state";
+const BOSS_REMINDER_KEY = "be_boss_reminder_state";
+const BOSS_REMINDER_DEBUG_KEY = "be_boss_reminder_debug";
 const BOSS_PROGRESS_URL = "https://api.boot.dev/v1/boss_events_progress";
 const BOSS_REFRESH_MS = 120_000; // boss data changes slowly; poll every 2 min
 const NEAR_HIGH_THRESHOLD = 0.95; // notify when current >= 95% of event high
+const BOSS_REMINDER_REPEAT_MS = 24 * 60 * 60 * 1000; // re-remind at most daily
+const BOSS_REMINDER_TOAST_MS = 20_000; // action toast needs longer than the default 6s
 
 let bossRefreshTimer = null;
 let bossUiState = { minimized: false, settingsOpen: false, x: null, y: null };
@@ -23,6 +29,13 @@ let bossInactiveNotified = false; // dedupe the "no active event" toast per sess
 // write-through cache; reading from memory avoids the read-modify-write race
 // between the refresh interval, the manual Refresh button, and near-high notify.
 let bossState = null;
+// Reminder bookkeeping ({ eventId, lastShownAt, dismissed }), one record for the
+// most-recently-seen event; a different eventId starts fresh. In-memory copy of
+// be_boss_reminder_state, same write-through pattern as bossState.
+let bossReminderState = null;
+let bossReminderLoaded = false;
+let bossReminderCheckInFlight = false; // burst of relayed responses → one check
+let bossReminderToastClose = null; // close() of the visible reminder toast, if any
 
 function clearBossRefreshTimer() {
   if (!bossRefreshTimer) return;
@@ -95,7 +108,14 @@ async function restoreBossPanel() {
 // FEATURE 5: Boss-event tracker
 // ===========================================================================
 async function handleBossProgress(json) {
-  if (!isFeatureEnabled("bossTracker")) return;
+  if (!isFeatureEnabled("bossTracker")) {
+    // Quiet mode: never touch be_boss_state (previous-event stats stay intact
+    // for whenever the tracker is re-enabled); at most offer the tracker via
+    // the reminder toast. Detection here is passive-only — these responses come
+    // from boot.dev's own fetches relayed by injected.js.
+    await maybeShowBossReminder(json);
+    return;
+  }
   const active = isBossEventActive(json);
   bossEventActive = active;
   const rewards = getBossRewards(json);
@@ -169,6 +189,118 @@ function notifyBossInactiveOnce() {
   if (bossInactiveNotified) return;
   bossInactiveNotified = true;
   toast("No active boss event right now. The tracker will resume when the next event starts.");
+}
+
+// ---------------------------------------------------------------------------
+// Boss-event reminder (tracker hidden, event live → small opt-in toast)
+// ---------------------------------------------------------------------------
+
+// Shown at most once per BOSS_REMINDER_REPEAT_MS per event, and never again for
+// an event once either toast button was clicked. "Show Tracker" flips the
+// bossTracker setting; the existing storage.onChanged live-apply then renders
+// the panel and restarts polling — no extra wiring here.
+async function maybeShowBossReminder(json) {
+  if (isFeatureEnabled("bossTracker")) return; // reminder only backs up a hidden tracker
+  if (!isFeatureEnabled("bossReminders")) return;
+  if (bossReminderToastClose || bossReminderCheckInFlight) return;
+  if (!isBossEventActive(json)) return;
+  const eventId = json?.Event?.UUID ?? json?.Event?.StartsAt ?? "unknown-event";
+
+  bossReminderCheckInFlight = true;
+  try {
+    await loadBossReminderState();
+    if (enhancerStopped) return;
+    const rec = bossReminderState;
+    if (rec && rec.eventId === eventId) {
+      if (rec.dismissed) return; // user already acted on this event's reminder
+      if (rec.lastShownAt && Date.now() - rec.lastShownAt < BOSS_REMINDER_REPEAT_MS) return;
+    }
+
+    bossReminderState = { eventId, lastShownAt: Date.now(), dismissed: false };
+    await saveBossReminderState();
+    await waitFor(() => document.body);
+    if (enhancerStopped) return;
+    // Settings may have flipped while we awaited storage/DOM.
+    if (isFeatureEnabled("bossTracker") || !isFeatureEnabled("bossReminders")) return;
+
+    bossReminderToastClose = toast("Boss event is live. Show Boss Tracker?", {
+      durationMs: BOSS_REMINDER_TOAST_MS,
+      actions: [
+        {
+          label: "Show Tracker",
+          primary: true,
+          onClick: () => acknowledgeBossReminder(eventId, true),
+        },
+        {
+          label: "Don't remind me for this event",
+          onClick: () => acknowledgeBossReminder(eventId, false),
+        },
+      ],
+    });
+    // The toast dismisses itself; drop our handle shortly after so a stale
+    // reference can't block a later event's reminder within this session. Only
+    // clear if it's still this toast's handle — a click may already have
+    // cleared it and a newer toast may own the slot by then.
+    const shownToastClose = bossReminderToastClose;
+    setTrackedTimeout(() => {
+      if (bossReminderToastClose === shownToastClose) bossReminderToastClose = null;
+    }, BOSS_REMINDER_TOAST_MS + 1000);
+  } finally {
+    bossReminderCheckInFlight = false;
+  }
+}
+
+// Either button means "handled for this event" — including Show Tracker, so
+// turning the tracker back off mid-event doesn't resume the reminders.
+function acknowledgeBossReminder(eventId, showTracker) {
+  bossReminderToastClose = null; // the toast closes itself after an action click
+  bossReminderState = { eventId, lastShownAt: Date.now(), dismissed: true };
+  saveBossReminderState().catch((err) => handleAsyncError(err, "bossReminder"));
+  if (showTracker) {
+    setFeatureEnabled("bossTracker", true).catch((err) => handleAsyncError(err, "bossReminder"));
+  }
+}
+
+function removeBossReminderToast() {
+  if (!bossReminderToastClose) return;
+  bossReminderToastClose();
+  bossReminderToastClose = null;
+}
+
+async function loadBossReminderState() {
+  if (bossReminderLoaded) return;
+  const stored = await chromeGet(BOSS_REMINDER_KEY);
+  if (enhancerStopped) return;
+  bossReminderState = isPlainObject(stored)
+    ? {
+        eventId: stored.eventId ?? null,
+        lastShownAt: num(stored.lastShownAt),
+        dismissed: Boolean(stored.dismissed),
+      }
+    : null;
+  bossReminderLoaded = true;
+}
+
+async function saveBossReminderState() {
+  await chromeSet(BOSS_REMINDER_KEY, bossReminderState);
+}
+
+// Maintainer-only: boss events run 4–8 weeks apart, so the reminder flow needs a
+// trigger between events. Set be_boss_reminder_debug to true in
+// chrome.storage.local and reload boot.dev; a synthetic active event is fed
+// through the REAL maybeShowBossReminder, so every production guard applies
+// (reminders on, tracker off, daily window, dismissal record). Re-run a test by
+// removing be_boss_reminder_state. Does nothing unless the flag is set, so
+// ordinary users never see it.
+async function maybeTriggerBossReminderDebug() {
+  const flag = await chromeGet(BOSS_REMINDER_DEBUG_KEY);
+  if (flag !== true || enhancerStopped) return;
+  await maybeShowBossReminder({
+    Event: {
+      UUID: "be-debug-event",
+      ExpiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    },
+  });
 }
 
 function newEventState(eventId) {

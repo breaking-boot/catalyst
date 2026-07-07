@@ -15,6 +15,7 @@
 const SETTINGS_DEFAULTS = {
   // Top-level features (shown in the popup and options page).
   bossTracker: false, // default-OFF: panel must not auto-appear on install
+  bossReminders: true, // toast when an event is live and the tracker is hidden
   allTimeLeaderboard: true,
   personalLeaderboards: true,
   profileXp: true,
@@ -39,6 +40,7 @@ const SETTINGS_DEFAULTS = {
 // Top-level feature toggles, in display order, rendered on both pages.
 const FEATURE_TOGGLES = [
   { key: "bossTracker", label: "Boss event tracker", desc: "Floating panel: boss aura, damage, and chest progress." },
+  { key: "bossReminders", label: "Boss event reminders", desc: "When the tracker is hidden and a boss event is live, show a small toast (at most once a day per event)." },
   { key: "allTimeLeaderboard", label: "Top All-Time Learners Leaderboard", desc: "Cumulative-XP standings boot.dev doesn't show natively." },
   { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
