@@ -15,6 +15,8 @@ const BOSS_REFRESH_MS = 120_000; // boss data changes slowly; poll every 2 min
 const NEAR_HIGH_THRESHOLD = 0.95; // notify when current >= 95% of event high
 const BOSS_REMINDER_REPEAT_MS = 24 * 60 * 60 * 1000; // re-remind at most daily
 const BOSS_REMINDER_TOAST_MS = 20_000; // action toast needs longer than the default 6s
+const BOSS_INACTIVE_NOTICE_KEY = "be_boss_inactive_notice";
+const BOSS_INACTIVE_REPEAT_MS = 24 * 60 * 60 * 1000; // "no active event" toast at most daily
 
 let bossRefreshTimer = null;
 let bossUiState = { minimized: false, settingsOpen: false, x: null, y: null };
@@ -24,7 +26,10 @@ let bossAuthUnavailableUntil = 0;
 // find out); false = between events, so routine polls are skipped until a forced
 // re-check (navigation / manual Refresh) or boot.dev's own fetch shows a new one.
 let bossEventActive = null;
-let bossInactiveNotified = false; // dedupe the "no active event" toast per session
+// Synchronous same-session guard for the "no active event" toast (a burst of
+// responses must not double-toast); the real once-per-24h throttle is the
+// persisted timestamp in be_boss_inactive_notice.
+let bossInactiveNotified = false;
 // Authoritative in-memory copy of the persisted boss state. chrome.storage is a
 // write-through cache; reading from memory avoids the read-modify-write race
 // between the refresh interval, the manual Refresh button, and near-high notify.
@@ -159,9 +164,9 @@ async function handleBossProgress(json) {
     bossInactiveNotified = false;
     ensureBossPollingActive();
   } else {
-    // Between events: stop the standing poll and say so once.
+    // Between events: stop the standing poll and say so (at most once a day).
     clearBossRefreshTimer();
-    notifyBossInactiveOnce();
+    await notifyBossInactiveOnce();
   }
 
   bossState = state;
@@ -185,9 +190,18 @@ function isBossEventActive(json) {
   return Date.now() < expiry;
 }
 
-function notifyBossInactiveOnce() {
+// Throttled to once per BOSS_INACTIVE_REPEAT_MS per device: every page load
+// between events produces an inactive response (the init forced re-check), so
+// a session-only guard would toast on every refresh.
+async function notifyBossInactiveOnce() {
   if (bossInactiveNotified) return;
   bossInactiveNotified = true;
+  const stored = await chromeGet(BOSS_INACTIVE_NOTICE_KEY);
+  if (enhancerStopped) return;
+  const notifiedAt = num(stored?.notifiedAt);
+  if (notifiedAt && Date.now() - notifiedAt < BOSS_INACTIVE_REPEAT_MS) return;
+  await chromeSet(BOSS_INACTIVE_NOTICE_KEY, { notifiedAt: Date.now() });
+  if (enhancerStopped) return;
   toast("No active boss event right now. The tracker will resume when the next event starts.");
 }
 
