@@ -121,6 +121,7 @@ async function initEnhancer() {
   startDomScan();
   maybeShowSettingsIntro().catch((err) => handleAsyncError(err, "intro"));
   maybeRunVersionCheck().catch((err) => handleAsyncError(err, "versionCheck"));
+  maybeTriggerBossReminderDebug().catch((err) => handleAsyncError(err, "bossReminderDebug"));
 
   routeScanTimer = setTrackedInterval(() => {
     if (location.pathname === lastPath) return;
@@ -204,6 +205,11 @@ function applyFeatureSettings(before, after) {
   } else {
     removeBossPanel();
     clearBossRefreshTimer();
+  }
+  // A visible boss reminder is moot once the tracker is shown, and must go
+  // away immediately when reminders are switched off.
+  if (isFeatureEnabled("bossTracker") || !isFeatureEnabled("bossReminders")) {
+    removeBossReminderToast();
   }
 
   // Re-render the profile badge/button from cached data (handles both on and off);

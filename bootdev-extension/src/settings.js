@@ -47,3 +47,18 @@ function isFeatureEnabled(key) {
 function isComparisonEnabled(boardKey) {
   return isFeatureEnabled("comparisons") && isFeatureEnabled(boardKey);
 }
+
+// Persist a single feature flag from the content script (e.g. the boss reminder
+// toast's "Show Tracker" button). Patches only the one key into the raw stored
+// object — writing the fully-normalized map would freeze every current default
+// as an explicit user choice. The storage.onChanged listener in content.js
+// live-applies the change; the in-memory cache is updated up front so renders
+// between the write and that event already see the new value.
+async function setFeatureEnabled(key, value) {
+  if (!(key in DEFAULT_SETTINGS)) return false;
+  const raw = await chromeGetSync(SETTINGS_KEY);
+  const base = isPlainObject(raw) ? raw : {};
+  const next = { ...base, [key]: Boolean(value) };
+  settings = normalizeSettings(next);
+  return chromeSetSync(SETTINGS_KEY, next);
+}
