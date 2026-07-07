@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Catalyst for Boot.dev",
   "short_name": "Catalyst",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Adds Boot.dev leaderboards, profile XP, boss tracking, and a next-lesson shortcut.",
   "icons": {
     "16": "icons/icon16.png",

@@ -1,6 +1,6 @@
 # Changelog
 
-## v0.7.0
+## v0.7.0 - Quiet-by-default boss tracker with event reminders
 
 ### Boss tracker
 - **The boss tracker is now hidden by default.** The floating panel no longer auto-appears just because Catalyst is installed — it must be switched on in the settings popup, or via the new reminder toast. Anyone who previously flipped the Boss event tracker toggle keeps their explicit choice; users who were seeing the panel purely through the old default will need to opt back in.
