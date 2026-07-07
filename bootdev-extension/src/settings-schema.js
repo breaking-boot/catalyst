@@ -4,12 +4,17 @@
 // defaults, feature labels, and per-board ordering live in exactly one place and
 // can never drift between the two contexts. No logic here — data only.
 
-// Every flag except versionCheck defaults to true: a missing or corrupt value
-// means "feature on" so the extension fails open (full functionality) rather
-// than silently dark. normalizeSettings seeds every key from this map.
+// Every flag except versionCheck and bossTracker defaults to true: a missing or
+// corrupt value means "feature on" so the extension fails open (full
+// functionality) rather than silently dark. normalizeSettings seeds every key
+// from this map. The two default-OFF exceptions are deliberate: versionCheck
+// because it can reach off-device, bossTracker because the floating panel
+// should be quiet by default — users who want it opt in via the popup or the
+// boss-event reminder toast (see boss.js). An explicit stored boolean always
+// wins over these defaults.
 const SETTINGS_DEFAULTS = {
   // Top-level features (shown in the popup and options page).
-  bossTracker: true,
+  bossTracker: false, // default-OFF: panel must not auto-appear on install
   allTimeLeaderboard: true,
   personalLeaderboards: true,
   profileXp: true,
