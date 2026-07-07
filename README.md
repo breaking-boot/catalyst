@@ -96,7 +96,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 ### Settings
 
 - Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chrome hides extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
-- The popup toggles the six features: Boss event tracker, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and leaderboard comparisons (XP/karma).
+- The popup toggles the seven features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and leaderboard comparisons (XP/karma).
 - The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds per-board control over the XP/karma comparisons: a master toggle plus a checkbox for each of the six boards, so you can show comparisons on just the boards you want.
 - Settings sync across your devices (`chrome.storage.sync`) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on Boot.dev.
 
@@ -135,7 +135,9 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 ### Boss Event Tracker
 
-- The boss tracker appears on Boot.dev pages once boss-event data has been loaded. It tracks current Boots Aura bonus %, event-high %, all-time-high %, boss damage dealt, XP to the next chest, and XP to defeat the boss.
+- The boss tracker is **off by default** so nothing floats over the page until you ask for it. Turn it on from the settings popup — or just wait: when a boss event is live and the tracker is hidden, Catalyst shows a small **reminder toast** with a **Show Tracker** button (turns the tracker on) and a **Don't remind me for this event** button (silences reminders for that event only). The reminder appears at most once a day per event, and the **Boss event reminders** toggle turns reminders off entirely.
+- While the tracker is off, Catalyst makes no boss-event requests of its own — event detection piggybacks on the responses the Boot.dev page already fetches. The last tracked event's stats are kept, so re-enabling the tracker after an event still shows them until newer event data arrives.
+- Once enabled, the tracker appears on Boot.dev pages when boss-event data has been loaded. It tracks current Boots Aura bonus %, event-high %, all-time-high %, boss damage dealt, XP to the next chest, and XP to defeat the boss.
 - Drag the tracker header to reposition it anywhere on screen. The position persists across pages.
 - Use the **−** / **+** button to minimize or expand the tracker. The minimized view still shows the current aura percentage.
 - Use the **gear** button to open the high settings panel. You can manually edit the event high and all-time high percentages — useful if you missed a high while the extension wasn't watching. Saving an event high above the all-time high also raises the all-time high.

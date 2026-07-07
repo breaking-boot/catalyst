@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.7.0
+
+### Boss tracker
+- **The boss tracker is now hidden by default.** The floating panel no longer auto-appears just because Catalyst is installed — it must be switched on in the settings popup, or via the new reminder toast. Anyone who previously flipped the Boss event tracker toggle keeps their explicit choice; users who were seeing the panel purely through the old default will need to opt back in.
+- **New boss-event reminder.** When a boss event is live and the tracker is hidden, Catalyst shows a small in-page toast — "Boss event is live. Show Boss Tracker?" — with **Show Tracker** (enables the tracker on the spot) and **Don't remind me for this event** (silences reminders for that event only). It appears at most once per day per event, per device, and never again for an event after either button is clicked. A new **Boss event reminders** toggle (popup + options page, on by default) disables reminders entirely; the tracker can still be used manually either way.
+- While the tracker is hidden, Catalyst makes **zero boss-event requests of its own** — event detection rides on the `boss_events_progress` responses the Boot.dev page already fetches. The last tracked event's stats (`be_boss_state`) are left untouched in quiet mode, so re-enabling the tracker later still shows them until newer event data replaces them.
+- Reminders are in-page toasts like every other Catalyst alert — no `notifications` permission, no new permissions of any kind.
+- Toasts can now carry action buttons (used by the reminder); plain toasts are unchanged.
+- Added a maintainer-only `be_boss_reminder_debug` flag (`chrome.storage.local`) that feeds a synthetic active event through the real reminder path, so the toast and its buttons can be exercised between events (which are 4–8 weeks apart).
+
+### Assets
+- Added license/attribution clarification for bundled Boot.dev visual assets.
+- Removed the maintainer-only `be_use_bundled_native_art` preview flag now that Boot.dev has given permission to bundle the assets; the no-art fallback path is no longer needed.
+
 ## v0.6.1 - Honest daily XP for tracked users
 
 ### Personal Leaderboards
