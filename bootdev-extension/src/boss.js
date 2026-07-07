@@ -250,11 +250,13 @@ async function maybeShowBossReminder(json) {
   }
 }
 
-// Either button means "handled for this event" — including Show Tracker, so
-// turning the tracker back off mid-event doesn't resume the reminders.
+// Marks an event's reminder as handled. Reached from either toast button —
+// including Show Tracker, so turning the tracker back off mid-event doesn't
+// resume the reminders — and from the panel's close (×) button.
 function acknowledgeBossReminder(eventId, showTracker) {
   bossReminderToastClose = null; // the toast closes itself after an action click
   bossReminderState = { eventId, lastShownAt: Date.now(), dismissed: true };
+  bossReminderLoaded = true; // memory is now authoritative; don't let a pending load overwrite it
   saveBossReminderState().catch((err) => handleAsyncError(err, "bossReminder"));
   if (showTracker) {
     setFeatureEnabled("bossTracker", true).catch((err) => handleAsyncError(err, "bossReminder"));
@@ -346,6 +348,7 @@ async function renderBossPanel(s) {
           <div class="be-boss-actions">
             <button id="be-boss-settings-toggle" type="button" title="Open boss settings" aria-label="Open boss settings" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}">&#9881;</button>
             <button id="be-boss-toggle" type="button" title="Expand boss event" aria-label="Expand boss event">+</button>
+            <button id="be-boss-close" type="button" title="Close and turn off the boss tracker" aria-label="Close and turn off the boss tracker">&times;</button>
           </div>
         </div>`;
       applyBossPanelPosition(panel);
@@ -393,6 +396,7 @@ async function renderBossPanel(s) {
         <div class="be-boss-actions">
           <button id="be-boss-settings-toggle" type="button" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}" title="Boss high settings" aria-label="Boss high settings">&#9881;</button>
           <button id="be-boss-toggle" type="button" title="Minimize boss event" aria-label="Minimize boss event">-</button>
+          <button id="be-boss-close" type="button" title="Close and turn off the boss tracker" aria-label="Close and turn off the boss tracker">&times;</button>
         </div>
       </div>
       <div class="be-boss-grid">
@@ -444,6 +448,19 @@ function bindBossPanelControls(panel, state) {
     settingsToggle.onclick = async () => {
       await saveBossUiState({ settingsOpen: !bossUiState.settingsOpen, minimized: false });
       renderBossPanel(state);
+    };
+  }
+
+  const closeBtn = panel.querySelector("#be-boss-close");
+  if (closeBtn) {
+    closeBtn.onclick = () => {
+      // Closing is an explicit opt-out: also mark this event's reminder as
+      // handled, so the next relayed boss response doesn't immediately toast
+      // an offer to reopen what was just closed. Panel removal is instant;
+      // the settings write then tears down polling via the live-apply path.
+      acknowledgeBossReminder(state.eventId, false);
+      removeBossPanel();
+      setFeatureEnabled("bossTracker", false).catch((err) => handleAsyncError(err, "bossClose"));
     };
   }
 

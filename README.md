@@ -140,6 +140,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 - Once enabled, the tracker appears on Boot.dev pages when boss-event data has been loaded. It tracks current Boots Aura bonus %, event-high %, all-time-high %, boss damage dealt, XP to the next chest, and XP to defeat the boss.
 - Drag the tracker header to reposition it anywhere on screen. The position persists across pages.
 - Use the **−** / **+** button to minimize or expand the tracker. The minimized view still shows the current aura percentage.
+- Use the **×** button to close the tracker — it switches the Boss event tracker setting off in one click (turn it back on anytime from the popup). Closing also mutes reminder toasts for the current event.
 - Use the **gear** button to open the high settings panel. You can manually edit the event high and all-time high percentages — useful if you missed a high while the extension wasn't watching. Saving an event high above the all-time high also raises the all-time high.
 - The settings panel also includes a **Refresh** button and a **Reset** button. Reset clears the current event stats while keeping the all-time high.
 - Boss-event data refreshes in the background roughly every 2 minutes, and pauses while the tab is hidden. Navigating within Boot.dev resets that timer and triggers a fresh fetch immediately.
