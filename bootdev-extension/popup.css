@@ -1,7 +1,10 @@
 /* popup.css - styles for the toolbar popup and options page.
    Matches the injected boss-modal aesthetic (dark gradient, gold edges, gold/
-   white text). Uses a plain gradient rather than boot.dev's remote map texture
-   so the page has no external dependency. */
+   white text), blending a bundled copy of boot.dev's map texture with a
+   gradient so the page has no remote dependency. */
+
+/* Boot.dev visual asset used with permission.
+   Not covered by this repository's MIT license. See ATTRIBUTION.md. */
 
 * {
   box-sizing: border-box;
@@ -190,10 +193,4 @@ body.be-settings-options main {
 .be-settings-link:focus-visible {
   outline: 2px solid #e5ae3c;
   outline-offset: 2px;
-}
-
-/* Maintainer preview: drop the bundled boot.dev texture, gradient only. */
-body.be-settings.be-native-art-off {
-  background: linear-gradient(180deg, rgba(18, 22, 32, 0.97), rgba(24, 27, 38, 0.95));
-  background-blend-mode: normal;
 }

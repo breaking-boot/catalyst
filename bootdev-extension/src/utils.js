@@ -9,16 +9,6 @@ let trackedTimeouts = new Set();
 // used to tell the real nav links from scrolled-past duplicates lower in the page.
 const TOP_NAV_BAND_PX = 90;
 
-// Maintainer-only preview of the "boot.dev declined asset bundling" fallback:
-// set be_use_bundled_native_art to false in chrome.storage.local to drop the
-// bundled map texture and rank frames (they revert to a plain gradient / no
-// frame). Default on. Loaded once at startup by loadNativeArtFlag.
-const NATIVE_ART_FLAG_KEY = "be_use_bundled_native_art";
-let useBundledNativeArt = true;
-async function loadNativeArtFlag() {
-  if ((await chromeGet(NATIVE_ART_FLAG_KEY)) === false) useBundledNativeArt = false;
-}
-
 function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;

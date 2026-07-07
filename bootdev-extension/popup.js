@@ -10,7 +10,6 @@
 // source of truth shared with the content script.
 
 const SETTINGS_KEY = "be_settings";
-const NATIVE_ART_FLAG_KEY = "be_use_bundled_native_art";
 
 const DEFAULTS = SETTINGS_DEFAULTS;
 const FEATURES = FEATURE_TOGGLES;
@@ -116,13 +115,6 @@ function render() {
     openOptions.addEventListener("click", () => chrome.runtime.openOptionsPage());
   }
 }
-
-// Maintainer-only preview of the "boot.dev declined asset bundling" fallback:
-// set be_use_bundled_native_art=false in chrome.storage.local to drop the
-// bundled map texture from the settings pages (mirrors the in-page behavior).
-chrome.storage.local.get(NATIVE_ART_FLAG_KEY, (o) => {
-  if (o?.[NATIVE_ART_FLAG_KEY] === false) document.body.classList.add("be-native-art-off");
-});
 
 chrome.storage.sync.get(SETTINGS_KEY, (o) => {
   settings = normalize(o?.[SETTINGS_KEY]);

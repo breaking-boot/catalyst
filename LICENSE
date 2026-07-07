@@ -19,3 +19,15 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+---
+
+Third-party asset note:
+
+The MIT License above applies to this project's source code.
+
+It does not apply to certain bundled Boot.dev visual assets, including the map
+background and user rank border images. Those assets remain the property of
+Boot.dev and are included in this project with permission.
+
+See [ATTRIBUTION.md](ATTRIBUTION.md) for details.
