@@ -204,7 +204,7 @@ async function renderBossPanel(s) {
     }
     panel.className = `be-boss-panel${bossUiState.minimized ? " be-boss-minimized" : ""}${
       hasSavedBossPosition() ? " be-positioned" : ""
-    }${useBundledNativeArt ? "" : " be-native-art-off"}`;
+    }`;
     applyBossPanelPosition(panel);
 
     if (bossUiState.minimized) {

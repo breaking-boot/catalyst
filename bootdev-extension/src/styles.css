@@ -498,6 +498,9 @@
   }
 }
 
+/* Boot.dev visual asset used with permission.
+   Not covered by this repository's MIT license. See ATTRIBUTION.md. */
+
 /* Boss panel */
 .be-boss-panel {
   position: fixed;
@@ -587,12 +590,6 @@
 .be-boss-manual button:focus-visible {
   outline: 2px solid #e5ae3c;
   outline-offset: 2px;
-}
-/* Maintainer preview (be_use_bundled_native_art=false): drop the bundled
-   boot.dev map texture, leaving just the gradient. */
-.be-boss-panel.be-native-art-off {
-  background: linear-gradient(180deg, rgba(18, 22, 32, 0.97), rgba(24, 27, 38, 0.95));
-  background-blend-mode: normal;
 }
 #be-boss-settings-toggle {
   font-size: 17px;

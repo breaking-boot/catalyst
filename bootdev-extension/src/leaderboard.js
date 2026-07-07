@@ -44,6 +44,9 @@ const HEATMAP_REFRESH_MS = 10 * 60 * 1000;
 // and live data (once received) is authoritative anyway.
 const DAILY_BOARD_CACHE_KEY = "be_daily_board_cache";
 const DAILY_BOARD_PERSIST_TTL_MS = 5 * 60 * 1000;
+// Boot.dev visual asset used with permission.
+// Not covered by this repository's MIT license. See ATTRIBUTION.md.
+//
 // Avatar role frames, indexed to match ROLE_FRAME_INDEX_BY_ROLE below. Bundled
 // locally (assets/frames/<index>.png) and resolved to extension URLs so the
 // fallback never depends on boot.dev's build-hashed asset paths, which are
@@ -190,11 +193,6 @@ function getAvatarUrl(entry) {
 }
 
 function getRoleFrameUrl(entry) {
-  // The rank frames are bundled boot.dev art; the maintainer preview flag drops
-  // the bundled copies to show the no-frame fallback (see useBundledNativeArt in
-  // utils.js). An API-supplied frame URL, if one ever appears, is still honored —
-  // so this mirrors a genuine removal of just the bundled assets.
-  if (!useBundledNativeArt) return getExplicitFrameUrl(entry);
   return (
     getExplicitFrameUrl(entry) ||
     ROLE_FRAME_URLS[getRoleFrameIndex(entry)] ||

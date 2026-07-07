@@ -110,7 +110,6 @@ async function initEnhancer() {
   await loadCurrentUserHandle();
   await loadPersonalLeaderboard();
   await loadFrameDebugFlag();
-  await loadNativeArtFlag();
   if (enhancerStopped) return;
   chrome.storage.onChanged.addListener(handleSettingsChange);
   document.addEventListener("visibilitychange", handleVisibilityChange);
