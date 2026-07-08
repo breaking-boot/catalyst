@@ -29,7 +29,7 @@ const SNAPSHOT_MIN_WINDOW_MS = 30 * 60 * 1000;
 // over the (resubmit-inflated) heatmap estimate.
 const FULL_WINDOW_TRUST_MS = 18 * 60 * 60 * 1000;
 // Heatmap-based estimate inputs. Lesson/challenge completions have no public
-// per-day XP source, so the estimate is completions x average XP, plus boot.dev's
+// per-day XP source, so the estimate is completions x average XP, plus Boot.dev's
 // bonuses: a flat once-a-day first-clear bonus and a +1%/streak-day multiplier.
 // FIXME: ESTIMATED_XP_PER_LESSON is a placeholder — calibrate from the base-XP
 // spreadsheet as amounts are collected (see the README's personal "Daily XP" notes).
@@ -50,15 +50,15 @@ const DAILY_BOARD_PERSIST_TTL_MS = 5 * 60 * 1000;
 //
 // Avatar role frames, indexed to match ROLE_FRAME_INDEX_BY_ROLE below. Bundled
 // locally (assets/frames/<index>.png) and resolved to extension URLs so the
-// fallback never depends on boot.dev's build-hashed asset paths, which are
+// fallback never depends on Boot.dev's build-hashed asset paths, which are
 // regenerated on every redeploy. Only used when the API provides no explicit
-// frame URL (see getExplicitFrameUrl); if boot.dev redesigns the frames the
+// frame URL (see getExplicitFrameUrl); if Boot.dev redesigns the frames the
 // bundled copies render slightly stale rather than breaking.
 const ROLE_FRAME_URLS = Array.from({ length: 10 }, (_, i) =>
   chrome.runtime.getURL(`assets/frames/${i}.png`)
 );
 // Dev-only rot-detection baseline (NOT used for rendering). These are the
-// boot.dev source URLs the bundled assets/frames PNGs were copied from. Nuxt/Vite
+// Boot.dev source URLs the bundled assets/frames PNGs were copied from. Nuxt/Vite
 // content-hash asset filenames, so a URL keeps resolving as long as the image
 // bytes are unchanged and 404s once the art changes. checkFrameAssetsForRot()
 // probes these when the be_frame_debug flag is set so the maintainer gets a local
@@ -92,7 +92,7 @@ const ROLE_FRAME_INDEX_BY_ROLE = {
   archmage: 9,
 };
 
-// Per-tier avatar geometry, indexed like ROLE_FRAME_URLS. boot.dev keeps every
+// Per-tier avatar geometry, indexed like ROLE_FRAME_URLS. Boot.dev keeps every
 // rank badge the same overall size by varying ring thickness: low tiers have a
 // thin ring in a small footprint, archmage a thick ring filling the frame. The
 // bundled PNGs reflect that — the opaque ring's outer diameter grows from ~146px
@@ -121,7 +121,7 @@ let cachedLeagueDailyEntries = [];
 let cachedLeagueEntries = [];
 
 // Timestamps of the last passively-received (or actively-fetched) board data, so
-// an active refetch on load/route change is skipped when boot.dev just fetched
+// an active refetch on load/route change is skipped when Boot.dev just fetched
 // the same board — avoiding the initial double-fetch — while a stale, already-open
 // page (no recent data) still refetches.
 const BOARD_FETCH_FRESH_MS = 10_000;
@@ -242,9 +242,9 @@ function getRoleFrameIndex(entry) {
 // ---------------------------------------------------------------------------
 // Frame rot detection (opt-in, maintainer-only)
 // ---------------------------------------------------------------------------
-// boot.dev's API never sends a frame URL (the frame is derived from Role/Level),
+// Boot.dev's API never sends a frame URL (the frame is derived from Role/Level),
 // so the bundled assets/frames copies are always the source. They can't 404, but
-// they can drift if boot.dev redesigns the art. This probe lets the maintainer
+// they can drift if Boot.dev redesigns the art. This probe lets the maintainer
 // notice that drift locally without ever surfacing anything to ordinary users:
 // it does nothing unless `be_frame_debug` is set to true in chrome.storage.local.
 async function loadFrameDebugFlag() {
@@ -258,14 +258,14 @@ function checkFrameAssetsForRot() {
 
   FRAME_SOURCE_URLS.forEach((url, index) => {
     // A same-origin <img> probe: load succeeds while the content hash is intact,
-    // and errors once boot.dev ships different art under a new hash.
+    // and errors once Boot.dev ships different art under a new hash.
     const probe = new Image();
     probe.onerror = () => {
       console.warn(
         `[catalyst] role frame ${index} no longer resolves upstream (${url}); ` +
-        "boot.dev likely changed the art. Re-download assets/frames and update FRAME_SOURCE_URLS."
+        "Boot.dev likely changed the art. Re-download assets/frames and update FRAME_SOURCE_URLS."
       );
-      toast(`Role frame ${index} changed on boot.dev. Refresh the bundled frames when convenient.`);
+      toast(`Role frame ${index} changed on Boot.dev. Refresh the bundled frames when convenient.`);
     };
     probe.src = url;
   });
@@ -368,7 +368,7 @@ function getProfileHandleFromHref(href) {
 }
 
 function findNativeCurrentUserHandle() {
-  // FRAGILE: hashed class, may break on redeploy. boot.dev marks the signed-in
+  // FRAGILE: hashed class, may break on redeploy. Boot.dev marks the signed-in
   // user's own leaderboard cards with this gold-glow utility class.
   const highlightedCards = Array.from(document.querySelectorAll(".box-shadow-glow-gold"))
     .filter((el) => isVisible(el) && !el.closest("#be-alltime-leaderboard, #be-personal-leaderboards"));
@@ -669,7 +669,7 @@ function patchAllTimeCard(el, it, myXP) {
 
 // Mirror the native boards' "You are in position N of M total students" subtitle
 // on our All-Time panel. The position is the user's own Position from the
-// all-time response; the student count has no API source (boot.dev only
+// all-time response; the student count has no API source (Boot.dev only
 // server-renders it), so it's read from a native board's rendered subtitle. The
 // count falls away gracefully when that text isn't on the page yet.
 function updateAllTimeSubtitle(panel, entries, currentIdentity) {
@@ -700,7 +700,7 @@ function currentUserAllTimePosition(entries, currentIdentity) {
 // subtitle. Text-based so it survives class-name churn; skips our own panels so
 // it can't read back its own output.
 function findTotalStudents() {
-  // The count sits in a subtitle that boot.dev renders as a <p> (League boards)
+  // The count sits in a subtitle that Boot.dev renders as a <p> (League boards)
   // or <h3> (Global boards), so search both paragraphs and headings.
   for (const el of document.querySelectorAll("p, h1, h2, h3, h4, h5, h6")) {
     if (el.closest("#be-alltime-leaderboard, #be-personal-leaderboards")) continue;
@@ -728,9 +728,9 @@ function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdent
   return top25;
 }
 
-// Default avatar for users with no profile image, matching boot.dev's native
+// Default avatar for users with no profile image, matching Boot.dev's native
 // look (a generic silhouette) instead of an initial-letter tile. Inline SVG so
-// there is no remote dependency: boot.dev hot-links a third-party image for this,
+// there is no remote dependency: Boot.dev hot-links a third-party image for this,
 // which we deliberately avoid (keeps the "transmits nothing off-device" guarantee).
 const DEFAULT_AVATAR_MARKUP =
   '<span class="be-leader-avatar-fallback" aria-hidden="true">' +
@@ -778,7 +778,7 @@ function renderLeaderAvatar(entry, displayName) {
 // ---------------------------------------------------------------------------
 // Native section comparison augmentation
 // ---------------------------------------------------------------------------
-// boot.dev renders four native leaderboard boards (League daily + standing,
+// Boot.dev renders four native leaderboard boards (League daily + standing,
 // Global daily + community). We can't read their values from the DOM, so each
 // board is matched to the API response that feeds it and a comparison vs. our own
 // value is appended into the card's text column, beneath the native value.
@@ -852,7 +852,7 @@ function myValueFromEntries(entries, ...fields) {
 function augmentNativeSection(heading, dataByHandle, myValue, unit) {
   if (!heading || myValue == null) return;
   for (const link of nativeCardsForHeading(heading)) {
-    // FRAGILE: positional DOM assumption. boot.dev's native card lays out as
+    // FRAGILE: positional DOM assumption. Boot.dev's native card lays out as
     // [rank, avatar, textColumn]; we append the comparison into that last text
     // column so it sits beneath the native value. A card-layout change on a
     // redeploy would land the comparison in the wrong place (or nowhere).
@@ -936,7 +936,7 @@ function augmentNativeKarmaLeaderboard() {
 }
 
 // Remove the comparisons this extension injected into one native board (used when a
-// board's comparison toggle is off). The cards themselves are boot.dev's; we only
+// board's comparison toggle is off). The cards themselves are Boot.dev's; we only
 // strip our own appended `.be-native-comparison` spans.
 function stripNativeSection(heading) {
   if (!heading) return;
@@ -1216,7 +1216,7 @@ function updatePersonalUserData(username, isStats, json) {
   const requestedHandle = normalizeHandle(username);
   const data = json?.data ?? json;
   const responseHandle = normalizeHandle(data?.Handle);
-  // My own profile/stats responses (e.g. boot.dev fetching my profile page)
+  // My own profile/stats responses (e.g. Boot.dev fetching my profile page)
   // feed the current-user karma series even when I'm not a tracked handle.
   if ((responseHandle || requestedHandle) === currentUserHandle) {
     recordCurrentUserKarma(data?.Karma);
@@ -1306,7 +1306,7 @@ function requestPersonalLeaderboardData() {
   }
 }
 
-// The extension's own All-Time board. boot.dev has no native all-time board, so
+// The extension's own All-Time board. Boot.dev has no native all-time board, so
 // only we ever fetch this; the freshness gate collapses rapid route re-entries.
 function requestAllTimeLeaderboardData() {
   if (!isLeaderboardPage() || !isFeatureEnabled("allTimeLeaderboard")) return;
@@ -1316,13 +1316,13 @@ function requestAllTimeLeaderboardData() {
 
 // Source data for native-section comparisons (karma + league boards). Independent of
 // personal handles so comparisons show even with no saved handles, and useful when the
-// extension loads into an already-open leaderboard page boot.dev won't re-fetch.
+// extension loads into an already-open leaderboard page Boot.dev won't re-fetch.
 function requestNativeLeaderboardData() {
   if (!isLeaderboardPage()) return;
   // These boards exist only to compute comparisons; with the master toggle off
   // nothing consumes them, so skip the four requests entirely.
   if (!isFeatureEnabled("comparisons")) return;
-  // Skip a board boot.dev just fetched (we caught it passively) to avoid the
+  // Skip a board Boot.dev just fetched (we caught it passively) to avoid the
   // initial-load double-fetch; a stale open page has no recent data and refetches.
   if (!boardFresh("daily")) requestApiJson(DAILY_LEADERBOARD_URL);
   if (!boardFresh("karma")) requestApiJson(KARMA_LEADERBOARD_URL);
@@ -1400,7 +1400,7 @@ function ensurePersonalSkeleton(panel) {
     <h3 class="be-personal-heading">Personal Leaderboards</h3>
     <div class="be-personal-shell">
       <form id="be-personal-form" class="be-personal-form">
-        <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="boot.dev handle or profile URL" aria-label="boot.dev handle or profile URL">
+        <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="Boot.dev handle or profile URL" aria-label="Boot.dev handle or profile URL">
         <button type="submit">Add</button>
       </form>
       <div class="be-personal-message-slot"></div>

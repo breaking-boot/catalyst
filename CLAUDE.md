@@ -1,7 +1,7 @@
 # CLAUDE.md — Agent guidance for catalyst
 
 ## What this project is
-Chrome extension (Manifest V3) that augments boot.dev. The Chrome-loadable directory is `bootdev-extension/`. Everything else (`reference_data/`, `scripts/`, docs) is development support only and is never loaded by Chrome.
+Chrome extension (Manifest V3) that augments Boot.dev. The Chrome-loadable directory is `bootdev-extension/`. Everything else (`reference_data/`, `scripts/`, docs) is development support only and is never loaded by Chrome.
 
 ## File responsibilities
 
@@ -18,12 +18,12 @@ Chrome extension (Manifest V3) that augments boot.dev. The Chrome-loadable direc
 | `src/profile.js` | Cumulative XP display on public profile pages. |
 | `src/boss.js` | Boss-event tracker: state management, render, drag-to-reposition, background refresh, settings panel, near-high notification, and event-active detection via `Event.ExpiresAt` (polling stops between events). Also owns the boss-event reminder toast (`bossReminders`) shown when the tracker is hidden and an event is live. |
 | `src/nextLesson.js` | Next Lesson top-nav link and Alt+N keyboard shortcut. |
-| `src/styles.css` | All injected UI styles. Uses `be-` prefix on all class names to avoid clashing with boot.dev's own styles. |
-| `assets/` | Bundled static art (loaded by Chrome, unlike `reference_data/`). `frames/0.png`–`9.png` are avatar role frames indexed to `ROLE_FRAME_INDEX_BY_ROLE` in `leaderboard.js`, loaded into the page via `chrome.runtime.getURL` + `web_accessible_resources` (`use_dynamic_url`) as the fallback when the API gives no frame URL. `maptexture2.webp` is the boss-panel + settings-page background, referenced by `styles.css` (via `../assets/`) and `popup.css` — both extension-owned stylesheets, so no `web_accessible_resources` needed. Both are copies of boot.dev art, bundled with Boot.dev's permission — see `ATTRIBUTION.md`. |
+| `src/styles.css` | All injected UI styles. Uses `be-` prefix on all class names to avoid clashing with Boot.dev's own styles. |
+| `assets/` | Bundled static art (loaded by Chrome, unlike `reference_data/`). `frames/0.png`–`9.png` are avatar role frames indexed to `ROLE_FRAME_INDEX_BY_ROLE` in `leaderboard.js`, loaded into the page via `chrome.runtime.getURL` + `web_accessible_resources` (`use_dynamic_url`) as the fallback when the API gives no frame URL. `maptexture2.webp` is the boss-panel + settings-page background, referenced by `styles.css` (via `../assets/`) and `popup.css` — both extension-owned stylesheets, so no `web_accessible_resources` needed. Both are copies of Boot.dev art, bundled with Boot.dev's permission — see `ATTRIBUTION.md`. |
 | `manifest.json` | MV3 manifest. Do not add permissions without explaining why. Current permissions: `storage` only (covers both `storage.local` and `storage.sync`). Declares `action.default_popup` (popup.html) and `options_ui` (options.html). |
 
 ## Architecture rule (DOM scraping is a last resort)
-boot.dev is a Nuxt/Vue SPA. Its CSS class names are hashed and rebuilt on every redeploy. **Avoid reading data by scraping the DOM unless absolutely necessary.** As much data as possible must come from intercepted API responses; the DOM is primarily for locating injection anchors and writing UI. When a value has no API source at all (e.g., the platform-wide student count, which boot.dev only server-renders into the page payload), reading it from rendered text is acceptable as a last resort — match on stable text landmarks, never hashed classes, and read only the minimum needed. See `src/leaderboard.js` `findTotalStudents` for the canonical example.
+Boot.dev is a Nuxt/Vue SPA. Its CSS class names are hashed and rebuilt on every redeploy. **Avoid reading data by scraping the DOM unless absolutely necessary.** As much data as possible must come from intercepted API responses; the DOM is primarily for locating injection anchors and writing UI. When a value has no API source at all (e.g., the platform-wide student count, which Boot.dev only server-renders into the page payload), reading it from rendered text is acceptable as a last resort — match on stable text landmarks, never hashed classes, and read only the minimum needed. See `src/leaderboard.js` `findTotalStudents` for the canonical example.
 
 Interception flow:
 ```
@@ -89,17 +89,17 @@ node -e "JSON.parse(require('fs').readFileSync('manifest.json','utf8')); console
 
 Confirmed API response field names are documented in `reference_data/bootdev_api_info/bootdev_openapi.yaml`
 
-## Matching boot.dev's look / finding anchors
-`reference_data/bootdev_frontend_reference/` holds distilled front-end reference (its README explains usage): `bootdev_palette.css` is boot.dev's exact color/token set for styling injected UI to match the site, and `leaderboard_dom_notes.md` documents stable page structure, the native section divider/subtitle markup, and which selectors are volatile. Prefer these palette tokens over guessing hex values.
+## Matching Boot.dev's look / finding anchors
+`reference_data/bootdev_frontend_reference/` holds distilled front-end reference (its README explains usage): `bootdev_palette.css` is Boot.dev's exact color/token set for styling injected UI to match the site, and `leaderboard_dom_notes.md` documents stable page structure, the native section divider/subtitle markup, and which selectors are volatile. Prefer these palette tokens over guessing hex values.
 
 ## Notes
 
 - Boss chest tier names are inferred from the rendered modal order because `boss_events_progress` contains chest UUIDs and thresholds, not display names.
 - Alerts are in-page toasts; the extension does not request Chrome's `"notifications"` permission.
 - Per-event boss stats reset automatically when `Event.UUID` changes. The all-time high persists across events.
-- Boss polling stops between events: a response whose `Event.ExpiresAt` is in the past marks the event inactive, halts the 2-min poll, and shows a "no active event" toast at most once per 24h per device (timestamp in `be_boss_inactive_notice`, storage.local). A forced re-check (navigation, manual Refresh, tab focus) or boot.dev's own passive `boss_events_progress` fetch resumes polling when a new event starts.
-- Boss-event reminder (tracker hidden, `bossReminders` on): detection is **passive-only** — Catalyst issues zero boss requests while the tracker is off and relies on boot.dev's own relayed `boss_events_progress` responses. The toast shows at most once per 24h per event per device; either toast button — or the panel's close (×) button — ends reminders for that event ("Show Tracker" flips the setting via `setFeatureEnabled`, and the `storage.onChanged` live-apply does the rest). In quiet mode `handleBossProgress` never touches `be_boss_state`, so the last tracked event's stats survive until the tracker is re-enabled.
-- Maintainer-only reminder test trigger (events are 4–8 weeks apart): set `be_boss_reminder_debug` to `true` in `chrome.storage.local` and reload boot.dev — a synthetic active event runs through the real `maybeShowBossReminder`, all production guards included. Remove `be_boss_reminder_state` to re-run; unset the flag when done.
+- Boss polling stops between events: a response whose `Event.ExpiresAt` is in the past marks the event inactive, halts the 2-min poll, and shows a "no active event" toast at most once per 24h per device (timestamp in `be_boss_inactive_notice`, storage.local). A forced re-check (navigation, manual Refresh, tab focus) or Boot.dev's own passive `boss_events_progress` fetch resumes polling when a new event starts.
+- Boss-event reminder (tracker hidden, `bossReminders` on): detection is **passive-only** — Catalyst issues zero boss requests while the tracker is off and relies on Boot.dev's own relayed `boss_events_progress` responses. The toast shows at most once per 24h per event per device; either toast button — or the panel's close (×) button — ends reminders for that event ("Show Tracker" flips the setting via `setFeatureEnabled`, and the `storage.onChanged` live-apply does the rest). In quiet mode `handleBossProgress` never touches `be_boss_state`, so the last tracked event's stats survive until the tracker is re-enabled.
+- Maintainer-only reminder test trigger (events are 4–8 weeks apart): set `be_boss_reminder_debug` to `true` in `chrome.storage.local` and reload Boot.dev — a synthetic active event runs through the real `maybeShowBossReminder`, all production guards included. Remove `be_boss_reminder_state` to re-run; unset the flag when done.
 - The interceptor (`injected.js`) only rebroadcasts passively-observed responses for the paths the router consumes (`RELAY_PATH_PATTERNS`); keep that allowlist in sync with the router in `content.js`.
 - The opt-in update check hits `api.github.com` (CORS-open, no host permission). The extension still requests only `storage` + `https://www.boot.dev/*`.
 - Personal-board daily XP for other users has no exact API source (the daily board is rolling-24h). `leaderboard.js` keeps per-user total-XP snapshots (`record.xpSnapshots`, `[t, xp]` pairs, ≤60, pruned >24.5h) harvested from every response that reveals a total, and `computeDailyXpView` picks the best of: live board value → snapshot-window delta → heatmap estimate → "–". `ESTIMATED_XP_PER_LESSON` (115) is a placeholder awaiting calibration from the maintainer's base-XP spreadsheet — update that one constant when real data lands.

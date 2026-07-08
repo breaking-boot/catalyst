@@ -19,7 +19,7 @@
 ## v0.6.1 - Honest daily XP for tracked users
 
 ### Personal Leaderboards
-- **Fixed Top Daily Learners showing 0 xp for everyone but yourself.** The old logic set a total-XP baseline at your *first sighting* of each tracked user each day, so anything they earned before you opened the leaderboard was invisible — every browser showed its own owner correct and all friends at 0. Daily XP for others is now derived from a rolling store of total-XP snapshots (boot.dev's daily board is a rolling last-24-hours window), and every value carries an XP source label:
+- **Fixed Top Daily Learners showing 0 xp for everyone but yourself.** The old logic set a total-XP baseline at your *first sighting* of each tracked user each day, so anything they earned before you opened the leaderboard was invisible — every browser showed its own owner correct and all friends at 0. Daily XP for others is now derived from a rolling store of total-XP snapshots (Boot.dev's daily board is a rolling last-24-hours window), and every value carries an XP source label:
   - **exact** (plain) when the user is on the live global **or league** daily board;
   - **measured** (`past Nhr` note) — the XP delta between Catalyst's oldest and newest observations inside the 24h window. A single daily-board sighting seeds a full window: the board reports both `XPEarned` and total `XP`, so their total from exactly 24h ago is `XP − XPEarned` (recorded as a backdated snapshot);
   - **estimated** (`est.` note) from the user's public **activity heatmap** (`/v1/users/public/{u}/activity_heatmap`, a new consumed endpoint): completions today × an average XP per lesson (placeholder `ESTIMATED_XP_PER_LESSON = 115`, pending calibration) with the daily first-clear bonus and streak multiplier. Resubmits count as activity but grant no XP, so estimates can run high — hence the label;
@@ -32,7 +32,7 @@
 ## v0.6.0 - Boss downtime, update checks, privacy/security hardening
 
 ### Boss tracker
-- The tracker now detects **when no event is running** (via the event's `ExpiresAt`) and **stops polling between events**, showing a one-time "no active boss event" toast and keeping the last event's stats visible with an "ended" note. Polling resumes automatically when a new event starts — on navigation, a manual Refresh, tab focus, or boot.dev's own fetch. Standing API load between events is now effectively zero.
+- The tracker now detects **when no event is running** (via the event's `ExpiresAt`) and **stops polling between events**, showing a one-time "no active boss event" toast and keeping the last event's stats visible with an "ended" note. Polling resumes automatically when a new event starts — on navigation, a manual Refresh, tab focus, or Boot.dev's own fetch. Standing API load between events is now effectively zero.
 - Boss data now also refreshes when you return to a backgrounded tab, instead of waiting up to two minutes for the next poll.
 
 ### Updates
@@ -41,31 +41,31 @@
 
 ### Fixes
 - **Learners with no profile image now show a default silhouette** (matching the native site) instead of an initial-letter tile. It is an inline SVG, so unlike the native site it adds no third-party image request.
-- **Leaderboard avatars are now sized per rank tier.** boot.dev keeps every rank badge the same overall size by varying ring thickness; Catalyst was scaling all frames uniformly, so lower-tier learners (below Archmage) rendered noticeably smaller than their neighbors. Each frame and its inner avatar are now sized to that tier's ring geometry, and an avatar with no frame (unrecognized tier, or the no-art preview) fills the box at the combo's size instead of the small ring-hole size.
+- **Leaderboard avatars are now sized per rank tier.** Boot.dev keeps every rank badge the same overall size by varying ring thickness; Catalyst was scaling all frames uniformly, so lower-tier learners (below Archmage) rendered noticeably smaller than their neighbors. Each frame and its inner avatar are now sized to that tier's ring geometry, and an avatar with no frame (unrecognized tier, or the no-art preview) fills the box at the combo's size instead of the small ring-hole size.
 
 ### Security & privacy
-- The page interceptor now **only rebroadcasts the API responses Catalyst actually uses**, instead of every `api.boot.dev` response, shrinking what any other extension on the page could observe. The page-context request bridge is likewise **restricted to those same endpoints**, so it can't be used by another script on the page as a proxy to arbitrary authenticated boot.dev API paths.
-- The bundled avatar frames are now served via a **dynamic resource URL** (`use_dynamic_url`), so the extension ID no longer leaks into boot.dev's DOM through frame image URLs.
-- The **boss panel's background texture is now bundled locally** instead of hot-linked from boot.dev — the last remote dependency is gone.
+- The page interceptor now **only rebroadcasts the API responses Catalyst actually uses**, instead of every `api.boot.dev` response, shrinking what any other extension on the page could observe. The page-context request bridge is likewise **restricted to those same endpoints**, so it can't be used by another script on the page as a proxy to arbitrary authenticated Boot.dev API paths.
+- The bundled avatar frames are now served via a **dynamic resource URL** (`use_dynamic_url`), so the extension ID no longer leaks into Boot.dev's DOM through frame image URLs.
+- The **boss panel's background texture is now bundled locally** instead of hot-linked from Boot.dev — the last remote dependency is gone.
 - Added a plain-language **Privacy** section to the README, an "unofficial / not affiliated" note, an art-attribution note, and an MIT `LICENSE`.
 
 ### Maintainability
 - Settings **defaults, labels, and board ordering now live in one shared `settings-schema.js`** used by both the content script and the settings pages, removing the two-copies drift risk. Dropped the now-unneeded `diffs*`→`comparisons*` migration.
-- Skipped the redundant **initial-load double-fetch** of native leaderboards (a board boot.dev just fetched is no longer re-requested within 10s).
+- Skipped the redundant **initial-load double-fetch** of native leaderboards (a board Boot.dev just fetched is no longer re-requested within 10s).
 - The Alt+N key listener is now torn down on context invalidation; added `FRAGILE`/resilience comments to the native-card and personal-panel DOM anchors; extracted magic numbers into named constants; added `:focus-visible` outlines and `aria-disabled` to the settings UI.
-- Added a maintainer-only `be_use_bundled_native_art` flag (chrome.storage.local) to preview the no-bundled-art fallback (gradient boss panel, no rank frames) — the path taken if boot.dev declines asset bundling.
+- Added a maintainer-only `be_use_bundled_native_art` flag (chrome.storage.local) to preview the no-bundled-art fallback (gradient boss panel, no rank frames) — the path taken if Boot.dev declines asset bundling.
 
 ## v0.5.1 - Leaderboard layout, settings polish, and fixes
 
 ### Layout
 - Moved **Personal Leaderboards** to the top of the leaderboard page, above the native League Leaderboards section, with a divider matching the native sections (it previously sat between the Global sections).
 - Added a **"You are in position N of M total students"** subtitle to the Top All-Time Learners section, matching the native boards (italic). The position comes from the all-time response; the student count has no API source, so it's read from the native board's rendered subtitle (falling back to position-only when unavailable).
-- Restyled Personal Leaderboards and the section/board titles to match the native leaderboards: bigger bold section heading, semibold board titles, native username sizing, and transparent cell/section backgrounds (they were noticeably darker than boot.dev's).
+- Restyled Personal Leaderboards and the section/board titles to match the native leaderboards: bigger bold section heading, semibold board titles, native username sizing, and transparent cell/section backgrounds (they were noticeably darker than Boot.dev's).
 
 ### Settings
 - Renamed the master XP/karma toggle to **"Leaderboard comparisons"** and the **"All-Time Learners"** feature toggle to **"Top All-Time Learners Leaderboard"** (the underlying setting keys were renamed too, with the previous values migrated so existing choices are preserved).
 - Clarified the Catalyst-added per-board labels and reordered the per-board comparison toggles top-to-bottom to match how the boards appear on the page.
-- Bundled boot.dev's map texture behind the settings popup and options page for visual consistency with the in-app panels (kept local, no remote dependency).
+- Bundled Boot.dev's map texture behind the settings popup and options page for visual consistency with the in-app panels (kept local, no remote dependency).
 
 ### Fixes
 - Toasts now stack instead of covering one another, so the first-run settings prompt is no longer immediately hidden by the boss near-high notification.
@@ -83,13 +83,13 @@
 ### Settings
 - Added a settings system to toggle every Catalyst feature on or off: the boss tracker, the All-Time Learners panel, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and XP/karma comparisons. Click the toolbar icon for the popup, or open the options page for finer control.
 - XP/karma comparisons use a master toggle plus a per-board toggle for each of the six boards (the two Catalyst panels and the four native boards), so comparisons can be enabled on, say, just the league boards. The master acts as a global gate: turning it off hides all comparisons and turning it back on restores each board's own setting.
-- Settings are stored in `chrome.storage.sync` (so they roam across a user's devices) and apply live, with no page reload. Turning a feature off also stops its background work — the boss poll halts and the native comparison requests are skipped — so disabled features place no load on boot.dev.
+- Settings are stored in `chrome.storage.sync` (so they roam across a user's devices) and apply live, with no page reload. Turning a feature off also stops its background work — the boss poll halts and the native comparison requests are skipped — so disabled features place no load on Boot.dev.
 - A one-time prompt on first run points users to the toolbar icon (which Chrome hides until pinned) so the settings are discoverable. The popup and options page match the in-app boss-modal styling.
 - No new permissions were added; the existing `storage` permission covers `storage.sync`.
 
 ### Avatar frames
-- Bundled the ten avatar role frames into `assets/frames` and resolved them with `chrome.runtime.getURL` instead of pointing at boot.dev's build-hashed Nuxt asset URLs, which are regenerated on every redeploy and would eventually 404. The frames now load from the extension and can no longer break on a boot.dev deploy.
-- Added an opt-in, maintainer-only detector (`checkFrameAssetsForRot`) that probes the original boot.dev frame URLs and warns (console + toast) when one stops resolving, signaling that the art changed upstream and the bundled copies should be refreshed. It does nothing unless `be_frame_debug` is set to `true` in `chrome.storage.local`, so ordinary users never see it.
+- Bundled the ten avatar role frames into `assets/frames` and resolved them with `chrome.runtime.getURL` instead of pointing at Boot.dev's build-hashed Nuxt asset URLs, which are regenerated on every redeploy and would eventually 404. The frames now load from the extension and can no longer break on a Boot.dev deploy.
+- Added an opt-in, maintainer-only detector (`checkFrameAssetsForRot`) that probes the original Boot.dev frame URLs and warns (console + toast) when one stops resolving, signaling that the art changed upstream and the bundled copies should be refreshed. It does nothing unless `be_frame_debug` is set to `true` in `chrome.storage.local`, so ordinary users never see it.
 
 ## v0.4.1 - Code-audit fixes: message-bridge hardening, boss reliability, cleanup
 
@@ -110,12 +110,12 @@
 
 ## v0.4.0 - XP and karma comparison display on all leaderboards, stability fixes
 
-- Added XP and karma comparison to every leaderboard entry — each card other than your own shows how far ahead (green) or behind (red) you are. Shown on the extension's Top All-Time Learners panel, all three Personal Leaderboards boards (daily XP, all-time XP, karma), and all four native boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. (Recent Archmages is left untouched — it lists no XP or karma.)
+- Added XP and karma comparison to every leaderboard entry — each card other than your own shows how far ahead (green) or behind (red) you are. Shown on the extension's Top All-Time Learners panel, all three Personal Leaderboards boards (daily XP, all-time XP, karma), and all four native Boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. (Recent Archmages is left untouched — it lists no XP or karma.)
 - Each comparison is aligned with the value it compares against: native comparisons are appended into the card's text column directly beneath the native value, and the extension panels' comparisons sit with their own value. Dropped the redundant " today" suffix from daily comparisons.
 - Intercepted `/v1/leaderboard_karma/alltime` and `/v1/league_leaderboard_xp/{day,alltime}`. Each board is matched to the API response that feeds it, and the current user's own value is read from that same response (XPEarned for league/daily, Karma for community, XP for all-time), so comparisons always match the displayed numbers; `getMyValue` prefers these responses and falls back to the saved personal record only when absent.
 - Scoped native cards by document position between known section titles, so the dynamic "You are in position N…" subtitle (an `<h3>` in the Global boards) no longer truncates a section's card range and blanks its comparisons.
 - Eliminated leaderboard flicker: each panel is rendered once and then reconciled in place keyed by handle instead of replacing `innerHTML`, so the current-user card and its gold glow are never destroyed and recreated, unchanged rows are untouched, and only changed values patch a single text node (native comparisons included). Supporting changes: a 50 ms debounced render scheduler, a fast-path and version-guarded `waitFor` so stale resolutions can't overwrite a newer render, a persistent Personal Leaderboards skeleton that keeps the input's value and focus, and a `compareDocumentPosition` check that repositions the personal panel without re-rendering.
-- Stabilized current-user identity, the deeper cause of the residual glow flicker and intermittently wrong comparisons. boot.dev's leaderboard cards are not inside `<main>`, so the nav-link heuristic could match a scrolled-past profile card and overwrite the stored handle mid-scroll. The handle is now sticky once known and taken authoritatively from the native gold-glow highlight (which only ever marks your own cards); the nav heuristic can no longer overwrite a known handle.
+- Stabilized current-user identity, the deeper cause of the residual glow flicker and intermittently wrong comparisons. Boot.dev's leaderboard cards are not inside `<main>`, so the nav-link heuristic could match a scrolled-past profile card and overwrite the stored handle mid-scroll. The handle is now sticky once known and taken authoritatively from the native gold-glow highlight (which only ever marks your own cards); the nav heuristic can no longer overwrite a known handle.
 - Corrected the avatar role-frame tier map using confirmed API data: added the missing Mage tier (level 90–99), restored the Archmage index (level 100+), and shifted the level formula down one step so all tiers render the correct frame; entries with no recognized role and a level below 10 (or no level) show no frame.
 - Matched the current-user card glow to the native site value (`0 0 15px 1px #e5a012`) on both the all-time and personal rows.
 - Matched the boss panel minimized-state title font size to the expanded title (both 16 px) and widened the panel to prevent title truncation at maximum aura length.
@@ -140,7 +140,7 @@
 - Corrected the complete avatar role-frame tier map using confirmed API data: added the missing Mage tier (level 90–99), restored the Archmage index (level 100+), and shifted the level formula down by one step so all tiers render the correct frame.
 - Normalized role strings before frame lookup.
 - Changed the avatar frame fallback to show no frame for entries with no recognized role and a level below 10 (or no level).
-- Fixed the `ensureLeaderboardUiState` position check to use `compareDocumentPosition` so it repositions the Personal Leaderboards panel without triggering a full re-render when boot.dev inserts elements between the extension's panels - the primary cause of ongoing flicker.
+- Fixed the `ensureLeaderboardUiState` position check to use `compareDocumentPosition` so it repositions the Personal Leaderboards panel without triggering a full re-render when Boot.dev inserts elements between the extension's panels - the primary cause of ongoing flicker.
 - Preserved input value and focus across Personal Leaderboards re-renders so background data refreshes no longer erase text the user is typing.
 - Matched current-user card glow to the native site value (`0 0 15px 1px #e5a012`) in both the all-time and personal leaderboard rows.
 - Matched the boss panel minimized-state title font size to the expanded-state title (both now 16 px).

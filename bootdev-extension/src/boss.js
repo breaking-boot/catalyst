@@ -24,7 +24,7 @@ let bossUiLoaded = false;
 let bossAuthUnavailableUntil = 0;
 // Whether the last response described an active event. null = unknown (poll to
 // find out); false = between events, so routine polls are skipped until a forced
-// re-check (navigation / manual Refresh) or boot.dev's own fetch shows a new one.
+// re-check (navigation / manual Refresh) or Boot.dev's own fetch shows a new one.
 let bossEventActive = null;
 // Synchronous same-session guard for the "no active event" toast (a burst of
 // responses must not double-toast); the real once-per-24h throttle is the
@@ -117,7 +117,7 @@ async function handleBossProgress(json) {
     // Quiet mode: never touch be_boss_state (previous-event stats stay intact
     // for whenever the tracker is re-enabled); at most offer the tracker via
     // the reminder toast. Detection here is passive-only — these responses come
-    // from boot.dev's own fetches relayed by injected.js.
+    // from Boot.dev's own fetches relayed by injected.js.
     await maybeShowBossReminder(json);
     return;
   }
@@ -303,7 +303,7 @@ async function saveBossReminderState() {
 
 // Maintainer-only: boss events run 4–8 weeks apart, so the reminder flow needs a
 // trigger between events. Set be_boss_reminder_debug to true in
-// chrome.storage.local and reload boot.dev; a synthetic active event is fed
+// chrome.storage.local and reload Boot.dev; a synthetic active event is fed
 // through the REAL maybeShowBossReminder, so every production guard applies
 // (reminders on, tracker off, daily window, dismissal record). Re-run a test by
 // removing be_boss_reminder_state. Does nothing unless the flag is set, so
