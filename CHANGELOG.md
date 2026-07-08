@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.8.0 - Daily Karma board, per-board toggles, Brave support
+
+### Personal Leaderboards
+- **New Daily Karma board.** Boot.dev has no daily karma leaderboard and no per-day karma API, so the value is **measured**: Catalyst records karma snapshots for each tracked user from every karma source it already sees (stats/profile fetches, passively observed responses, the top-25 karma board) and shows the delta inside the rolling 24h window with a `past Nhr` note and explanatory tooltip, like daily XP. An observed karma gain displays immediately; a confident **0** requires a watched window of at least ~30 minutes; before that the cell shows `–` (unavailable). There is no exact or estimated tier for karma.
+- Daily Karma **comparisons** work like the other boards: Catalyst also keeps a persisted karma series for you (fed by one extra own-stats request on leaderboard visits, the top-25 karma board, and your own passively observed profile/stats responses), and compares its 24h delta against each tracked user's.
+- The four boards now render **side by side** (wrapping on narrow windows), ordered **Daily XP → All-Time XP → Daily Karma → All-Time Karma**, and were renamed from "Top Daily Learners" / "Top All-Time Learners" / "Top Community Members" — those titles fit the native global boards, not a hand-picked list.
+- **Per-board toggles** (options page): each of the four boards can be switched off individually (ANDed with the Personal Leaderboards master, same pattern as the comparison toggles). A hidden board frees its column so the rest stretch; switching **all four off hides the entire section** — divider included — and stops its data requests until a board is re-enabled.
+- Sub-hour measured windows are now labeled honestly (`past <1hr` and "less than an hour" in the tooltip) instead of rounding up to 1 hour, for both XP and karma.
+
+### Browser support
+- **Brave is now officially supported.** No code changes were needed — Brave runs MV3 Chrome extensions natively; the README gains Brave install instructions (`brave://extensions`) and notes the one caveat: Brave doesn't sync extension data, so settings stay on-device there.
+- Docs now describe Catalyst as a **browser extension** for Chromium-based browsers rather than a Chrome extension. Firefox support is planned.
+
+### Docs
+- Capitalization pass: "boot.dev" → "Boot.dev" everywhere outside URLs/hostnames (source comments, UI strings, README, CHANGELOG, CLAUDE.md).
+
 ## v0.7.0 - Quiet-by-default boss tracker with event reminders
 
 ### Boss tracker
