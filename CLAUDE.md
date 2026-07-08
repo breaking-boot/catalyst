@@ -1,7 +1,7 @@
 # CLAUDE.md — Agent guidance for catalyst
 
 ## What this project is
-Chrome extension (Manifest V3) that augments Boot.dev. The Chrome-loadable directory is `bootdev-extension/`. Everything else (`reference_data/`, `scripts/`, docs) is development support only and is never loaded by Chrome.
+Browser extension (Manifest V3, Chromium-based browsers — Chrome and Brave; Firefox support is planned) that augments Boot.dev. The browser-loadable directory is `bootdev-extension/`. Everything else (`reference_data/`, `scripts/`, docs) is development support only and is never loaded by the browser.
 
 ## File responsibilities
 
@@ -19,7 +19,7 @@ Chrome extension (Manifest V3) that augments Boot.dev. The Chrome-loadable direc
 | `src/boss.js` | Boss-event tracker: state management, render, drag-to-reposition, background refresh, settings panel, near-high notification, and event-active detection via `Event.ExpiresAt` (polling stops between events). Also owns the boss-event reminder toast (`bossReminders`) shown when the tracker is hidden and an event is live. |
 | `src/nextLesson.js` | Next Lesson top-nav link and Alt+N keyboard shortcut. |
 | `src/styles.css` | All injected UI styles. Uses `be-` prefix on all class names to avoid clashing with Boot.dev's own styles. |
-| `assets/` | Bundled static art (loaded by Chrome, unlike `reference_data/`). `frames/0.png`–`9.png` are avatar role frames indexed to `ROLE_FRAME_INDEX_BY_ROLE` in `leaderboard.js`, loaded into the page via `chrome.runtime.getURL` + `web_accessible_resources` (`use_dynamic_url`) as the fallback when the API gives no frame URL. `maptexture2.webp` is the boss-panel + settings-page background, referenced by `styles.css` (via `../assets/`) and `popup.css` — both extension-owned stylesheets, so no `web_accessible_resources` needed. Both are copies of Boot.dev art, bundled with Boot.dev's permission — see `ATTRIBUTION.md`. |
+| `assets/` | Bundled static art (loaded by the browser, unlike `reference_data/`). `frames/0.png`–`9.png` are avatar role frames indexed to `ROLE_FRAME_INDEX_BY_ROLE` in `leaderboard.js`, loaded into the page via `chrome.runtime.getURL` + `web_accessible_resources` (`use_dynamic_url`) as the fallback when the API gives no frame URL. `maptexture2.webp` is the boss-panel + settings-page background, referenced by `styles.css` (via `../assets/`) and `popup.css` — both extension-owned stylesheets, so no `web_accessible_resources` needed. Both are copies of Boot.dev art, bundled with Boot.dev's permission — see `ATTRIBUTION.md`. |
 | `manifest.json` | MV3 manifest. Do not add permissions without explaining why. Current permissions: `storage` only (covers both `storage.local` and `storage.sync`). Declares `action.default_popup` (popup.html) and `options_ui` (options.html). |
 
 ## Architecture rule (DOM scraping is a last resort)
@@ -95,7 +95,7 @@ Confirmed API response field names are documented in `reference_data/bootdev_api
 ## Notes
 
 - Boss chest tier names are inferred from the rendered modal order because `boss_events_progress` contains chest UUIDs and thresholds, not display names.
-- Alerts are in-page toasts; the extension does not request Chrome's `"notifications"` permission.
+- Alerts are in-page toasts; the extension does not request the browser's `"notifications"` permission.
 - Per-event boss stats reset automatically when `Event.UUID` changes. The all-time high persists across events.
 - Boss polling stops between events: a response whose `Event.ExpiresAt` is in the past marks the event inactive, halts the 2-min poll, and shows a "no active event" toast at most once per 24h per device (timestamp in `be_boss_inactive_notice`, storage.local). A forced re-check (navigation, manual Refresh, tab focus) or Boot.dev's own passive `boss_events_progress` fetch resumes polling when a new event starts.
 - Boss-event reminder (tracker hidden, `bossReminders` on): detection is **passive-only** — Catalyst issues zero boss requests while the tracker is off and relies on Boot.dev's own relayed `boss_events_progress` responses. The toast shows at most once per 24h per event per device; either toast button — or the panel's close (×) button — ends reminders for that event ("Show Tracker" flips the setting via `setFeatureEnabled`, and the `storage.onChanged` live-apply does the rest). In quiet mode `handleBossProgress` never touches `be_boss_state`, so the last tracked event's stats survive until the tracker is re-enabled.

@@ -6,7 +6,7 @@
 
 > **Unofficial.** Catalyst is a community project and is not affiliated with, endorsed by, or supported by Boot.dev. It reads only your own Boot.dev session data, locally in your browser.
 
-A Manifest V3 Chrome extension that augments Boot.dev with a few quality-of-life additions:
+A Manifest V3 browser extension — for Chromium-based browsers such as Chrome and Brave (Firefox support is planned) — that augments Boot.dev with a few quality-of-life additions:
 
 1. **All-time XP leaderboard** - adds a global all-time XP section to the leaderboard page.
 2. **Cumulative profile XP** - adds lifetime XP and current-level XP progress to public user profile pages.
@@ -18,14 +18,14 @@ A Manifest V3 Chrome extension that augments Boot.dev with a few quality-of-life
 
 1. Download the latest `catalyst-v<version>.zip` from the `releases/` folder.
 2. Unzip it.
-3. In Chrome, open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and select the unzipped `catalyst-v<version>` folder.
+3. Open your browser's extensions page (`chrome://extensions` in Chrome, `brave://extensions` in Brave), enable **Developer mode**, click **Load unpacked**, and select the unzipped `catalyst-v<version>` folder.
 4. Visit `https://www.boot.dev`.
 
 ## Project Layout
 
 ```text
 catalyst/
-  bootdev-extension/       Chrome "Load unpacked" target
+  bootdev-extension/       Browser "Load unpacked" target
     manifest.json
     popup.html             Settings popup (toolbar icon)
     options.html           Settings options page (adds per-board comparisons)
@@ -52,13 +52,13 @@ catalyst/
   README.md
 ```
 
-Only `bootdev-extension/` is needed by Chrome.
+Only `bootdev-extension/` is needed by the browser.
 
 ## Install From Zip
 
-Chrome loads unpacked extension folders, not zip files directly. Unzip first, then load the folder.
+Browsers load unpacked extension folders, not zip files directly. Unzip first, then load the folder:
 
-1. Unzip `catalyst-v<version>.zip`.
+Unzip `catalyst-v<version>.zip`.
    - macOS/Windows: double-click the zip file or use the built-in Extract option.
    - Terminal:
 
@@ -66,16 +66,29 @@ Chrome loads unpacked extension folders, not zip files directly. Unzip first, th
 unzip catalyst-v<version>.zip
 ```
 
-2. Open Chrome and go to:
+### Chrome
 
-```text
-chrome://extensions
-```
+1. Open Chrome and go to `chrome://extensions`.
+2. Turn on **Developer mode**.
+3. Click **Load unpacked**.
+4. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.8.0`).
+5. Open or refresh `https://www.boot.dev`.
 
-3. Turn on **Developer mode**.
-4. Click **Load unpacked**.
-5. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.5.1`).
-6. Open or refresh `https://www.boot.dev`.
+### Brave
+
+Brave runs Chrome extensions natively, so Catalyst works in Brave with no changes.
+
+1. Open Brave and go to `brave://extensions`.
+2. Turn on **Developer mode** (top-right toggle).
+3. Click **Load unpacked**.
+4. Select the unzipped `catalyst-v<version>` folder (e.g. `catalyst-v0.8.0`).
+5. Open or refresh `https://www.boot.dev`.
+
+One Brave-specific note: settings save normally, but they may not roam across devices — Brave does not sync extension data, so `chrome.storage.sync` behaves like local storage there.
+
+### Firefox
+
+Not yet supported; Firefox support is planned for a future release.
 
 ## Updating
 
@@ -85,7 +98,7 @@ To update:
 
 1. Remove or replace the old unzipped `catalyst-v<old-version>` folder.
 2. Unzip the new `catalyst-v<version>.zip`.
-3. Go to `chrome://extensions`.
+3. Go to your browser's extensions page (`chrome://extensions` / `brave://extensions`).
 4. Click the reload button on **Catalyst for Boot.dev**.
 5. Refresh any open Boot.dev tabs.
 
@@ -95,10 +108,10 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 ### Settings
 
-- Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chrome hides extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
+- Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chromium browsers hide extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
 - The popup toggles the seven features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and leaderboard comparisons (XP/karma).
 - The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), and per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards).
-- Settings sync across your devices (`chrome.storage.sync`) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on Boot.dev.
+- Settings sync across your devices (`chrome.storage.sync`; in Brave they stay on-device) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on Boot.dev.
 
 ### Next Lesson
 
@@ -152,8 +165,8 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 ## Troubleshooting
 
-- If the extension does not appear, confirm that Chrome loaded the unzipped `bootdev-extension` folder, not the zip file.
-- If changes do not show up after an update, click reload on the extension in `chrome://extensions`, then refresh Boot.dev.
+- If the extension does not appear, confirm that the browser loaded the unzipped `bootdev-extension` folder, not the zip file.
+- If changes do not show up after an update, click reload on the extension in your browser's extensions page (`chrome://extensions` / `brave://extensions`), then refresh Boot.dev.
 - If a feature says a user is unavailable, try refreshing the leaderboard page. Invalid usernames are rejected and are not saved.
 - Some console messages are normal page or browser noise, such as blocked ad/analytics requests or Boot.dev hydration warnings.
 - If the extension was reloaded while Boot.dev was already open, refresh the Boot.dev tab to make sure the newest content script is active.
@@ -175,7 +188,7 @@ For Next Lesson, `/v1/dashboard_content` is treated as the authoritative source 
 Catalyst is built to keep your data on your device:
 
 - **It reads only your own Boot.dev session data.** The extension observes the JSON responses that the Boot.dev page already fetches with your existing session (leaderboards, public profiles, boss progress, dashboard content) and, on the leaderboard page, requests a few of those same public endpoints itself. It never asks for or handles your password, and your auth token is never stored, logged, or copied out of the page.
-- **It stores only settings and small caches locally.** Feature on/off flags live in `chrome.storage.sync` (so they roam across your Chrome profile) as plain booleans — no personal data. Small caches (boss state, saved personal-leaderboard handles, your current handle, the next-lesson link) live in `chrome.storage.local` on your machine.
+- **It stores only settings and small caches locally.** Feature on/off flags live in `chrome.storage.sync` (so they roam across your browser profile; Brave keeps them on-device) as plain booleans — no personal data. Small caches (boss state, saved personal-leaderboard handles, your current handle, the next-lesson link) live in `chrome.storage.local` on your machine.
 - **It transmits nothing off-device** — with one opt-in exception: if you enable **Automatic update checks**, it makes one request a day to GitHub's public API to compare version numbers. That request contains no personal data. It is off by default.
 - **Permissions are minimal:** `storage`, and host access to `https://www.boot.dev/*` only. Catalyst adds no analytics and no tracking.
 
