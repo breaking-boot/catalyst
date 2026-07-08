@@ -147,7 +147,7 @@ function removeProfileXpBadge() {
   document.getElementById("be-profile-personal-add")?.remove();
 }
 
-// Intentionally removes boot.dev's own "<current> XP" level line so our badge (which
+// Intentionally removes Boot.dev's own "<current> XP" level line so our badge (which
 // shows the same figure) doesn't duplicate it. Anchored to exact normalized text,
 // not a class, and picks the leaf with the fewest children; if nothing matches it's
 // a safe no-op (the native line simply stays).

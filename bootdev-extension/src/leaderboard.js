@@ -11,6 +11,7 @@ const LEAGUE_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/al
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
 const PERSONAL_CACHE_KEY = "be_personal_leaderboard_cache";
 const CURRENT_USER_HANDLE_KEY = "be_current_user_handle";
+const CURRENT_USER_KARMA_KEY = "be_current_user_karma";
 
 // --- Personal daily-XP measurement (see computeDailyXpView) ---
 // The native daily board is a rolling last-24-hours window, so a tracked user's
@@ -28,10 +29,10 @@ const SNAPSHOT_MIN_WINDOW_MS = 30 * 60 * 1000;
 // over the (resubmit-inflated) heatmap estimate.
 const FULL_WINDOW_TRUST_MS = 18 * 60 * 60 * 1000;
 // Heatmap-based estimate inputs. Lesson/challenge completions have no public
-// per-day XP source, so the estimate is completions x average XP, plus boot.dev's
+// per-day XP source, so the estimate is completions x average XP, plus Boot.dev's
 // bonuses: a flat once-a-day first-clear bonus and a +1%/streak-day multiplier.
 // FIXME: ESTIMATED_XP_PER_LESSON is a placeholder — calibrate from the base-XP
-// spreadsheet as amounts are collected (see README "Top Daily Learners").
+// spreadsheet as amounts are collected (see the README's personal "Daily XP" notes).
 const ESTIMATED_XP_PER_LESSON = 115;
 const DAILY_FIRST_CLEAR_BONUS_XP = 200;
 const STREAK_BONUS_CAP = 20; // percent; +1% per consecutive active day, capped
@@ -49,15 +50,15 @@ const DAILY_BOARD_PERSIST_TTL_MS = 5 * 60 * 1000;
 //
 // Avatar role frames, indexed to match ROLE_FRAME_INDEX_BY_ROLE below. Bundled
 // locally (assets/frames/<index>.png) and resolved to extension URLs so the
-// fallback never depends on boot.dev's build-hashed asset paths, which are
+// fallback never depends on Boot.dev's build-hashed asset paths, which are
 // regenerated on every redeploy. Only used when the API provides no explicit
-// frame URL (see getExplicitFrameUrl); if boot.dev redesigns the frames the
+// frame URL (see getExplicitFrameUrl); if Boot.dev redesigns the frames the
 // bundled copies render slightly stale rather than breaking.
 const ROLE_FRAME_URLS = Array.from({ length: 10 }, (_, i) =>
   chrome.runtime.getURL(`assets/frames/${i}.png`)
 );
 // Dev-only rot-detection baseline (NOT used for rendering). These are the
-// boot.dev source URLs the bundled assets/frames PNGs were copied from. Nuxt/Vite
+// Boot.dev source URLs the bundled assets/frames PNGs were copied from. Nuxt/Vite
 // content-hash asset filenames, so a URL keeps resolving as long as the image
 // bytes are unchanged and 404s once the art changes. checkFrameAssetsForRot()
 // probes these when the be_frame_debug flag is set so the maintainer gets a local
@@ -91,7 +92,7 @@ const ROLE_FRAME_INDEX_BY_ROLE = {
   archmage: 9,
 };
 
-// Per-tier avatar geometry, indexed like ROLE_FRAME_URLS. boot.dev keeps every
+// Per-tier avatar geometry, indexed like ROLE_FRAME_URLS. Boot.dev keeps every
 // rank badge the same overall size by varying ring thickness: low tiers have a
 // thin ring in a small footprint, archmage a thick ring filling the frame. The
 // bundled PNGs reflect that — the opaque ring's outer diameter grows from ~146px
@@ -120,7 +121,7 @@ let cachedLeagueDailyEntries = [];
 let cachedLeagueEntries = [];
 
 // Timestamps of the last passively-received (or actively-fetched) board data, so
-// an active refetch on load/route change is skipped when boot.dev just fetched
+// an active refetch on load/route change is skipped when Boot.dev just fetched
 // the same board — avoiding the initial double-fetch — while a stale, already-open
 // page (no recent data) still refetches.
 const BOARD_FETCH_FRESH_MS = 10_000;
@@ -138,6 +139,9 @@ let personalRecords = {};
 let personalFeedback = null;
 let personalPendingHandle = null;
 let currentUserHandle = "";
+// My own karma series ([t, karma] pairs), kept apart from personal records so
+// Daily Karma comparisons have a baseline without me tracking my own handle.
+let currentUserKarmaSnapshots = [];
 let allTimeRenderVersion = 0;
 let personalRenderVersion = 0;
 let personalRenderTimer = null;
@@ -238,9 +242,9 @@ function getRoleFrameIndex(entry) {
 // ---------------------------------------------------------------------------
 // Frame rot detection (opt-in, maintainer-only)
 // ---------------------------------------------------------------------------
-// boot.dev's API never sends a frame URL (the frame is derived from Role/Level),
+// Boot.dev's API never sends a frame URL (the frame is derived from Role/Level),
 // so the bundled assets/frames copies are always the source. They can't 404, but
-// they can drift if boot.dev redesigns the art. This probe lets the maintainer
+// they can drift if Boot.dev redesigns the art. This probe lets the maintainer
 // notice that drift locally without ever surfacing anything to ordinary users:
 // it does nothing unless `be_frame_debug` is set to true in chrome.storage.local.
 async function loadFrameDebugFlag() {
@@ -254,14 +258,14 @@ function checkFrameAssetsForRot() {
 
   FRAME_SOURCE_URLS.forEach((url, index) => {
     // A same-origin <img> probe: load succeeds while the content hash is intact,
-    // and errors once boot.dev ships different art under a new hash.
+    // and errors once Boot.dev ships different art under a new hash.
     const probe = new Image();
     probe.onerror = () => {
       console.warn(
         `[catalyst] role frame ${index} no longer resolves upstream (${url}); ` +
-        "boot.dev likely changed the art. Re-download assets/frames and update FRAME_SOURCE_URLS."
+        "Boot.dev likely changed the art. Re-download assets/frames and update FRAME_SOURCE_URLS."
       );
-      toast(`Role frame ${index} changed on boot.dev. Refresh the bundled frames when convenient.`);
+      toast(`Role frame ${index} changed on Boot.dev. Refresh the bundled frames when convenient.`);
     };
     probe.src = url;
   });
@@ -364,7 +368,7 @@ function getProfileHandleFromHref(href) {
 }
 
 function findNativeCurrentUserHandle() {
-  // FRAGILE: hashed class, may break on redeploy. boot.dev marks the signed-in
+  // FRAGILE: hashed class, may break on redeploy. Boot.dev marks the signed-in
   // user's own leaderboard cards with this gold-glow utility class.
   const highlightedCards = Array.from(document.querySelectorAll(".box-shadow-glow-gold"))
     .filter((el) => isVisible(el) && !el.closest("#be-alltime-leaderboard, #be-personal-leaderboards"));
@@ -379,14 +383,28 @@ function findNativeCurrentUserHandle() {
 
 async function loadCurrentUserHandle() {
   const stored = (await chromeGet(CURRENT_USER_HANDLE_KEY)) || {};
+  const karmaStored = await chromeGet(CURRENT_USER_KARMA_KEY);
   if (enhancerStopped) return;
   currentUserHandle = normalizeHandle(stored.handle || stored);
+  // The karma series is only valid for the handle it was recorded for.
+  currentUserKarmaSnapshots =
+    currentUserHandle &&
+    isPlainObject(karmaStored) &&
+    normalizeHandle(karmaStored.handle) === currentUserHandle &&
+    Array.isArray(karmaStored.snapshots)
+      ? karmaStored.snapshots
+      : [];
 }
 
 async function rememberCurrentUserHandle(handle) {
   const normalized = normalizeHandle(handle);
   if (!isValidHandle(normalized) || normalized === currentUserHandle) return;
 
+  // A different login invalidates the previous user's karma series.
+  if (currentUserHandle) {
+    currentUserKarmaSnapshots = [];
+    chromeSet(CURRENT_USER_KARMA_KEY, { handle: normalized, snapshots: [] });
+  }
   currentUserHandle = normalized;
   await chromeSet(CURRENT_USER_HANDLE_KEY, { handle: normalized, updatedAt: Date.now() });
   if (!isLeaderboardPage()) return;
@@ -458,6 +476,11 @@ function getMyValue(kind) {
       ?? fromEntries(cachedLeagueDailyEntries, "XPEarned", "XP");
   } else if (kind === "karma") {
     value = fromEntries(cachedKarmaEntries, "Karma");
+  } else if (kind === "dailyKarma") {
+    // No board reports daily karma; measure it from my own persisted series
+    // (same policy as tracked users: gains immediately, a 0 needs 30 min).
+    const measured = measuredDailyKarma({ karmaSnapshots: currentUserKarmaSnapshots });
+    value = measured ? measured.delta : null;
   }
   if (value != null) return value;
 
@@ -646,7 +669,7 @@ function patchAllTimeCard(el, it, myXP) {
 
 // Mirror the native boards' "You are in position N of M total students" subtitle
 // on our All-Time panel. The position is the user's own Position from the
-// all-time response; the student count has no API source (boot.dev only
+// all-time response; the student count has no API source (Boot.dev only
 // server-renders it), so it's read from a native board's rendered subtitle. The
 // count falls away gracefully when that text isn't on the page yet.
 function updateAllTimeSubtitle(panel, entries, currentIdentity) {
@@ -677,7 +700,7 @@ function currentUserAllTimePosition(entries, currentIdentity) {
 // subtitle. Text-based so it survives class-name churn; skips our own panels so
 // it can't read back its own output.
 function findTotalStudents() {
-  // The count sits in a subtitle that boot.dev renders as a <p> (League boards)
+  // The count sits in a subtitle that Boot.dev renders as a <p> (League boards)
   // or <h3> (Global boards), so search both paragraphs and headings.
   for (const el of document.querySelectorAll("p, h1, h2, h3, h4, h5, h6")) {
     if (el.closest("#be-alltime-leaderboard, #be-personal-leaderboards")) continue;
@@ -705,9 +728,9 @@ function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdent
   return top25;
 }
 
-// Default avatar for users with no profile image, matching boot.dev's native
+// Default avatar for users with no profile image, matching Boot.dev's native
 // look (a generic silhouette) instead of an initial-letter tile. Inline SVG so
-// there is no remote dependency: boot.dev hot-links a third-party image for this,
+// there is no remote dependency: Boot.dev hot-links a third-party image for this,
 // which we deliberately avoid (keeps the "transmits nothing off-device" guarantee).
 const DEFAULT_AVATAR_MARKUP =
   '<span class="be-leader-avatar-fallback" aria-hidden="true">' +
@@ -755,7 +778,7 @@ function renderLeaderAvatar(entry, displayName) {
 // ---------------------------------------------------------------------------
 // Native section comparison augmentation
 // ---------------------------------------------------------------------------
-// boot.dev renders four native leaderboard boards (League daily + standing,
+// Boot.dev renders four native leaderboard boards (League daily + standing,
 // Global daily + community). We can't read their values from the DOM, so each
 // board is matched to the API response that feeds it and a comparison vs. our own
 // value is appended into the card's text column, beneath the native value.
@@ -829,7 +852,7 @@ function myValueFromEntries(entries, ...fields) {
 function augmentNativeSection(heading, dataByHandle, myValue, unit) {
   if (!heading || myValue == null) return;
   for (const link of nativeCardsForHeading(heading)) {
-    // FRAGILE: positional DOM assumption. boot.dev's native card lays out as
+    // FRAGILE: positional DOM assumption. Boot.dev's native card lays out as
     // [rank, avatar, textColumn]; we append the comparison into that last text
     // column so it sits beneath the native value. A card-layout change on a
     // redeploy would land the comparison in the wrong place (or nowhere).
@@ -913,7 +936,7 @@ function augmentNativeKarmaLeaderboard() {
 }
 
 // Remove the comparisons this extension injected into one native board (used when a
-// board's comparison toggle is off). The cards themselves are boot.dev's; we only
+// board's comparison toggle is off). The cards themselves are Boot.dev's; we only
 // strip our own appended `.be-native-comparison` spans.
 function stripNativeSection(heading) {
   if (!heading) return;
@@ -952,7 +975,7 @@ function ensureLeaderboardUiState() {
   }
 
   // Personal: ensure it exists and stays pinned above the native boards.
-  if (isFeatureEnabled("personalLeaderboards")) {
+  if (anyPersonalBoardEnabled()) {
     const personal = document.getElementById("be-personal-leaderboards");
     if (!personal) {
       schedulePersonalLeaderboardRender();
@@ -1084,6 +1107,7 @@ function harvestCachedBoardSnapshots() {
   if (boardSeenAt.leagueDaily) harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true, asOf: boardSeenAt.leagueDaily });
   if (boardSeenAt.alltime) harvestPersonalSnapshots(cachedAllTimeEntries, { asOf: boardSeenAt.alltime });
   if (boardSeenAt.league) harvestPersonalSnapshots(cachedLeagueEntries, { asOf: boardSeenAt.league });
+  if (boardSeenAt.karma) harvestPersonalKarmaSnapshots(cachedKarmaEntries, { asOf: boardSeenAt.karma });
 }
 
 // Persist a distilled handle->XPEarned lookup for a daily board so the exact
@@ -1113,7 +1137,61 @@ function handleKarmaLeaderboard(json) {
   if (!entries.length) return;
   cachedKarmaEntries = entries;
   markBoardSeen("karma");
+  harvestPersonalKarmaSnapshots(entries);
+  recordCurrentUserKarma(myValueFromEntries(entries, "Karma"));
   if (isLeaderboardPage()) augmentNativeKarmaLeaderboard();
+}
+
+// Record an observation of my own karma total. Persisted (with the handle it
+// belongs to) so the measured window survives reloads, like tracked users'.
+function recordCurrentUserKarma(karma, atMs = Date.now()) {
+  if (!currentUserHandle) return;
+  const snaps = updateSnapshotSeries(currentUserKarmaSnapshots, karma, atMs);
+  if (!snaps) return;
+  currentUserKarmaSnapshots = snaps;
+  chromeSet(CURRENT_USER_KARMA_KEY, { handle: currentUserHandle, snapshots: snaps });
+  schedulePersonalLeaderboardRender();
+}
+
+// My own stats request, issued alongside the tracked-handle refreshes: my
+// karma is otherwise only visible when I'm on the top-25 karma board, and the
+// Daily Karma comparisons need a baseline of me to compare against.
+async function refreshCurrentUserKarma() {
+  if (!currentUserHandle) return;
+  const result = await fetchApiJsonWithAuthRetry(
+    `https://api.boot.dev/v1/users/public/${encodeURIComponent(currentUserHandle)}/stats`
+  );
+  if (result.status < 200 || result.status >= 300) return;
+  const data = result.json?.data ?? result.json;
+  recordCurrentUserKarma(data?.Karma);
+}
+
+// Harvest karma snapshots for tracked users from the all-time karma board.
+// Karma twin of harvestPersonalSnapshots, minus backdating (karma has no
+// daily board, so a sighting only yields the present total). `asOf` anchors
+// the timestamps when harvesting a board cached earlier in the session.
+function harvestPersonalKarmaSnapshots(entries, { asOf = 0 } = {}) {
+  let changed = false;
+  const now = Date.now();
+  const at = asOf || now;
+
+  for (const entry of entries) {
+    const handle = normalizeHandle(getHandle(entry));
+    if (!handle || !isPersonalHandle(handle)) continue;
+
+    const total = num(entry?.Karma);
+    if (total == null) continue;
+
+    const record = ensurePersonalRecord(handle);
+    recordKarmaSnapshot(record, total, at);
+    record.updatedAt = now;
+    changed = true;
+  }
+
+  if (changed) {
+    savePersonalCache();
+    schedulePersonalLeaderboardRender();
+  }
 }
 
 function handleLeagueDailyLeaderboard(json) {
@@ -1138,6 +1216,11 @@ function updatePersonalUserData(username, isStats, json) {
   const requestedHandle = normalizeHandle(username);
   const data = json?.data ?? json;
   const responseHandle = normalizeHandle(data?.Handle);
+  // My own profile/stats responses (e.g. Boot.dev fetching my profile page)
+  // feed the current-user karma series even when I'm not a tracked handle.
+  if ((responseHandle || requestedHandle) === currentUserHandle) {
+    recordCurrentUserKarma(data?.Karma);
+  }
   const handle = isPersonalHandle(responseHandle) ? responseHandle : requestedHandle;
   if (!handle || !isPersonalHandle(handle)) return;
 
@@ -1145,9 +1228,11 @@ function updatePersonalUserData(username, isStats, json) {
   record.handle = data?.Handle || record.handle || handle;
   if (isStats) {
     record.stats = data;
+    recordKarmaSnapshot(record, data?.Karma);
   } else {
     record.profile = data;
     recordXpSnapshot(record, data?.XP);
+    recordKarmaSnapshot(record, data?.Karma);
   }
   record.updatedAt = Date.now();
 
@@ -1210,17 +1295,18 @@ function hasNativeComparisonData() {
 }
 
 function requestPersonalLeaderboardData() {
-  if (!isFeatureEnabled("personalLeaderboards")) return;
+  if (!anyPersonalBoardEnabled()) return;
   if (!isLeaderboardPage() || !personalHandles.length) return;
 
   // The daily board is requested by requestNativeLeaderboardData, which always
   // runs on the leaderboard page; no need to re-request it here.
+  void refreshCurrentUserKarma();
   for (const handle of personalHandles) {
     void refreshPersonalHandle(handle);
   }
 }
 
-// The extension's own All-Time board. boot.dev has no native all-time board, so
+// The extension's own All-Time board. Boot.dev has no native all-time board, so
 // only we ever fetch this; the freshness gate collapses rapid route re-entries.
 function requestAllTimeLeaderboardData() {
   if (!isLeaderboardPage() || !isFeatureEnabled("allTimeLeaderboard")) return;
@@ -1230,13 +1316,13 @@ function requestAllTimeLeaderboardData() {
 
 // Source data for native-section comparisons (karma + league boards). Independent of
 // personal handles so comparisons show even with no saved handles, and useful when the
-// extension loads into an already-open leaderboard page boot.dev won't re-fetch.
+// extension loads into an already-open leaderboard page Boot.dev won't re-fetch.
 function requestNativeLeaderboardData() {
   if (!isLeaderboardPage()) return;
   // These boards exist only to compute comparisons; with the master toggle off
   // nothing consumes them, so skip the four requests entirely.
   if (!isFeatureEnabled("comparisons")) return;
-  // Skip a board boot.dev just fetched (we caught it passively) to avoid the
+  // Skip a board Boot.dev just fetched (we caught it passively) to avoid the
   // initial-load double-fetch; a stale open page has no recent data and refetches.
   if (!boardFresh("daily")) requestApiJson(DAILY_LEADERBOARD_URL);
   if (!boardFresh("karma")) requestApiJson(KARMA_LEADERBOARD_URL);
@@ -1252,7 +1338,7 @@ function schedulePersonalLeaderboardRender() {
 
 function renderPersonalLeaderboards() {
   personalRenderTimer = null;
-  if (!isFeatureEnabled("personalLeaderboards")) {
+  if (!anyPersonalBoardEnabled()) {
     removePersonalLeaderboards();
     return;
   }
@@ -1280,12 +1366,21 @@ function renderPersonalLeaderboards() {
   });
 }
 
-// Static board definitions: which kind of value each board shows and its unit.
+// Static board definitions: which kind of value each board shows, its unit,
+// and the per-board settings flag (see PERSONAL_BOARD_TOGGLES in the schema).
 const PERSONAL_BOARDS = [
-  { title: "Top Daily Learners", kind: "daily", unit: "xp" },
-  { title: "Top All-Time Learners", kind: "xp", unit: "xp" },
-  { title: "Top Community Members", kind: "karma", unit: "karma" },
+  { title: "Daily XP", kind: "daily", unit: "xp", settingKey: "personalBoardDailyXp" },
+  { title: "All-Time XP", kind: "xp", unit: "xp", settingKey: "personalBoardAllTimeXp" },
+  { title: "Daily Karma", kind: "dailyKarma", unit: "karma", settingKey: "personalBoardDailyKarma" },
+  { title: "All-Time Karma", kind: "karma", unit: "karma", settingKey: "personalBoardAllTimeKarma" },
 ];
+
+// True when the Personal Leaderboards section has anything to show: the master
+// toggle AND at least one of the four boards. All boards off hides the whole
+// section (and stops its data requests) until one is re-enabled.
+function anyPersonalBoardEnabled() {
+  return PERSONAL_BOARDS.some((b) => isPersonalBoardEnabled(b.settingKey));
+}
 
 // Build the persistent panel skeleton once. The form, chips container, message
 // slot, and per-board row containers stay mounted across renders so that data
@@ -1295,7 +1390,7 @@ function ensurePersonalSkeleton(panel) {
 
   const boards = PERSONAL_BOARDS
     .map((b) => `
-      <section class="be-personal-board">
+      <section class="be-personal-board" data-board-key="${b.settingKey}">
         <h4>${escapeHtml(b.title)}</h4>
         <div class="be-personal-rows" data-kind="${b.kind}" data-unit="${b.unit}"></div>
       </section>`)
@@ -1305,7 +1400,7 @@ function ensurePersonalSkeleton(panel) {
     <h3 class="be-personal-heading">Personal Leaderboards</h3>
     <div class="be-personal-shell">
       <form id="be-personal-form" class="be-personal-form">
-        <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="boot.dev handle or profile URL" aria-label="boot.dev handle or profile URL">
+        <input id="be-personal-handle" type="text" autocomplete="off" spellcheck="false" placeholder="Boot.dev handle or profile URL" aria-label="Boot.dev handle or profile URL">
         <button type="submit">Add</button>
       </form>
       <div class="be-personal-message-slot"></div>
@@ -1339,8 +1434,15 @@ function _applyPersonalContent(panel) {
     : '<span class="be-personal-empty">Add handles to compare friends, guild members, or rivals.</span>';
   if (chipsEl && chipsEl.innerHTML !== chipsMarkup) chipsEl.innerHTML = chipsMarkup;
 
-  // Rows: reconcile each board in place so unchanged rows are never rebuilt.
-  for (const rowsEl of panel.querySelectorAll(".be-personal-rows")) {
+  // Rows: reconcile each enabled board in place so unchanged rows are never
+  // rebuilt. A toggled-off board is hidden, freeing its grid column so the
+  // remaining boards stretch.
+  for (const boardEl of panel.querySelectorAll(".be-personal-board")) {
+    const enabled = isPersonalBoardEnabled(boardEl.getAttribute("data-board-key"));
+    boardEl.hidden = !enabled;
+    if (!enabled) continue;
+    const rowsEl = boardEl.querySelector(".be-personal-rows");
+    if (!rowsEl) continue;
     const kind = rowsEl.getAttribute("data-kind");
     const unit = rowsEl.getAttribute("data-unit");
     const rows = getPersonalRows(kind);
@@ -1489,6 +1591,7 @@ async function addPersonalHandle(handle) {
   record.profile = profile;
   record.profileError = null;
   recordXpSnapshot(record, profile.XP);
+  recordKarmaSnapshot(record, profile.Karma);
   // The new handle may already sit on a board received earlier this session
   // (league-daily especially) — harvest those now so the exact/measured tiers
   // apply immediately instead of after the next page load.
@@ -1523,7 +1626,11 @@ function getPersonalRows(kind) {
     .map((handle) => {
       const record = ensurePersonalRecord(handle);
       const profile = record.profile || {};
-      const view = kind === "daily" ? computeDailyXpView(record) : null;
+      const view = kind === "daily"
+        ? computeDailyXpView(record)
+        : kind === "dailyKarma"
+          ? computeDailyKarmaView(record)
+          : null;
       return {
         handle,
         displayHandle: getPersonalDisplayHandle(handle),
@@ -1544,6 +1651,7 @@ function getPersonalRows(kind) {
 
 function getPersonalValue(record, kind) {
   if (kind === "daily") return computeDailyXpView(record).value;
+  if (kind === "dailyKarma") return computeDailyKarmaView(record).value;
   if (kind === "karma") return num(record.stats?.Karma ?? record.profile?.Karma);
   return num(record.profile?.XP);
 }
@@ -1626,8 +1734,30 @@ function dailyBoardXpFor(record) {
 // stays usable instead of aging out of the window the moment it's written;
 // the display caps the labeled hours at 24.
 function measuredDailyXp(record) {
+  const measured = measuredDailyDelta(record.xpSnapshots);
+  // A window narrower than SNAPSHOT_MIN_WINDOW_MS says nothing about the day;
+  // fall through to the heatmap estimate instead of confidently showing "0 xp".
+  if (!measured || measured.windowMs < SNAPSHOT_MIN_WINDOW_MS) return null;
+  return measured;
+}
+
+// Karma has no estimate tier to fall back on, so unlike XP an observed *gain*
+// is shown no matter how narrow the window — the gain really happened, and the
+// note/tooltip disclose how little of the day was watched. Only a zero delta
+// needs the minimum window before it's shown as a confident 0.
+function measuredDailyKarma(record) {
+  const measured = measuredDailyDelta(record.karmaSnapshots);
+  if (!measured) return null;
+  if (measured.delta <= 0 && measured.windowMs < SNAPSHOT_MIN_WINDOW_MS) return null;
+  return measured;
+}
+
+// Delta between the oldest and newest snapshot inside the rolling 24h window.
+// Window-width policy (when a measurement is trustworthy enough to show)
+// belongs to the per-metric callers above.
+function measuredDailyDelta(snapshots) {
   const windowStart = Date.now() - SNAPSHOT_MAX_AGE_MS;
-  const snaps = (Array.isArray(record.xpSnapshots) ? record.xpSnapshots : []).filter(
+  const snaps = (Array.isArray(snapshots) ? snapshots : []).filter(
     (s) => Array.isArray(s) && num(s[0]) != null && num(s[1]) != null && s[0] >= windowStart
   );
   if (snaps.length < 2) return null;
@@ -1636,7 +1766,7 @@ function measuredDailyXp(record) {
   const newest = snaps[snaps.length - 1];
   const windowMs = newest[0] - oldest[0];
   const delta = newest[1] - oldest[1];
-  if (windowMs < SNAPSHOT_MIN_WINDOW_MS || delta < 0) return null;
+  if (delta < 0) return null;
 
   return { delta, windowMs, sinceMs: Date.now() - oldest[0] };
 }
@@ -1655,14 +1785,16 @@ function heatmapDailyEstimate(record) {
   return { value, lessons };
 }
 
-function measuredDailyView(measured) {
+function measuredDailyView(measured, what = "XP") {
   const hours = Math.min(24, Math.max(1, Math.round(measured.sinceMs / 3_600_000)));
+  const subHour = measured.sinceMs < 3_600_000;
+  const span = subHour ? "less than an hour" : `${hours} hour${hours === 1 ? "" : "s"}`;
   return {
     value: measured.delta,
-    note: `past ${hours}hr`,
+    note: subHour ? "past <1hr" : `past ${hours}hr`,
     tooltip: hours >= 22
-      ? `XP observed by Catalyst over the past ${hours} hours.`
-      : `XP observed by Catalyst over the past ${hours} hours. XP earned earlier in the day isn't visible.`,
+      ? `${what} observed by Catalyst over the past ${span}.`
+      : `${what} observed by Catalyst over the past ${span}. ${what} earned earlier in the day isn't visible.`,
   };
 }
 
@@ -1679,6 +1811,26 @@ function estimateDailyView(estimate, measured) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Daily-karma view ladder. Karma has no daily leaderboard, no per-day API, and
+// no backdating source (nothing like the daily board's XPEarned), so there are
+// only two tiers:
+//   1. measured    — diff of our own karma snapshots inside the 24h window
+//   2. unavailable — "–"
+// The window opens at Catalyst's first karma observation of the user, so
+// values firm up the longer the leaderboard page has been visited that day.
+// ---------------------------------------------------------------------------
+function computeDailyKarmaView(record) {
+  const measured = measuredDailyKarma(record);
+  if (measured) return measuredDailyView(measured, "Karma");
+
+  return {
+    value: null,
+    note: "",
+    tooltip: "Not enough data yet. Catalyst accumulates karma observations for tracked users as you browse.",
+  };
+}
+
 async function refreshPersonalHandle(handle) {
   const normalized = normalizeHandle(handle);
   if (!isValidHandle(normalized) || !isPersonalHandle(normalized)) return;
@@ -1691,6 +1843,7 @@ async function refreshPersonalHandle(handle) {
   record.profile = profile;
   record.profileError = null;
   recordXpSnapshot(record, profile.XP);
+  recordKarmaSnapshot(record, profile.Karma);
   savePersonalCache();
   schedulePersonalLeaderboardRender();
 
@@ -1706,6 +1859,7 @@ async function refreshPersonalStats(handle) {
   if (result.status >= 200 && result.status < 300) {
     const record = ensurePersonalRecord(normalized);
     record.stats = result.json?.data ?? result.json;
+    recordKarmaSnapshot(record, record.stats?.Karma);
     record.statsError = null;
     record.updatedAt = Date.now();
     savePersonalCache();
@@ -1850,15 +2004,32 @@ async function loadPublicUserProfile(handle, options = {}) {
 // oldest total observed inside the 24h window. `atMs` may lie in the past —
 // a daily-board sighting yields a backdated point (XP - XPEarned at now-24h).
 function recordXpSnapshot(record, xp, atMs = Date.now()) {
-  const total = num(xp);
-  if (total == null || total < 0) return;
+  const snaps = updateSnapshotSeries(record.xpSnapshots, xp, atMs);
+  if (snaps) record.xpSnapshots = snaps;
+}
+
+// Karma twin of recordXpSnapshot. Karma has no daily board at all, so measuring
+// snapshot deltas is the *only* daily-karma source (there is no exact tier and
+// no backdating — a sighting only ever yields the present total).
+function recordKarmaSnapshot(record, karma, atMs = Date.now()) {
+  const snaps = updateSnapshotSeries(record.karmaSnapshots, karma, atMs);
+  if (snaps) record.karmaSnapshots = snaps;
+}
+
+// Shared series updater for observed running totals ([t, value] pairs; XP and
+// karma). Prunes points past the window, repairs contradictions, dedupes flat
+// runs, and caps length. Returns the new array, or null when `value` isn't a
+// usable total (caller keeps its existing series).
+function updateSnapshotSeries(existing, value, atMs) {
+  const total = num(value);
+  if (total == null || total < 0) return null;
 
   const cutoff = Date.now() - SNAPSHOT_MAX_AGE_MS;
-  let snaps = (Array.isArray(record.xpSnapshots) ? record.xpSnapshots : []).filter(
+  let snaps = (Array.isArray(existing) ? existing : []).filter(
     (s) => Array.isArray(s) && num(s[0]) != null && num(s[1]) != null && s[0] >= cutoff
   );
 
-  // XP totals never decrease. If the new point contradicts stored ones (in
+  // Totals never decrease. If the new point contradicts stored ones (in
   // either timeline direction — API glitch, or window skew on a backdated
   // point), dropping the contradicting points is the cheapest safe repair.
   snaps = snaps.filter((s) => (s[0] <= atMs ? s[1] <= total : s[1] >= total));
@@ -1884,7 +2055,7 @@ function recordXpSnapshot(record, xp, atMs = Date.now()) {
     // Thin interior points, keeping the endpoints (they carry the window).
     snaps = snaps.filter((s, i, arr) => i === 0 || i === arr.length - 1 || i % 2 === 1);
   }
-  record.xpSnapshots = snaps;
+  return snaps;
 }
 
 function ensurePersonalRecord(handle) {

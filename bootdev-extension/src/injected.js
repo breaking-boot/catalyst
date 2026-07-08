@@ -1,6 +1,6 @@
 // injected.js
 // Runs in the PAGE's JS context (not the isolated content-script world), so it
-// can see and wrap the same window.fetch / XMLHttpRequest that boot.dev uses.
+// can see and wrap the same window.fetch / XMLHttpRequest that Boot.dev uses.
 // It clones each api.boot.dev JSON response and relays it to the content script
 // via window.postMessage. It never blocks or alters the real request.
 
@@ -202,7 +202,7 @@
       // the extension actually consumes. Any same-origin script can post
       // BE_FETCH_JSON, but it can only reach the allowlisted endpoints (which it
       // could already read from the page's own session anyway) — not arbitrary
-      // boot.dev API paths. Catalyst only ever requests allowlisted paths, so
+      // Boot.dev API paths. Catalyst only ever requests allowlisted paths, so
       // there is no functional cost.
       if (!shouldRelay(parsed.href)) return;
 

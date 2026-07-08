@@ -30,6 +30,13 @@ const SETTINGS_DEFAULTS = {
   comparisonsGlobalDaily: true, // native Global -> Top Daily Learners
   comparisonsGlobalKarma: true, // native Global -> Top Community Members
 
+  // Per-board Personal Leaderboards toggles (options page only); each is ANDed
+  // with `personalLeaderboards`. All four off hides the whole section.
+  personalBoardDailyXp: true,
+  personalBoardAllTimeXp: true,
+  personalBoardDailyKarma: true,
+  personalBoardAllTimeKarma: true,
+
   // The one default-OFF setting: opt-in GitHub release check (options page only).
   // Default-off works within the default-on framework because normalizeSettings
   // seeds this key from here, so a missing value resolves to false and stays off
@@ -41,11 +48,20 @@ const SETTINGS_DEFAULTS = {
 const FEATURE_TOGGLES = [
   { key: "bossTracker", label: "Boss event tracker", desc: "Floating panel: boss aura, damage, and chest progress." },
   { key: "bossReminders", label: "Boss event reminders", desc: "When the tracker is hidden and a boss event is live, show a small toast (at most once a day per event)." },
-  { key: "allTimeLeaderboard", label: "Top All-Time Learners Leaderboard", desc: "Cumulative-XP standings boot.dev doesn't show natively." },
+  { key: "allTimeLeaderboard", label: "Top All-Time Learners Leaderboard", desc: "Cumulative-XP standings Boot.dev doesn't show natively." },
   { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
   { key: "comparisons", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
+];
+
+// Per-board Personal Leaderboards toggles (options page only). Ordered
+// left-to-right to match the boards in the panel.
+const PERSONAL_BOARD_TOGGLES = [
+  { key: "personalBoardDailyXp", label: "Daily XP" },
+  { key: "personalBoardAllTimeXp", label: "All-Time XP" },
+  { key: "personalBoardDailyKarma", label: "Daily Karma" },
+  { key: "personalBoardAllTimeKarma", label: "All-Time Karma" },
 ];
 
 // Per-board comparison toggles (options page only). Ordered top-to-bottom to

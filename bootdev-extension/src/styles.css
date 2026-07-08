@@ -98,7 +98,7 @@
   font-family: inherit;
 }
 /* Matches the native section divider <hr class="mx-8 border-gray-600">:
-   mx-8 = 32px horizontal, border-gray-600 = #4e5564 (boot.dev palette). */
+   mx-8 = 32px horizontal, border-gray-600 = #4e5564 (Boot.dev palette). */
 .be-section-divider {
   height: 0;
   margin: 0 32px;
@@ -128,7 +128,7 @@
   line-height: 1.3;
 }
 /* Matches the native subtitle <div class="pb-2 pl-4"><p class="text-sm text-gray-400">:
-   pb-2/pl-4 = 8px/16px, text-sm = 14px/20px, text-gray-400 = #919dab (boot.dev
+   pb-2/pl-4 = 8px/16px, text-sm = 14px/20px, text-gray-400 = #919dab (Boot.dev
    palette). No `display` here, so the `hidden` attribute can collapse it. */
 .be-native-subtitle {
   margin: 0;
@@ -384,9 +384,13 @@
   color: #9ca3af;
   font-size: 13px;
 }
+/* Boards sit side by side when they fit (all four on a wide screen) and wrap
+   as the viewport narrows; a toggled-off (hidden) board frees its column so
+   the rest stretch. The min() guard keeps single-column layouts from
+   overflowing containers narrower than the column minimum. */
 .be-personal-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(270px, 100%), 1fr));
   gap: 12px;
   padding: 10px;
 }
@@ -468,9 +472,8 @@
   align-items: flex-end;
   gap: 2px;
 }
-/* Value line: the XP source label ("past 17hr" / "est.") sits on the same line
-   as the daily value, to its left, so all three boards keep matching row
-   heights. */
+/* Value line: the source label ("past 17hr" / "est.") sits on the same line
+   as the daily value, to its left, so all boards keep matching row heights. */
 .be-personal-value-line {
   display: flex;
   align-items: baseline;
@@ -486,9 +489,6 @@
 
 @media (min-width: 1280px) {
   .be-native-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .be-personal-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }
@@ -513,7 +513,7 @@
   border: 1px solid rgba(229, 174, 60, 0.35);
   /* Bundled locally (assets/maptexture2.webp), resolved relative to this CSS file
      in the extension, so there is no remote dependency and nothing to 404 on a
-     boot.dev redeploy. Content-script CSS assets need no web_accessible_resources. */
+     Boot.dev redeploy. Content-script CSS assets need no web_accessible_resources. */
   background:
     url("../assets/maptexture2.webp") 50% / cover no-repeat,
     linear-gradient(180deg, rgba(18, 22, 32, 0.97), rgba(24, 27, 38, 0.95));
