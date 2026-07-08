@@ -12,7 +12,7 @@ A Manifest V3 Chrome extension that augments Boot.dev with a few quality-of-life
 2. **Cumulative profile XP** - adds lifetime XP and current-level XP progress to public user profile pages.
 3. **Boss-event tracker** - tracks current, event-high, and all-time-high Boots Aura, boss damage, and chest progress.
 4. **Next Lesson nav button** - adds a top-nav shortcut to the current next lesson when the extension can infer it.
-5. **Personal leaderboards** - lets you save Boot.dev handles and compare them in custom daily XP, all-time XP, and all-time karma boards.
+5. **Personal leaderboards** - lets you save Boot.dev handles and compare them in custom Daily XP, All-Time XP, Daily Karma, and All-Time Karma boards.
 
 ## TL;DR
 
@@ -115,21 +115,22 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 #### Personal Leaderboards
 
-- Also on the leaderboard page, a **Personal Leaderboards** section lets you track specific Boot.dev handles across three boards: daily XP, all-time XP, and karma. Handles are stored in `chrome.storage.local`.
+- Also on the leaderboard page, a **Personal Leaderboards** section lets you track specific Boot.dev handles across four side-by-side boards: **Daily XP**, **All-Time XP**, **Daily Karma**, and **All-Time Karma**. Handles are stored in `chrome.storage.local`.
 - On any public profile page (`https://www.boot.dev/u/<username>`), an **Add to Personal Leaderboards** button lets you save that user directly.
-- **Top All-Time Learners** uses public profile XP. **Top Community Members** uses public stats karma. Both are exact.
-- Personal **Top Daily Learners** is a **best-effort estimate for users other than yourself**, because Boot.dev's daily board is a rolling last-24-hours window and there is no public API for another user's daily XP unless they are on a daily leaderboard (global top-25, or your league's). Each value is labeled with how it was obtained (the label sits to the left of the value), in decreasing accuracy:
+- **All-Time XP** uses public profile XP. **All-Time Karma** uses public stats karma. Both are exact.
+- **Daily XP** is a **best-effort estimate for users other than yourself**, because Boot.dev's daily board is a rolling last-24-hours window and there is no public API for another user's daily XP unless they are on a daily leaderboard (global top-25, or your league's). Each value is labeled with how it was obtained (the label sits to the left of the value), in decreasing accuracy:
   - **Plain value** — exact: the user is on the live global or league daily leaderboard right now, so Catalyst shows the same number Boot.dev does.
   - **`past Nhr` note** — measured: the difference between Catalyst's own oldest and newest total-XP observations of that user within the last 24 hours. Accurate for what it saw, but blind to XP earned before the window started. Seeing a user on a daily board even once seeds a full 24h window (the board response reveals their total from exactly 24h ago), so these get good fast.
   - **`est.` note** — estimated from the user's public activity heatmap: completions today x an average XP per lesson (`ESTIMATED_XP_PER_LESSON`, currently a placeholder of 115 — being calibrated against real base-XP data), plus the daily first-clear bonus and streak multiplier. Resubmitted lessons count as activity but grant no XP, so this can overestimate. The heatmap buckets by calendar day, so activity from late yesterday that is still inside the rolling 24h window is not counted.
   - **`–`** — unavailable: Catalyst does not have enough data to show a value yet. Values improve the more you (and the Boot.dev page itself) load data Catalyst can observe; hover any value for an explanation.
+- **Daily Karma** is likewise measured, not native: Boot.dev has no daily karma leaderboard and no per-day karma API at all, so the only possible source is Catalyst diffing its own karma observations of each tracked user inside the same rolling 24-hour window (`past Nhr` note, hover for details). An observed karma gain shows as soon as Catalyst sees it; a confident **0** needs a watched window of at least ~30 minutes, and a user shows `–` before that. Since nothing backdates karma the way a daily-board sighting backdates XP, the measured window only starts when Catalyst first sees the user's karma — values firm up the longer the day goes on. There is no exact or estimated tier for karma. Comparisons on this board apply the same measurement to you (Catalyst records your own karma too, adding one stats request on leaderboard visits), so they appear once your own watched window is wide enough — immediately if Catalyst sees you gain karma.
 - All observations stay on your device (see **Privacy**); Catalyst never reports anything anywhere.
 - Invalid, empty, duplicate, or nonexistent handles are rejected before being saved. If Boot.dev returns an auth error, Catalyst retries once and then asks you to refresh the page.
 
 #### XP and Karma Comparisons
 
 - Every leaderboard entry other than your own shows a comparison — how far ahead (green) or behind (red) you are in the same unit as that board's value.
-- Comparisons appear on all extension panels (Top All-Time Learners and all three Personal Leaderboards boards) and on all four native Boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. Recent Archmages is left untouched.
+- Comparisons appear on all extension panels (Top All-Time Learners and all four Personal Leaderboards boards) and on all four native Boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. Recent Archmages is left untouched.
 - Your comparison value is read from the same API response that feeds each board, with a fallback to your saved personal record when absent.
 - Comparisons are toggleable per board from the options page (see **Settings**), with a master switch in the popup to hide them all at once.
 

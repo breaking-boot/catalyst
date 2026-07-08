@@ -384,9 +384,13 @@
   color: #9ca3af;
   font-size: 13px;
 }
+/* Boards sit side by side when they fit (all four on a wide screen) and wrap
+   as the viewport narrows; a toggled-off (hidden) board frees its column so
+   the rest stretch. The min() guard keeps single-column layouts from
+   overflowing containers narrower than the column minimum. */
 .be-personal-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(270px, 100%), 1fr));
   gap: 12px;
   padding: 10px;
 }
@@ -468,9 +472,8 @@
   align-items: flex-end;
   gap: 2px;
 }
-/* Value line: the XP source label ("past 17hr" / "est.") sits on the same line
-   as the daily value, to its left, so all three boards keep matching row
-   heights. */
+/* Value line: the source label ("past 17hr" / "est.") sits on the same line
+   as the daily value, to its left, so all boards keep matching row heights. */
 .be-personal-value-line {
   display: flex;
   align-items: baseline;
@@ -486,9 +489,6 @@
 
 @media (min-width: 1280px) {
   .be-native-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .be-personal-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 }

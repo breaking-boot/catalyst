@@ -11,6 +11,7 @@ const LEAGUE_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/al
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
 const PERSONAL_CACHE_KEY = "be_personal_leaderboard_cache";
 const CURRENT_USER_HANDLE_KEY = "be_current_user_handle";
+const CURRENT_USER_KARMA_KEY = "be_current_user_karma";
 
 // --- Personal daily-XP measurement (see computeDailyXpView) ---
 // The native daily board is a rolling last-24-hours window, so a tracked user's
@@ -31,7 +32,7 @@ const FULL_WINDOW_TRUST_MS = 18 * 60 * 60 * 1000;
 // per-day XP source, so the estimate is completions x average XP, plus boot.dev's
 // bonuses: a flat once-a-day first-clear bonus and a +1%/streak-day multiplier.
 // FIXME: ESTIMATED_XP_PER_LESSON is a placeholder — calibrate from the base-XP
-// spreadsheet as amounts are collected (see README "Top Daily Learners").
+// spreadsheet as amounts are collected (see the README's personal "Daily XP" notes).
 const ESTIMATED_XP_PER_LESSON = 115;
 const DAILY_FIRST_CLEAR_BONUS_XP = 200;
 const STREAK_BONUS_CAP = 20; // percent; +1% per consecutive active day, capped
@@ -138,6 +139,9 @@ let personalRecords = {};
 let personalFeedback = null;
 let personalPendingHandle = null;
 let currentUserHandle = "";
+// My own karma series ([t, karma] pairs), kept apart from personal records so
+// Daily Karma comparisons have a baseline without me tracking my own handle.
+let currentUserKarmaSnapshots = [];
 let allTimeRenderVersion = 0;
 let personalRenderVersion = 0;
 let personalRenderTimer = null;
@@ -379,14 +383,28 @@ function findNativeCurrentUserHandle() {
 
 async function loadCurrentUserHandle() {
   const stored = (await chromeGet(CURRENT_USER_HANDLE_KEY)) || {};
+  const karmaStored = await chromeGet(CURRENT_USER_KARMA_KEY);
   if (enhancerStopped) return;
   currentUserHandle = normalizeHandle(stored.handle || stored);
+  // The karma series is only valid for the handle it was recorded for.
+  currentUserKarmaSnapshots =
+    currentUserHandle &&
+    isPlainObject(karmaStored) &&
+    normalizeHandle(karmaStored.handle) === currentUserHandle &&
+    Array.isArray(karmaStored.snapshots)
+      ? karmaStored.snapshots
+      : [];
 }
 
 async function rememberCurrentUserHandle(handle) {
   const normalized = normalizeHandle(handle);
   if (!isValidHandle(normalized) || normalized === currentUserHandle) return;
 
+  // A different login invalidates the previous user's karma series.
+  if (currentUserHandle) {
+    currentUserKarmaSnapshots = [];
+    chromeSet(CURRENT_USER_KARMA_KEY, { handle: normalized, snapshots: [] });
+  }
   currentUserHandle = normalized;
   await chromeSet(CURRENT_USER_HANDLE_KEY, { handle: normalized, updatedAt: Date.now() });
   if (!isLeaderboardPage()) return;
@@ -458,6 +476,11 @@ function getMyValue(kind) {
       ?? fromEntries(cachedLeagueDailyEntries, "XPEarned", "XP");
   } else if (kind === "karma") {
     value = fromEntries(cachedKarmaEntries, "Karma");
+  } else if (kind === "dailyKarma") {
+    // No board reports daily karma; measure it from my own persisted series
+    // (same policy as tracked users: gains immediately, a 0 needs 30 min).
+    const measured = measuredDailyKarma({ karmaSnapshots: currentUserKarmaSnapshots });
+    value = measured ? measured.delta : null;
   }
   if (value != null) return value;
 
@@ -1084,6 +1107,7 @@ function harvestCachedBoardSnapshots() {
   if (boardSeenAt.leagueDaily) harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true, asOf: boardSeenAt.leagueDaily });
   if (boardSeenAt.alltime) harvestPersonalSnapshots(cachedAllTimeEntries, { asOf: boardSeenAt.alltime });
   if (boardSeenAt.league) harvestPersonalSnapshots(cachedLeagueEntries, { asOf: boardSeenAt.league });
+  if (boardSeenAt.karma) harvestPersonalKarmaSnapshots(cachedKarmaEntries, { asOf: boardSeenAt.karma });
 }
 
 // Persist a distilled handle->XPEarned lookup for a daily board so the exact
@@ -1113,7 +1137,61 @@ function handleKarmaLeaderboard(json) {
   if (!entries.length) return;
   cachedKarmaEntries = entries;
   markBoardSeen("karma");
+  harvestPersonalKarmaSnapshots(entries);
+  recordCurrentUserKarma(myValueFromEntries(entries, "Karma"));
   if (isLeaderboardPage()) augmentNativeKarmaLeaderboard();
+}
+
+// Record an observation of my own karma total. Persisted (with the handle it
+// belongs to) so the measured window survives reloads, like tracked users'.
+function recordCurrentUserKarma(karma, atMs = Date.now()) {
+  if (!currentUserHandle) return;
+  const snaps = updateSnapshotSeries(currentUserKarmaSnapshots, karma, atMs);
+  if (!snaps) return;
+  currentUserKarmaSnapshots = snaps;
+  chromeSet(CURRENT_USER_KARMA_KEY, { handle: currentUserHandle, snapshots: snaps });
+  schedulePersonalLeaderboardRender();
+}
+
+// My own stats request, issued alongside the tracked-handle refreshes: my
+// karma is otherwise only visible when I'm on the top-25 karma board, and the
+// Daily Karma comparisons need a baseline of me to compare against.
+async function refreshCurrentUserKarma() {
+  if (!currentUserHandle) return;
+  const result = await fetchApiJsonWithAuthRetry(
+    `https://api.boot.dev/v1/users/public/${encodeURIComponent(currentUserHandle)}/stats`
+  );
+  if (result.status < 200 || result.status >= 300) return;
+  const data = result.json?.data ?? result.json;
+  recordCurrentUserKarma(data?.Karma);
+}
+
+// Harvest karma snapshots for tracked users from the all-time karma board.
+// Karma twin of harvestPersonalSnapshots, minus backdating (karma has no
+// daily board, so a sighting only yields the present total). `asOf` anchors
+// the timestamps when harvesting a board cached earlier in the session.
+function harvestPersonalKarmaSnapshots(entries, { asOf = 0 } = {}) {
+  let changed = false;
+  const now = Date.now();
+  const at = asOf || now;
+
+  for (const entry of entries) {
+    const handle = normalizeHandle(getHandle(entry));
+    if (!handle || !isPersonalHandle(handle)) continue;
+
+    const total = num(entry?.Karma);
+    if (total == null) continue;
+
+    const record = ensurePersonalRecord(handle);
+    recordKarmaSnapshot(record, total, at);
+    record.updatedAt = now;
+    changed = true;
+  }
+
+  if (changed) {
+    savePersonalCache();
+    schedulePersonalLeaderboardRender();
+  }
 }
 
 function handleLeagueDailyLeaderboard(json) {
@@ -1138,6 +1216,11 @@ function updatePersonalUserData(username, isStats, json) {
   const requestedHandle = normalizeHandle(username);
   const data = json?.data ?? json;
   const responseHandle = normalizeHandle(data?.Handle);
+  // My own profile/stats responses (e.g. boot.dev fetching my profile page)
+  // feed the current-user karma series even when I'm not a tracked handle.
+  if ((responseHandle || requestedHandle) === currentUserHandle) {
+    recordCurrentUserKarma(data?.Karma);
+  }
   const handle = isPersonalHandle(responseHandle) ? responseHandle : requestedHandle;
   if (!handle || !isPersonalHandle(handle)) return;
 
@@ -1145,9 +1228,11 @@ function updatePersonalUserData(username, isStats, json) {
   record.handle = data?.Handle || record.handle || handle;
   if (isStats) {
     record.stats = data;
+    recordKarmaSnapshot(record, data?.Karma);
   } else {
     record.profile = data;
     recordXpSnapshot(record, data?.XP);
+    recordKarmaSnapshot(record, data?.Karma);
   }
   record.updatedAt = Date.now();
 
@@ -1215,6 +1300,7 @@ function requestPersonalLeaderboardData() {
 
   // The daily board is requested by requestNativeLeaderboardData, which always
   // runs on the leaderboard page; no need to re-request it here.
+  void refreshCurrentUserKarma();
   for (const handle of personalHandles) {
     void refreshPersonalHandle(handle);
   }
@@ -1282,9 +1368,10 @@ function renderPersonalLeaderboards() {
 
 // Static board definitions: which kind of value each board shows and its unit.
 const PERSONAL_BOARDS = [
-  { title: "Top Daily Learners", kind: "daily", unit: "xp" },
-  { title: "Top All-Time Learners", kind: "xp", unit: "xp" },
-  { title: "Top Community Members", kind: "karma", unit: "karma" },
+  { title: "Daily XP", kind: "daily", unit: "xp" },
+  { title: "All-Time XP", kind: "xp", unit: "xp" },
+  { title: "Daily Karma", kind: "dailyKarma", unit: "karma" },
+  { title: "All-Time Karma", kind: "karma", unit: "karma" },
 ];
 
 // Build the persistent panel skeleton once. The form, chips container, message
@@ -1489,6 +1576,7 @@ async function addPersonalHandle(handle) {
   record.profile = profile;
   record.profileError = null;
   recordXpSnapshot(record, profile.XP);
+  recordKarmaSnapshot(record, profile.Karma);
   // The new handle may already sit on a board received earlier this session
   // (league-daily especially) — harvest those now so the exact/measured tiers
   // apply immediately instead of after the next page load.
@@ -1523,7 +1611,11 @@ function getPersonalRows(kind) {
     .map((handle) => {
       const record = ensurePersonalRecord(handle);
       const profile = record.profile || {};
-      const view = kind === "daily" ? computeDailyXpView(record) : null;
+      const view = kind === "daily"
+        ? computeDailyXpView(record)
+        : kind === "dailyKarma"
+          ? computeDailyKarmaView(record)
+          : null;
       return {
         handle,
         displayHandle: getPersonalDisplayHandle(handle),
@@ -1544,6 +1636,7 @@ function getPersonalRows(kind) {
 
 function getPersonalValue(record, kind) {
   if (kind === "daily") return computeDailyXpView(record).value;
+  if (kind === "dailyKarma") return computeDailyKarmaView(record).value;
   if (kind === "karma") return num(record.stats?.Karma ?? record.profile?.Karma);
   return num(record.profile?.XP);
 }
@@ -1626,8 +1719,30 @@ function dailyBoardXpFor(record) {
 // stays usable instead of aging out of the window the moment it's written;
 // the display caps the labeled hours at 24.
 function measuredDailyXp(record) {
+  const measured = measuredDailyDelta(record.xpSnapshots);
+  // A window narrower than SNAPSHOT_MIN_WINDOW_MS says nothing about the day;
+  // fall through to the heatmap estimate instead of confidently showing "0 xp".
+  if (!measured || measured.windowMs < SNAPSHOT_MIN_WINDOW_MS) return null;
+  return measured;
+}
+
+// Karma has no estimate tier to fall back on, so unlike XP an observed *gain*
+// is shown no matter how narrow the window — the gain really happened, and the
+// note/tooltip disclose how little of the day was watched. Only a zero delta
+// needs the minimum window before it's shown as a confident 0.
+function measuredDailyKarma(record) {
+  const measured = measuredDailyDelta(record.karmaSnapshots);
+  if (!measured) return null;
+  if (measured.delta <= 0 && measured.windowMs < SNAPSHOT_MIN_WINDOW_MS) return null;
+  return measured;
+}
+
+// Delta between the oldest and newest snapshot inside the rolling 24h window.
+// Window-width policy (when a measurement is trustworthy enough to show)
+// belongs to the per-metric callers above.
+function measuredDailyDelta(snapshots) {
   const windowStart = Date.now() - SNAPSHOT_MAX_AGE_MS;
-  const snaps = (Array.isArray(record.xpSnapshots) ? record.xpSnapshots : []).filter(
+  const snaps = (Array.isArray(snapshots) ? snapshots : []).filter(
     (s) => Array.isArray(s) && num(s[0]) != null && num(s[1]) != null && s[0] >= windowStart
   );
   if (snaps.length < 2) return null;
@@ -1636,7 +1751,7 @@ function measuredDailyXp(record) {
   const newest = snaps[snaps.length - 1];
   const windowMs = newest[0] - oldest[0];
   const delta = newest[1] - oldest[1];
-  if (windowMs < SNAPSHOT_MIN_WINDOW_MS || delta < 0) return null;
+  if (delta < 0) return null;
 
   return { delta, windowMs, sinceMs: Date.now() - oldest[0] };
 }
@@ -1655,14 +1770,16 @@ function heatmapDailyEstimate(record) {
   return { value, lessons };
 }
 
-function measuredDailyView(measured) {
+function measuredDailyView(measured, what = "XP") {
   const hours = Math.min(24, Math.max(1, Math.round(measured.sinceMs / 3_600_000)));
+  const subHour = measured.sinceMs < 3_600_000;
+  const span = subHour ? "less than an hour" : `${hours} hour${hours === 1 ? "" : "s"}`;
   return {
     value: measured.delta,
-    note: `past ${hours}hr`,
+    note: subHour ? "past <1hr" : `past ${hours}hr`,
     tooltip: hours >= 22
-      ? `XP observed by Catalyst over the past ${hours} hours.`
-      : `XP observed by Catalyst over the past ${hours} hours. XP earned earlier in the day isn't visible.`,
+      ? `${what} observed by Catalyst over the past ${span}.`
+      : `${what} observed by Catalyst over the past ${span}. ${what} earned earlier in the day isn't visible.`,
   };
 }
 
@@ -1679,6 +1796,26 @@ function estimateDailyView(estimate, measured) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Daily-karma view ladder. Karma has no daily leaderboard, no per-day API, and
+// no backdating source (nothing like the daily board's XPEarned), so there are
+// only two tiers:
+//   1. measured    — diff of our own karma snapshots inside the 24h window
+//   2. unavailable — "–"
+// The window opens at Catalyst's first karma observation of the user, so
+// values firm up the longer the leaderboard page has been visited that day.
+// ---------------------------------------------------------------------------
+function computeDailyKarmaView(record) {
+  const measured = measuredDailyKarma(record);
+  if (measured) return measuredDailyView(measured, "Karma");
+
+  return {
+    value: null,
+    note: "",
+    tooltip: "Not enough data yet. Catalyst accumulates karma observations for tracked users as you browse.",
+  };
+}
+
 async function refreshPersonalHandle(handle) {
   const normalized = normalizeHandle(handle);
   if (!isValidHandle(normalized) || !isPersonalHandle(normalized)) return;
@@ -1691,6 +1828,7 @@ async function refreshPersonalHandle(handle) {
   record.profile = profile;
   record.profileError = null;
   recordXpSnapshot(record, profile.XP);
+  recordKarmaSnapshot(record, profile.Karma);
   savePersonalCache();
   schedulePersonalLeaderboardRender();
 
@@ -1706,6 +1844,7 @@ async function refreshPersonalStats(handle) {
   if (result.status >= 200 && result.status < 300) {
     const record = ensurePersonalRecord(normalized);
     record.stats = result.json?.data ?? result.json;
+    recordKarmaSnapshot(record, record.stats?.Karma);
     record.statsError = null;
     record.updatedAt = Date.now();
     savePersonalCache();
@@ -1850,15 +1989,32 @@ async function loadPublicUserProfile(handle, options = {}) {
 // oldest total observed inside the 24h window. `atMs` may lie in the past —
 // a daily-board sighting yields a backdated point (XP - XPEarned at now-24h).
 function recordXpSnapshot(record, xp, atMs = Date.now()) {
-  const total = num(xp);
-  if (total == null || total < 0) return;
+  const snaps = updateSnapshotSeries(record.xpSnapshots, xp, atMs);
+  if (snaps) record.xpSnapshots = snaps;
+}
+
+// Karma twin of recordXpSnapshot. Karma has no daily board at all, so measuring
+// snapshot deltas is the *only* daily-karma source (there is no exact tier and
+// no backdating — a sighting only ever yields the present total).
+function recordKarmaSnapshot(record, karma, atMs = Date.now()) {
+  const snaps = updateSnapshotSeries(record.karmaSnapshots, karma, atMs);
+  if (snaps) record.karmaSnapshots = snaps;
+}
+
+// Shared series updater for observed running totals ([t, value] pairs; XP and
+// karma). Prunes points past the window, repairs contradictions, dedupes flat
+// runs, and caps length. Returns the new array, or null when `value` isn't a
+// usable total (caller keeps its existing series).
+function updateSnapshotSeries(existing, value, atMs) {
+  const total = num(value);
+  if (total == null || total < 0) return null;
 
   const cutoff = Date.now() - SNAPSHOT_MAX_AGE_MS;
-  let snaps = (Array.isArray(record.xpSnapshots) ? record.xpSnapshots : []).filter(
+  let snaps = (Array.isArray(existing) ? existing : []).filter(
     (s) => Array.isArray(s) && num(s[0]) != null && num(s[1]) != null && s[0] >= cutoff
   );
 
-  // XP totals never decrease. If the new point contradicts stored ones (in
+  // Totals never decrease. If the new point contradicts stored ones (in
   // either timeline direction — API glitch, or window skew on a backdated
   // point), dropping the contradicting points is the cheapest safe repair.
   snaps = snaps.filter((s) => (s[0] <= atMs ? s[1] <= total : s[1] >= total));
@@ -1884,7 +2040,7 @@ function recordXpSnapshot(record, xp, atMs = Date.now()) {
     // Thin interior points, keeping the endpoints (they carry the window).
     snaps = snaps.filter((s, i, arr) => i === 0 || i === arr.length - 1 || i % 2 === 1);
   }
-  record.xpSnapshots = snaps;
+  return snaps;
 }
 
 function ensurePersonalRecord(handle) {
