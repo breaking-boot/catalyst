@@ -97,7 +97,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 - Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chrome hides extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
 - The popup toggles the seven features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and leaderboard comparisons (XP/karma).
-- The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds per-board control over the XP/karma comparisons: a master toggle plus a checkbox for each of the six boards, so you can show comparisons on just the boards you want.
+- The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), and per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards).
 - Settings sync across your devices (`chrome.storage.sync`) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on Boot.dev.
 
 ### Next Lesson
@@ -115,7 +115,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 #### Personal Leaderboards
 
-- Also on the leaderboard page, a **Personal Leaderboards** section lets you track specific Boot.dev handles across four side-by-side boards: **Daily XP**, **All-Time XP**, **Daily Karma**, and **All-Time Karma**. Handles are stored in `chrome.storage.local`.
+- Also on the leaderboard page, a **Personal Leaderboards** section lets you track specific Boot.dev handles across four side-by-side boards: **Daily XP**, **All-Time XP**, **Daily Karma**, and **All-Time Karma**. Handles are stored in `chrome.storage.local`. Each board can be toggled individually from the options page; all four off hides the section entirely.
 - On any public profile page (`https://www.boot.dev/u/<username>`), an **Add to Personal Leaderboards** button lets you save that user directly.
 - **All-Time XP** uses public profile XP. **All-Time Karma** uses public stats karma. Both are exact.
 - **Daily XP** is a **best-effort estimate for users other than yourself**, because Boot.dev's daily board is a rolling last-24-hours window and there is no public API for another user's daily XP unless they are on a daily leaderboard (global top-25, or your league's). Each value is labeled with how it was obtained (the label sits to the left of the value), in decreasing accuracy:

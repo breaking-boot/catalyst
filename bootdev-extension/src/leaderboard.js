@@ -975,7 +975,7 @@ function ensureLeaderboardUiState() {
   }
 
   // Personal: ensure it exists and stays pinned above the native boards.
-  if (isFeatureEnabled("personalLeaderboards")) {
+  if (anyPersonalBoardEnabled()) {
     const personal = document.getElementById("be-personal-leaderboards");
     if (!personal) {
       schedulePersonalLeaderboardRender();
@@ -1295,7 +1295,7 @@ function hasNativeComparisonData() {
 }
 
 function requestPersonalLeaderboardData() {
-  if (!isFeatureEnabled("personalLeaderboards")) return;
+  if (!anyPersonalBoardEnabled()) return;
   if (!isLeaderboardPage() || !personalHandles.length) return;
 
   // The daily board is requested by requestNativeLeaderboardData, which always
@@ -1338,7 +1338,7 @@ function schedulePersonalLeaderboardRender() {
 
 function renderPersonalLeaderboards() {
   personalRenderTimer = null;
-  if (!isFeatureEnabled("personalLeaderboards")) {
+  if (!anyPersonalBoardEnabled()) {
     removePersonalLeaderboards();
     return;
   }
@@ -1366,13 +1366,21 @@ function renderPersonalLeaderboards() {
   });
 }
 
-// Static board definitions: which kind of value each board shows and its unit.
+// Static board definitions: which kind of value each board shows, its unit,
+// and the per-board settings flag (see PERSONAL_BOARD_TOGGLES in the schema).
 const PERSONAL_BOARDS = [
-  { title: "Daily XP", kind: "daily", unit: "xp" },
-  { title: "All-Time XP", kind: "xp", unit: "xp" },
-  { title: "Daily Karma", kind: "dailyKarma", unit: "karma" },
-  { title: "All-Time Karma", kind: "karma", unit: "karma" },
+  { title: "Daily XP", kind: "daily", unit: "xp", settingKey: "personalBoardDailyXp" },
+  { title: "All-Time XP", kind: "xp", unit: "xp", settingKey: "personalBoardAllTimeXp" },
+  { title: "Daily Karma", kind: "dailyKarma", unit: "karma", settingKey: "personalBoardDailyKarma" },
+  { title: "All-Time Karma", kind: "karma", unit: "karma", settingKey: "personalBoardAllTimeKarma" },
 ];
+
+// True when the Personal Leaderboards section has anything to show: the master
+// toggle AND at least one of the four boards. All boards off hides the whole
+// section (and stops its data requests) until one is re-enabled.
+function anyPersonalBoardEnabled() {
+  return PERSONAL_BOARDS.some((b) => isPersonalBoardEnabled(b.settingKey));
+}
 
 // Build the persistent panel skeleton once. The form, chips container, message
 // slot, and per-board row containers stay mounted across renders so that data
@@ -1382,7 +1390,7 @@ function ensurePersonalSkeleton(panel) {
 
   const boards = PERSONAL_BOARDS
     .map((b) => `
-      <section class="be-personal-board">
+      <section class="be-personal-board" data-board-key="${b.settingKey}">
         <h4>${escapeHtml(b.title)}</h4>
         <div class="be-personal-rows" data-kind="${b.kind}" data-unit="${b.unit}"></div>
       </section>`)
@@ -1426,8 +1434,15 @@ function _applyPersonalContent(panel) {
     : '<span class="be-personal-empty">Add handles to compare friends, guild members, or rivals.</span>';
   if (chipsEl && chipsEl.innerHTML !== chipsMarkup) chipsEl.innerHTML = chipsMarkup;
 
-  // Rows: reconcile each board in place so unchanged rows are never rebuilt.
-  for (const rowsEl of panel.querySelectorAll(".be-personal-rows")) {
+  // Rows: reconcile each enabled board in place so unchanged rows are never
+  // rebuilt. A toggled-off board is hidden, freeing its grid column so the
+  // remaining boards stretch.
+  for (const boardEl of panel.querySelectorAll(".be-personal-board")) {
+    const enabled = isPersonalBoardEnabled(boardEl.getAttribute("data-board-key"));
+    boardEl.hidden = !enabled;
+    if (!enabled) continue;
+    const rowsEl = boardEl.querySelector(".be-personal-rows");
+    if (!rowsEl) continue;
     const kind = rowsEl.getAttribute("data-kind");
     const unit = rowsEl.getAttribute("data-unit");
     const rows = getPersonalRows(kind);

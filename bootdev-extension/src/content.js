@@ -235,7 +235,8 @@ function applyFeatureSettings(before, after) {
   if (turnedOn("allTimeLeaderboard") && !cachedAllTimeEntries.length) {
     requestApiJson(ALL_TIME_LEADERBOARD_URL);
   }
-  if (turnedOn("personalLeaderboards") && personalDataMissing()) {
+  if ((turnedOn("personalLeaderboards") || PERSONAL_BOARDS.some((b) => turnedOn(b.settingKey))) &&
+      personalDataMissing()) {
     requestPersonalLeaderboardData();
   }
   if (turnedOn("comparisons") && !hasNativeComparisonData()) {

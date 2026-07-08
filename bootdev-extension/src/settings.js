@@ -48,6 +48,11 @@ function isComparisonEnabled(boardKey) {
   return isFeatureEnabled("comparisons") && isFeatureEnabled(boardKey);
 }
 
+// Effective per-board Personal Leaderboards state: the master AND the board's own.
+function isPersonalBoardEnabled(boardKey) {
+  return isFeatureEnabled("personalLeaderboards") && isFeatureEnabled(boardKey);
+}
+
 // Persist a single feature flag from the content script (e.g. the boss reminder
 // toast's "Show Tracker" button). Patches only the one key into the raw stored
 // object — writing the fully-normalized map would freeze every current default

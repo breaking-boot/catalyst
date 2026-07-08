@@ -69,22 +69,31 @@ function makeToggle({ key, label, desc }) {
   input.addEventListener("change", () => {
     settings[key] = input.checked;
     persist();
-    if (key === "comparisons") updateComparisonDisabledState();
+    if (key in DEPENDENT_SECTIONS) updateDependentSectionStates();
   });
 
   row.append(text, input, knob);
   return row;
 }
 
-function updateComparisonDisabledState() {
-  const masterOn = settings.comparisons !== false;
-  const section = document.getElementById("be-comparison-boards");
-  if (!section) return;
-  section.classList.toggle("be-disabled", !masterOn);
-  section.setAttribute("aria-disabled", masterOn ? "false" : "true");
-  section.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
-    cb.disabled = !masterOn;
-  });
+// Options-page sections whose toggles only apply while a master feature toggle
+// is on; the section is grayed out and disabled when its master is off.
+const DEPENDENT_SECTIONS = {
+  comparisons: "be-comparison-boards",
+  personalLeaderboards: "be-personal-boards",
+};
+
+function updateDependentSectionStates() {
+  for (const [masterKey, sectionId] of Object.entries(DEPENDENT_SECTIONS)) {
+    const section = document.getElementById(sectionId);
+    if (!section) continue;
+    const masterOn = settings[masterKey] !== false;
+    section.classList.toggle("be-disabled", !masterOn);
+    section.setAttribute("aria-disabled", masterOn ? "false" : "true");
+    section.querySelectorAll('input[type="checkbox"]').forEach((cb) => {
+      cb.disabled = !masterOn;
+    });
+  }
 }
 
 function renderVersionBanner() {
@@ -101,13 +110,16 @@ function render() {
   const features = document.getElementById("be-features");
   if (features) features.replaceChildren(...FEATURES.map(makeToggle));
 
+  const personalBoards = document.getElementById("be-personal-boards");
+  if (personalBoards) personalBoards.replaceChildren(...PERSONAL_BOARD_TOGGLES.map(makeToggle));
+
   const boards = document.getElementById("be-comparison-boards");
   if (boards) boards.replaceChildren(...COMPARISON_BOARDS.map(makeToggle));
 
   const updates = document.getElementById("be-update-settings");
   if (updates) updates.replaceChildren(...UPDATE_SETTINGS.map(makeToggle));
 
-  updateComparisonDisabledState();
+  updateDependentSectionStates();
   renderVersionBanner();
 
   const openOptions = document.getElementById("be-open-options");
