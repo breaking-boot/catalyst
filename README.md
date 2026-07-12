@@ -35,13 +35,16 @@ catalyst/
     assets/frames/         Bundled avatar role frames (0-9.png)
     src/
       utils.js             Shared helpers (loaded first)
-      settings.js          Feature on/off model (loaded second)
+      settings-schema.js   Canonical settings defaults/labels (shared with the settings pages)
+      settings.js          Feature on/off model
       leaderboard.js       All-time and personal leaderboard feature
       profile.js           Cumulative XP on public profile pages
       boss.js              Boss-event tracker
       nextLesson.js        Next Lesson nav link and Alt+N shortcut
+      updateCheck.js       Opt-in GitHub release check
       content.js           postMessage listener and URL router (loaded last)
       injected.js          Page-context fetch/XHR interceptor
+      backup.js            Backup & restore core (options page only, not a content script)
       styles.css
   docs/
     branding/              Logo assets referenced by this README
@@ -102,6 +105,8 @@ To update:
 4. Click the reload button on **Catalyst for Boot.dev**.
 5. Refresh any open Boot.dev tabs.
 
+If an update ever requires **removing and re-adding** the extension (rather than reloading in place), export a backup first — removing an extension deletes its stored data. See **Backup & restore** below.
+
 ## Usage
 
 The extension runs automatically on `www.boot.dev`. No extra sign-in flow is required — it reads JSON responses that the Boot.dev page fetches using the existing Boot.dev session.
@@ -112,6 +117,14 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 - The popup toggles the seven features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and leaderboard comparisons (XP/karma).
 - The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), and per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards).
 - Settings sync across your devices (`chrome.storage.sync`; in Brave they stay on-device) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on Boot.dev.
+
+### Backup & restore
+
+- The options page has a **Backup & restore** section. **Export data** downloads a JSON file (`catalyst-backup-YYYY-MM-DD.json`) containing your settings, tracked Personal Leaderboards learners, XP/karma snapshot history, your own karma comparison series, and boss stats. **Import data** picks a backup file, shows you what's inside, and applies it only after you confirm. The file is created locally and never uploaded anywhere.
+- Importing **merges data and replaces settings** — tracked learners are combined with your current list, snapshot history and boss highs merge (the boss event high only counts if the backup is from the currently running event), and your toggles are restored exactly as exported. An import never deletes anything.
+- Use it before removing/reinstalling the extension, to move Catalyst to another machine, or to sync settings between devices on Brave (which doesn't sync extension data).
+- One honest caveat: XP/karma snapshot history only lives ~24 hours by design (it measures a rolling window), so a backup restores full comparison accuracy only when imported soon after export. Older backups still restore your learners, settings, and boss stats; the expired measurement window simply rebuilds as you browse.
+- Power users: the file's sections (`settings`, `personalLeaderboard`, `currentUser`, `bossState`) are independent — deleting a section from the JSON before importing skips just that part.
 
 ### Next Lesson
 

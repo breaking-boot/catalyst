@@ -1,5 +1,18 @@
 # Changelog
 
+## v0.9.0 - Backup & restore (import/export)
+
+### Backup & restore
+- New **Backup & restore** section on the options page. **Export data** downloads a JSON backup (`catalyst-backup-YYYY-MM-DD.json`) of everything worth keeping: settings, the Personal Leaderboards learner list, per-learner XP/karma snapshot history, your own karma comparison series, and boss stats. **Import data** opens a file picker, shows what the backup contains, and applies it only after an explicit confirm. This closes the two long-standing reinstall pains: re-adding every tracked learner by hand, and losing the snapshot history behind the comparison deltas.
+- Import semantics: **data merges, settings replace.** Tracked learners union with the current list, snapshot series merge point-by-point under the live store's rules (rolling ~24.5h window, 60-point cap, totals never decrease), and boss highs take the max — the all-time high always, the event high only when the backup is from the **same event** (per-event stats reset when a new event starts, so a different event's high is stale and dropped). Settings are replaced wholesale so a restore lands the toggles exactly as saved. Nothing is ever deleted by an import.
+- The backup file carries its own **format version**, independent of the extension version: files from a newer format are refused with a clear message; older formats will be upgraded in place as the format evolves. Unknown settings keys and data sections pass through harmlessly, so new features won't invalidate old backups.
+- Corrupt or non-Catalyst files are rejected before anything is written; within a valid file, individually invalid entries (a bad handle, a malformed snapshot point) are skipped and everything else imports. Your own karma history is applied only when the backup's account matches this device's (or the device doesn't know its user yet), so another account's baseline can't corrupt your comparisons.
+- **Open Boot.dev tabs pick an import up live.** Tabs keep this data in memory and write it through to storage, so a stale tab would have clobbered a fresh import within seconds; tabs now reload the imported data on a broadcast signal and fetch whatever newly added learners are missing — no page reload needed.
+- Snapshot history is honest about its lifespan: points older than the rolling comparison window are pruned at export and at import, so a week-old backup restores settings and learners while correctly not resurrecting expired measurement accuracy. Exporting right before an uninstall/reinstall preserves it fully.
+- The boss tracker now records **when the event high was set** (`eventHighAt`, also stamped on manual edits), giving backups the metadata for the same-event merge.
+- Since Brave doesn't sync extension data, export/import is also the way to move Catalyst settings between devices on Brave.
+- No new permissions: export downloads via a plain blob link, import reads from a local file picker — `storage` remains the only permission.
+
 ## v0.8.0 - Daily Karma board, per-board toggles, Brave support
 
 ### Personal Leaderboards
