@@ -12,6 +12,8 @@ const API_REQUEST_TIMEOUT_MS = 10_000;
 const AUTH_RETRY_MS = 5 * 60_000;
 const DASHBOARD_CONTENT_URL = "https://api.boot.dev/v1/dashboard_content";
 const SETTINGS_INTRO_KEY = "be_settings_introduced";
+// Written by backup.js (options page) after a successful import — keep in sync.
+const IMPORT_BROADCAST_KEY = "be_import_broadcast";
 
 let routeScanTimer = null;
 let domScanTimer = null;
@@ -187,13 +189,32 @@ function handleVisibilityChange() {
   requestBossProgress(true);
 }
 
-// Live-apply a settings change from the popup/options page (chrome.storage.sync).
+// Live-apply a settings change from the popup/options page (chrome.storage.sync),
+// or an options-page backup import (signalled via the local broadcast key).
 function handleSettingsChange(changes, area) {
   if (enhancerStopped) return;
+  if (area === "local" && changes[IMPORT_BROADCAST_KEY]) {
+    applyImportedData().catch((err) => handleAsyncError(err, "import"));
+    return;
+  }
   if (area !== "sync" || !changes[SETTINGS_KEY]) return;
   const before = getSettings();
   applyStoredSettings(changes[SETTINGS_KEY].newValue);
   applyFeatureSettings(before, getSettings());
+}
+
+// An options-page import merged data into storage.local behind this tab's back
+// (see backup.js). Reload the affected in-memory state — it is written through
+// from memory, so a stale copy would clobber the merge on its next save — then
+// re-render and fetch whatever the newly added handles are missing. Imported
+// settings need nothing here: their sync write already runs the live-apply above.
+async function applyImportedData() {
+  await loadCurrentUserHandle();
+  await loadPersonalLeaderboard();
+  await restoreBossPanel();
+  if (enhancerStopped) return;
+  schedulePersonalLeaderboardRender();
+  if (isLeaderboardPage() && personalDataMissing()) requestPersonalLeaderboardData();
 }
 
 function applyFeatureSettings(before, after) {
