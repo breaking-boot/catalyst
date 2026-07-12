@@ -106,7 +106,10 @@ function renderVersionBanner() {
   el.textContent = version ? `Version ${version}` : "";
 }
 
-function render() {
+// Toggle rows only — separated from render() so an import (which replaces
+// be_settings behind this page's back) can refresh them without rebuilding the
+// backup section and losing its status text.
+function renderToggles() {
   const features = document.getElementById("be-features");
   if (features) features.replaceChildren(...FEATURES.map(makeToggle));
 
@@ -120,7 +123,157 @@ function render() {
   if (updates) updates.replaceChildren(...UPDATE_SETTINGS.map(makeToggle));
 
   updateDependentSectionStates();
+}
+
+// ---------------------------------------------------------------------------
+// Backup & restore (options page only: #be-backup and src/backup.js — which
+// owns the file format and merge logic — exist only there). Every string that
+// came out of an uploaded file renders via textContent; file content is
+// untrusted.
+
+function makeBackupButton(label, onClick) {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "be-settings-link";
+  btn.textContent = label;
+  btn.addEventListener("click", onClick);
+  return btn;
+}
+
+function backupFileName() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `catalyst-backup-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
+}
+
+function renderBackupSection() {
+  const host = document.getElementById("be-backup");
+  if (!host) return;
+
+  const actions = document.createElement("div");
+  actions.className = "be-backup-actions";
+
+  const confirmBox = document.createElement("div");
+  confirmBox.className = "be-backup-confirm";
+  confirmBox.hidden = true;
+
+  const status = document.createElement("div");
+  status.className = "be-backup-status";
+  status.setAttribute("role", "status");
+
+  let pendingData = null;
+
+  const setStatus = (lines, isError = false) => {
+    status.classList.toggle("be-backup-error", isError);
+    status.replaceChildren(
+      ...[].concat(lines).filter(Boolean).map((line) => {
+        const p = document.createElement("p");
+        p.textContent = line;
+        return p;
+      })
+    );
+  };
+
+  const clearConfirm = () => {
+    pendingData = null;
+    confirmBox.hidden = true;
+    confirmBox.replaceChildren();
+  };
+
+  const exportBtn = makeBackupButton("Export data", async () => {
+    exportBtn.disabled = true;
+    try {
+      const payload = await collectBackupData();
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = backupFileName();
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      clearConfirm();
+      setStatus(`Exported ${a.download}.`);
+    } catch (err) {
+      setStatus(`Export failed: ${err?.message || err}`, true);
+    } finally {
+      exportBtn.disabled = false;
+    }
+  });
+
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json,application/json";
+  fileInput.hidden = true;
+
+  const importBtn = makeBackupButton("Import data…", () => fileInput.click());
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = ""; // so the same file can be re-picked later
+    if (!file) return;
+    clearConfirm();
+
+    let parsed;
+    try {
+      parsed = parseBackupFile(await file.text());
+    } catch (_) {
+      parsed = { error: "Could not read the file." };
+    }
+    if (parsed.error) {
+      setStatus(parsed.error, true);
+      return;
+    }
+
+    // Confirm step: nothing is written until the user applies.
+    pendingData = parsed.data;
+    setStatus(`"${file.name}" contains:`);
+
+    const list = document.createElement("ul");
+    for (const line of summarizeBackup(parsed.data)) {
+      const li = document.createElement("li");
+      li.textContent = line;
+      list.appendChild(li);
+    }
+
+    const applyBtn = makeBackupButton("Import", async () => {
+      const data = pendingData;
+      clearConfirm();
+      if (!data) return;
+      setStatus("Importing…");
+      try {
+        const results = await applyBackup(data);
+        setStatus(results);
+        // The import may have replaced be_settings behind this page's back.
+        chrome.storage.sync.get(SETTINGS_KEY, (o) => {
+          settings = normalize(o?.[SETTINGS_KEY]);
+          renderToggles();
+        });
+      } catch (err) {
+        setStatus(`Import failed: ${err?.message || err}`, true);
+      }
+    });
+    applyBtn.classList.add("be-backup-primary");
+
+    const cancelBtn = makeBackupButton("Cancel", () => {
+      clearConfirm();
+      setStatus("Import cancelled. Nothing was changed.");
+    });
+
+    const confirmActions = document.createElement("div");
+    confirmActions.className = "be-backup-actions";
+    confirmActions.append(applyBtn, cancelBtn);
+    confirmBox.replaceChildren(list, confirmActions);
+    confirmBox.hidden = false;
+  });
+
+  actions.append(exportBtn, importBtn, fileInput);
+  host.replaceChildren(actions, confirmBox, status);
+}
+
+function render() {
+  renderToggles();
   renderVersionBanner();
+  renderBackupSection();
 
   const openOptions = document.getElementById("be-open-options");
   if (openOptions) {
