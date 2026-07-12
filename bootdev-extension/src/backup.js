@@ -53,6 +53,12 @@ function backupIsPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+// backupNum coerces like Number(), so backupNum(null) is 0 — wrong for an
+// optional timestamp, where absent must stay null (0 would read as epoch 1970).
+function backupOptionalMs(value) {
+  return value == null ? null : backupNum(value);
+}
+
 function backupNormalizeHandle(value) {
   const raw = String(value || "")
     .trim()
@@ -217,7 +223,7 @@ async function collectBackupData() {
     data.bossState = {
       eventId: typeof boss.eventId === "string" ? boss.eventId : null,
       eventHigh: Math.max(0, backupNum(boss.eventHigh) ?? 0),
-      eventHighAt: backupNum(boss.eventHighAt), // null on pre-0.9.0 states
+      eventHighAt: backupOptionalMs(boss.eventHighAt), // null on pre-0.9.0 states
       allTimeHigh: Math.max(0, backupNum(boss.allTimeHigh) ?? 0),
     };
   }
@@ -434,7 +440,7 @@ async function applyBackup(data) {
 async function mergeBossState(imported, now) {
   const eventId = typeof imported.eventId === "string" && imported.eventId ? imported.eventId : null;
   const eventHigh = Math.max(0, backupNum(imported.eventHigh) ?? 0);
-  const eventHighAt = backupNum(imported.eventHighAt);
+  const eventHighAt = backupOptionalMs(imported.eventHighAt);
   const allTimeHigh = Math.max(0, backupNum(imported.allTimeHigh) ?? 0, eventHigh);
 
   const stored = await backupStorageGet("local", BACKUP_BOSS_KEY);
