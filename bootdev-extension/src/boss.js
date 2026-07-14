@@ -147,7 +147,10 @@ async function handleBossProgress(json) {
   // Update rolling event stats.
   if (cur.bonusPct != null) {
     state.current = cur.bonusPct;
-    state.eventHigh = Math.max(state.eventHigh || 0, cur.bonusPct);
+    if (cur.bonusPct > (state.eventHigh || 0)) {
+      state.eventHigh = cur.bonusPct;
+      state.eventHighAt = Date.now(); // when the high was observed; backup export/merge metadata
+    }
     state.allTimeHigh = Math.max(state.allTimeHigh || 0, cur.bonusPct);
   }
   if (cur.damage != null) state.damage = cur.damage;
@@ -324,6 +327,7 @@ function newEventState(eventId) {
     eventId,
     current: 0,
     eventHigh: 0,
+    eventHighAt: null, // when eventHigh was last raised (ms); backup export/merge metadata
     allTimeHigh: 0,
     damage: 0,
     nextChestAt: 0,
@@ -491,7 +495,10 @@ function bindBossPanelControls(panel, state) {
       const allTimeHigh = num(panel.querySelector("#be-boss-alltime-high")?.value);
       const next = { ...state };
 
-      if (eventHigh != null) next.eventHigh = Math.max(0, eventHigh);
+      if (eventHigh != null && Math.max(0, eventHigh) !== (next.eventHigh || 0)) {
+        next.eventHigh = Math.max(0, eventHigh);
+        next.eventHighAt = Date.now(); // manual edit counts as a new observation
+      }
       if (allTimeHigh != null) next.allTimeHigh = Math.max(0, allTimeHigh);
       if ((next.eventHigh || 0) > (next.allTimeHigh || 0)) {
         next.allTimeHigh = next.eventHigh;

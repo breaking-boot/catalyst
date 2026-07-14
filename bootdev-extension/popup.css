@@ -194,3 +194,48 @@ body.be-settings-options main {
   outline: 2px solid #e5ae3c;
   outline-offset: 2px;
 }
+.be-settings-link:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Backup & restore (options page) */
+.be-backup-actions {
+  display: flex;
+  gap: 8px;
+  margin: 10px 0;
+}
+.be-backup-primary {
+  background: rgba(229, 174, 60, 0.30);
+  border-color: #e5ae3c;
+}
+.be-backup-confirm {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(229, 174, 60, 0.30);
+  border-radius: 6px;
+  background: rgba(17, 24, 39, 0.55);
+}
+.be-backup-confirm ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: #e8ecf1;
+}
+.be-backup-confirm li {
+  margin: 3px 0;
+}
+.be-backup-confirm .be-backup-actions {
+  margin-bottom: 0;
+}
+.be-backup-status {
+  margin: 8px 0 10px;
+  font-size: 12.5px;
+  color: #9ca3af;
+}
+.be-backup-status p {
+  margin: 2px 0;
+}
+.be-backup-error {
+  color: #f16a6c; /* boot.dev --red-400 (bootdev_palette.css) */
+}
