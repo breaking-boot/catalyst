@@ -791,3 +791,67 @@
 .be-toast-btn-primary:hover {
   background: rgba(255, 255, 255, 0.88);
 }
+
+/* ---------------------------------------------------------------------------
+   Training Grounds difficulty filter (trainingGrounds.js)
+   Colors mirror the native popover pills (bootdev_palette.css tokens):
+   gray-600 #4e5564 / gray-400 #919dab unselected, gray-200 #d7dee6 selected,
+   yellow-400 #e5ae3c accents.
+--------------------------------------------------------------------------- */
+.be-tg-section {
+  margin-top: 1rem; /* matches the native sections' space-y-4 rhythm */
+}
+.be-tg-section-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #919dab; /* --gray-400, like the native Language/Type labels */
+}
+.be-tg-section-label svg {
+  width: 16px;
+  height: 16px; /* native section icons are lucide h-4 w-4 */
+}
+.be-tg-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.be-tg-pill {
+  border: 1px solid #4e5564; /* --gray-600 */
+  border-radius: 9999px;
+  background: transparent;
+  color: #919dab; /* --gray-400 */
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.be-tg-pill:hover,
+.be-tg-pill[aria-pressed="true"] {
+  border-color: #d7dee6; /* --gray-200, the native selected-pill look */
+  color: #d7dee6;
+}
+.be-tg-pill:focus-visible {
+  /* Native keyboard focus reads as the pill's own border bolding to white —
+     an outline hugging the border fakes the same look. */
+  outline: 1px solid #e8ecf1; /* --gray-100 */
+  outline-offset: 0;
+  border-color: #e8ecf1;
+  color: #d7dee6;
+}
+.be-tg-filter-dot {
+  position: absolute; /* the native filter button is position:relative */
+  top: -2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e5ae3c; /* --yellow-400 */
+  pointer-events: none;
+}

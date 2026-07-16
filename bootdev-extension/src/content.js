@@ -61,7 +61,7 @@ initEnhancer().catch((err) => handleAsyncError(err, "init"));
 // ---------------------------------------------------------------------------
 // 3. Route responses to handlers by URL.
 // ---------------------------------------------------------------------------
-async function routeResponse({ url, status, json }) {
+async function routeResponse({ url, status, json, catalyst }) {
   try {
     const path = new URL(url, window.location.origin).pathname;
     const publicUserMatch = /^\/v1\/users\/public\/([^/]+)(\/stats)?$/.exec(path);
@@ -91,6 +91,8 @@ async function routeResponse({ url, status, json }) {
       handlePersonalHeatmap(decodeURIComponent(heatmapMatch[1]), json);
     } else if (publicUserMatch) {
       handlePublicUserResponse(decodeURIComponent(publicUserMatch[1]), Boolean(publicUserMatch[2]), json);
+    } else if (path === "/v1/challenges/search") {
+      handleChallengeSearch(json, catalyst);
     } else if (path === "/v1/boss_events_progress") {
       await handleBossProgress(json);
     } else if (path === "/v1/dashboard_content") {
@@ -120,6 +122,7 @@ async function initEnhancer() {
   resetBossRefreshTimer(true);
   requestDashboardContentIfUseful(900);
   bindNextLessonShortcut();
+  bindTrainingGroundsEvents();
   startDomScan();
   maybeShowSettingsIntro().catch((err) => handleAsyncError(err, "intro"));
   maybeRunVersionCheck().catch((err) => handleAsyncError(err, "versionCheck"));
@@ -157,6 +160,7 @@ function renderRouteScopedUi() {
   renderNextLessonNav();
   captureNextLessonFromDom();
   learnCurrentUserHandleFromDom();
+  ensureTrainingGroundsUiState();
 
   if (isLeaderboardPage()) {
     if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
@@ -169,6 +173,7 @@ function renderRouteScopedUi() {
   if (!isProfilePage()) {
     removeProfileXpBadge();
   }
+  ensureProfileUiState();
 }
 
 // The leaderboard-page fetches, kept separate so settings changes can re-render
@@ -237,6 +242,8 @@ function applyFeatureSettings(before, after) {
   // unlike the other features it isn't redrawn by the standard render pass.
   reapplyProfileStats();
 
+  applyChallengeFilterSetting(before, after);
+
   // Render from cache only. Fetching here would re-pull every Personal
   // Leaderboards handle (2 calls each) on every unrelated toggle.
   renderRouteScopedUi();
@@ -271,6 +278,8 @@ function startDomScan() {
     captureNextLessonFromDom();
     learnCurrentUserHandleFromDom();
     ensureLeaderboardUiState();
+    ensureTrainingGroundsUiState();
+    ensureProfileUiState();
     checkFrameAssetsForRot();
   }, 2000);
 }
@@ -381,6 +390,7 @@ function stopEnhancer() {
   window.removeEventListener("message", handleWindowMessage);
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   unbindNextLessonShortcut();
+  unbindTrainingGroundsEvents();
   try {
     chrome.storage.onChanged.removeListener(handleSettingsChange);
   } catch (_) {}

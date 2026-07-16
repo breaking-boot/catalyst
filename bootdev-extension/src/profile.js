@@ -31,6 +31,53 @@ function reapplyProfileStats() {
   if (isProfilePage() && lastProfileStatsJson) handleProfileStats(lastProfileStatsJson);
 }
 
+// Cold page loads (F5 / direct URL) server-render the profile without firing
+// the public-user API call this feature listens for — same class of issue as
+// the Training Grounds cold loads — so the badge never appeared until an SPA
+// navigation caused a real fetch. When the page shows a profile but nothing
+// is injected and nothing usable is cached, request the data explicitly (the
+// path is already relay-allowlisted and routed). Re-asks at most every 30s
+// while data is missing; stops as soon as the badge exists.
+const PROFILE_REQUEST_RETRY_MS = 30_000;
+let lastProfileDataRequest = null; // { handle, at }
+
+function ensureProfileUiState() {
+  if (enhancerStopped) return;
+  if (!isProfilePage()) {
+    lastProfileDataRequest = null;
+    return;
+  }
+  if (!isFeatureEnabled("profileXp") && !isFeatureEnabled("personalLeaderboards")) return;
+  if (document.getElementById("be-total-xp") || document.getElementById("be-profile-personal-add")) {
+    return;
+  }
+
+  let rawHandle = "";
+  try {
+    rawHandle = decodeURIComponent(location.pathname.split("/")[2] || "").trim();
+  } catch (_) {}
+  const handle = normalizeHandle(rawHandle);
+  if (!isValidHandle(handle)) return;
+
+  // A cached response for this same profile just needs a re-render.
+  const cached = lastProfileStatsJson?.data ?? lastProfileStatsJson;
+  if (normalizeHandle(cached?.Handle) === handle) {
+    handleProfileStats(lastProfileStatsJson);
+    return;
+  }
+
+  if (
+    lastProfileDataRequest &&
+    lastProfileDataRequest.handle === handle &&
+    Date.now() - lastProfileDataRequest.at < PROFILE_REQUEST_RETRY_MS
+  ) {
+    return;
+  }
+  lastProfileDataRequest = { handle, at: Date.now() };
+  // Request with the URL's original casing; only comparisons are normalized.
+  requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(rawHandle)}`);
+}
+
 function handleProfileStats(json) {
   if (!isProfilePage()) return;
 

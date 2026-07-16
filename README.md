@@ -42,6 +42,7 @@ catalyst/
       boss.js              Boss-event tracker
       nextLesson.js        Next Lesson nav link and Alt+N shortcut
       updateCheck.js       Opt-in GitHub release check
+      trainingGrounds.js   Training Grounds difficulty filter
       content.js           postMessage listener and URL router (loaded last)
       injected.js          Page-context fetch/XHR interceptor
       backup.js            Backup & restore core (options page only, not a content script)
@@ -114,7 +115,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 ### Settings
 
 - Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chromium browsers hide extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
-- The popup toggles the seven features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, and leaderboard comparisons (XP/karma).
+- The popup toggles the eight features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds difficulty filter, and leaderboard comparisons (XP/karma).
 - The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), and per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards).
 - Settings sync across your devices (`chrome.storage.sync`; in Brave they stay on-device) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on Boot.dev.
 
@@ -131,6 +132,14 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 - A **Next Lesson** link is added to the top nav on all Boot.dev pages once the extension learns your current lesson from `/v1/dashboard_content`. The dashboard **Continue Learning** button is used as a same-page fallback.
 - Press `Alt+N` from any Boot.dev page to open the Next Lesson link directly. The shortcut is ignored while typing in inputs or editors.
 - Lesson progress responses trigger a delayed dashboard refresh so the link updates automatically after you complete a lesson.
+
+### Training Grounds
+
+- The Challenge Catalog's filter popover (`/training-grounds` → the filter icon next to Search) gains a **Difficulty** section with **Easy (1-4)**, **Medium (5-7)**, and **Hard (8-10)** pills — the tiers behind Boot.dev's own difficulty icons, which the site doesn't let you filter by natively.
+- It behaves exactly like the native Language/Type pills: picks apply when you click **Search**, "Clear filters" clears them too, and each browser tab keeps its own filter. Selecting no tiers (or all three) means "all difficulties".
+- The filtered result list, the "Showing X-Y of Z" count, and the Prev/Next pages are all genuinely correct for the filtered set — Catalyst filters the search response before the page renders it, rather than hiding cards afterwards.
+- While a filter is applied, a small **gold dot** marks the filter icon, and the page URL carries it (`diff=easy,hard`) — copy the URL and another Catalyst user opens the same filtered search.
+- Challenges whose difficulty can't be read are never hidden, and if anything unexpected happens the page simply gets its normal unfiltered results.
 
 ### Leaderboards
 
@@ -222,9 +231,11 @@ node --check src/leaderboard.js
 node --check src/profile.js
 node --check src/boss.js
 node --check src/nextLesson.js
+node --check src/trainingGrounds.js
 node --check src/injected.js
 node --check src/content.js
 node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest.json ok')"
+node ../scripts/check_challenge_filter.mjs
 ```
 
 To build a release zip, run `bash scripts/package-extension.sh` from the repo root. See [CLAUDE.md](CLAUDE.md) for architecture details and agent guidance.

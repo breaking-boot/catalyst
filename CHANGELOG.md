@@ -1,5 +1,20 @@
 # Changelog
 
+## v0.10.0 - Training Grounds difficulty filter
+
+### Training Grounds
+- **New Difficulty filter for the Challenge Catalog** (`/training-grounds`). Boot.dev's filter popover gains a Catalyst **Difficulty** section with **Easy (1-4) / Medium (5-7) / Hard (8-10)** pills, matching the tiers behind the site's own difficulty icons — a filter Boot.dev doesn't offer natively. It behaves exactly like the native pills: picks are pending until you click **Search**, "Clear filters" clears them too, and each tab keeps its own filter.
+- Filtering happens **before the page consumes the search response**, so the result list, the "Showing X-Y of Z" line, and Prev/Next pagination are all natively correct for the filtered set — no bolted-on counts. The search API returns the complete result list in one response (the site paginates locally), which is what makes this exact.
+- Boot.dev skips re-running an unchanged search, and full page loads arrive **pre-rendered with no search request at all** — in both cases Catalyst nudges the page's own navigation to re-run the search so the filter still applies.
+- The applied filter lives in the **page URL** (`diff=easy,hard`): a small gold dot on the filter icon shows while it's filtering, and a copied search URL carries the difficulty — another Catalyst user opening it gets the same filtered results. The URL parameter is provably ignored by the Boot.dev API (verified with a controlled probe), so it can't change anyone's actual results.
+- **Fails open by design:** if a search response ever looks unexpected, Boot.dev receives it untouched, and challenges whose difficulty can't be read are never hidden. Selecting no tiers (or all three) means "all difficulties".
+- New **Training Grounds difficulty filter** toggle (popup + options page, on by default — the section only appears inside the filter popover and filters nothing until you pick tiers and search).
+- No new permissions; the interceptor's relay allowlist gains only the `challenges/search` path the feature consumes.
+
+### Fixes
+- **Profile pages survive a refresh again.** Refreshing (or directly opening) a profile serves it pre-rendered without the profile API call Catalyst listens for, so the Total XP badge and the "Add to Personal Leaderboards" button silently vanished until you navigated away and back. Catalyst now requests the data itself when a profile page shows nothing injected.
+- **No more phantom boss reminders.** Between events, the boss API returns the last event in a shape Catalyst couldn't read (the response switches to camelCase field names — `event.uuid` instead of `Event.UUID`), and the unreadable event was mistaken for a live one, occasionally toasting "boss event is live" on fresh installs. Boss responses are now accepted in both casings, an event has to be genuinely readable and unexpired to count as active, and an unreadable response no longer resets the stored per-event stats. The both-casings support also future-proofs the tracker in case the next live event arrives camelCase too.
+
 ## v0.9.0 - Backup & restore (import/export)
 
 ### Backup & restore

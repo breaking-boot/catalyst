@@ -112,7 +112,45 @@ async function restoreBossPanel() {
 // ===========================================================================
 // FEATURE 5: Boss-event tracker
 // ===========================================================================
+// 2026-07-16: a between-events capture came back entirely camelCase
+// (event.uuid, xpBonus, …) while every live-event capture is PascalCase
+// (Event.UUID, XPBonus, …) — see boss_events_progress_between_events.json in
+// reference_data. Whether boot.dev changed the serializer for good is
+// unknowable until the next event, so accept both shapes: map camelCase onto
+// the PascalCase names the rest of this file reads. PascalCase wins if both
+// somehow exist.
+function normalizeBossProgressJson(json) {
+  if (!isPlainObject(json) || json.Event || !isPlainObject(json.event)) return json;
+  const e = json.event;
+  return {
+    ...json,
+    Event: {
+      UUID: e.uuid,
+      StartsAt: e.startsAt,
+      ExpiresAt: e.expiresAt,
+      DefeatedAt: e.defeatedAt,
+      HealthPoints: e.healthPoints,
+      Boss: isPlainObject(e.boss) ? { UUID: e.boss.uuid, Name: e.boss.name } : undefined,
+    },
+    XPBonus: json.xpBonus,
+    XPTotal: json.xpTotal,
+    XPUser: json.xpUser,
+    NumLessonsCompletedHourly: json.numLessonsCompletedHourly,
+    Rewards: Array.isArray(json.rewards)
+      ? json.rewards.map((r) => ({
+          UUID: r?.uuid,
+          ChestUUID: r?.chestUUID,
+          XPThreshold: r?.xpThreshold,
+          UserXPThreshold: r?.userXPThreshold,
+          IsUnlocked: r?.isUnlocked,
+          IsUnlockedByUser: r?.isUnlockedByUser,
+        }))
+      : json.Rewards,
+  };
+}
+
 async function handleBossProgress(json) {
+  json = normalizeBossProgressJson(json);
   if (!isFeatureEnabled("bossTracker")) {
     // Quiet mode: never touch be_boss_state (previous-event stats stay intact
     // for whenever the tracker is re-enabled); at most offer the tracker via
@@ -123,6 +161,23 @@ async function handleBossProgress(json) {
   }
   const active = isBossEventActive(json);
   bossEventActive = active;
+
+  // A response without a readable event must not fall through to the
+  // new-event detection below — it would reset the stored per-event stats to
+  // a synthetic "unknown-event". Mark things inactive and keep the last
+  // event's stats for whenever the next one starts.
+  if (!hasBossEventIdentity(json)) {
+    clearBossRefreshTimer();
+    await notifyBossInactiveOnce();
+    if (enhancerStopped || !bossState) return;
+    bossState.eventActive = false;
+    bossState.updatedAt = Date.now();
+    await chromeSet(BOSS_KEY, { state: bossState });
+    if (enhancerStopped) return;
+    renderBossPanel(bossState);
+    return;
+  }
+
   const rewards = getBossRewards(json);
   const cur = {
     eventId: json?.Event?.UUID ?? json?.Event?.StartsAt ?? "unknown-event",
@@ -179,15 +234,28 @@ async function handleBossProgress(json) {
   if (active) maybeNotifyNearHigh(state);
 }
 
-// An event is active until its ExpiresAt passes. Missing/unparseable expiry is
-// treated as active so a schema change never wrongly hides a running event.
+// An event is active until its ExpiresAt passes. Missing/unparseable expiry on
+// a response that clearly carries a real event is treated as active so a
+// schema change never wrongly hides a running event.
 function getEventExpiry(json) {
   const raw = json?.Event?.ExpiresAt;
   const t = raw ? Date.parse(raw) : NaN;
   return Number.isFinite(t) ? t : null;
 }
 
+// Does the response carry a readable event at all? A response whose event
+// Catalyst cannot read (or that has none) must never count as "active" — the
+// missing-expiry fail-open used to treat exactly that as a live event,
+// producing phantom reminder toasts between events (root cause: the
+// between-events response is camelCase, so the PascalCase reads all came back
+// undefined; see normalizeBossProgressJson). Identity fields mirror the
+// eventId fallback used by the tracker.
+function hasBossEventIdentity(json) {
+  return Boolean(json?.Event?.UUID || json?.Event?.StartsAt);
+}
+
 function isBossEventActive(json) {
+  if (!hasBossEventIdentity(json)) return false;
   const expiry = getEventExpiry(json);
   if (expiry == null) return true;
   return Date.now() < expiry;
