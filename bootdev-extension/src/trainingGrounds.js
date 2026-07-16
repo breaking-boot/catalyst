@@ -42,6 +42,7 @@ let lastChallengeRefreshSignature = null; // backstop refreshes: one per selecti
 let challengeCommitVerifyTimer = null;
 let challengeEntryHealTimer = null;
 let onTrainingGroundsRoute = false;
+let lastTrainingGroundsPath = null;
 
 function isTrainingGroundsPage() {
   // The catalog lands on /training-grounds; executing a search navigates the
@@ -101,6 +102,7 @@ function syncChallengeFilterAttr() {
 
 function enterTrainingGroundsRoute() {
   onTrainingGroundsRoute = true;
+  lastTrainingGroundsPath = location.pathname;
   lastChallengeSearch = null;
   lastChallengeRefreshSignature = null;
   committedChallengeTiers = readChallengeTiersFromUrl();
@@ -124,6 +126,7 @@ function enterTrainingGroundsRoute() {
 
 function leaveTrainingGroundsRoute() {
   onTrainingGroundsRoute = false;
+  lastTrainingGroundsPath = null;
   pendingChallengeTiers = [];
   committedChallengeTiers = [];
   lastChallengeSearch = null;
@@ -144,7 +147,17 @@ function ensureTrainingGroundsUiState() {
     removeTrainingGroundsUi();
     return;
   }
-  if (!onTrainingGroundsRoute) enterTrainingGroundsRoute();
+  if (!onTrainingGroundsRoute) {
+    enterTrainingGroundsRoute();
+  } else if (location.pathname !== lastTrainingGroundsPath) {
+    // Internal navigation (landing <-> search): boot.dev remembers and
+    // re-runs its own search, so the committed filter stays — but
+    // uncommitted pill picks reset to the committed state, exactly like the
+    // native pending pills do on a remount.
+    lastTrainingGroundsPath = location.pathname;
+    pendingChallengeTiers = committedChallengeTiers.slice();
+    syncChallengeFilterUi();
+  }
   ensureChallengeFilterDot();
   ensureDifficultySection();
 }
@@ -211,6 +224,10 @@ function handleChallengeSearch(json, catalyst) {
   };
   console.debug("[catalyst] challenge search", lastChallengeSearch);
   syncChallengeSearchUrl();
+  // A relay can land while Vue is still settling its own URL push (internal
+  // landing -> search transitions), which then overwrites ours — re-sync
+  // once the dust settles.
+  setTrackedTimeout(syncChallengeSearchUrl, 300);
   ensureChallengeFilterDot();
 
   // Backstop: if what rendered doesn't match the committed tiers (e.g. a
@@ -241,7 +258,9 @@ function syncChallengeSearchUrl() {
     } else {
       url.searchParams.delete(CHALLENGE_DIFF_URL_PARAM);
     }
-    const next = url.pathname + url.search + url.hash;
+    // Commas are legal in query values; undo URLSearchParams' %2C so shared
+    // diff= URLs stay readable.
+    const next = (url.pathname + url.search + url.hash).replace(/%2C/gi, ",");
     const current = location.pathname + location.search + location.hash;
     if (next !== current) history.replaceState(history.state, "", next);
   } catch (_) {}
@@ -296,8 +315,8 @@ function buildDifficultySection() {
   label.innerHTML =
     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"' +
     ' fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"' +
-    ' stroke-linejoin="round" aria-hidden="true"><path d="m11 4-4 16"></path>' +
-    '<path d="m17 4-4 16"></path></svg><span>Difficulty</span>';
+    ' stroke-linejoin="round" aria-hidden="true"><path d="m10 4-5 16"></path>' +
+    '<path d="m19 4-5 16"></path></svg><span>Difficulty</span>';
 
   const pills = document.createElement("div");
   pills.className = "be-tg-pills";
