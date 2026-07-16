@@ -56,7 +56,7 @@ if (!hooks) {
   console.error("FAIL: injected.js did not expose test hooks");
   process.exit(1);
 }
-const { tierOfDifficulty, filterChallengeSearchArray, normalizeChallengeFilter, isChallengeSearchUrl } = hooks;
+const { tierOfDifficulty, filterChallengeSearchArray, parseTierList, isChallengeSearchUrl } = hooks;
 
 // --- tiny assert ------------------------------------------------------------
 
@@ -127,22 +127,13 @@ check(
 
 check("empty input -> empty output", filterChallengeSearchArray([], new Set(["easy"])), []);
 
-// --- normalizeChallengeFilter: validation and canonical order ---------------
+// --- parseTierList (data-be-diff / diff= values): validation + canonical order
 
-check(
-  "normalize drops unknown tiers, dedupes, canonical order",
-  normalizeChallengeFilter({ enabled: true, tiers: ["hard", "banana", "easy", "hard"] }),
-  { enabled: true, tiers: ["easy", "hard"] }
-);
-check(
-  "normalize coerces junk payload to disabled/empty",
-  normalizeChallengeFilter({ enabled: "yes", tiers: "easy" }),
-  { enabled: false, tiers: [] }
-);
-check("normalize handles null payload", normalizeChallengeFilter(null), {
-  enabled: false,
-  tiers: [],
-});
+check("parse drops unknown tiers, dedupes, canonical order", parseTierList("hard,banana,easy,hard"), ["easy", "hard"]);
+check("parse of empty string -> no tiers", parseTierList(""), []);
+check("parse of junk -> no tiers", parseTierList("EASY; 3"), []);
+check("parse handles null/undefined", parseTierList(null), []);
+check("parse all three, any order -> canonical", parseTierList("hard,easy,medium"), ["easy", "medium", "hard"]);
 
 // --- isChallengeSearchUrl: exact endpoint only -------------------------------
 

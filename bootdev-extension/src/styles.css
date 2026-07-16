@@ -802,12 +802,19 @@
   margin-top: 1rem; /* matches the native sections' space-y-4 rhythm */
 }
 .be-tg-section-label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
   margin-bottom: 0.5rem;
   font-size: 12px;
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: #919dab; /* --gray-400, like the native Language/Type labels */
+}
+.be-tg-section-label svg {
+  width: 16px;
+  height: 16px; /* native section icons are lucide h-4 w-4 */
 }
 .be-tg-pills {
   display: flex;
@@ -831,8 +838,12 @@
   color: #d7dee6;
 }
 .be-tg-pill:focus-visible {
-  outline: 2px solid #e5ae3c; /* --yellow-400 */
-  outline-offset: 2px;
+  /* Native keyboard focus reads as the pill's own border bolding to white —
+     an outline hugging the border fakes the same look. */
+  outline: 1px solid #e8ecf1; /* --gray-100 */
+  outline-offset: 0;
+  border-color: #e8ecf1;
+  color: #d7dee6;
 }
 .be-tg-filter-dot {
   position: absolute; /* the native filter button is position:relative */

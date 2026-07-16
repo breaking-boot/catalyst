@@ -114,7 +114,6 @@ async function initEnhancer() {
   await loadCurrentUserHandle();
   await loadPersonalLeaderboard();
   await loadFrameDebugFlag();
-  await loadChallengeFilterState();
   if (enhancerStopped) return;
   chrome.storage.onChanged.addListener(handleSettingsChange);
   document.addEventListener("visibilitychange", handleVisibilityChange);
@@ -124,7 +123,6 @@ async function initEnhancer() {
   requestDashboardContentIfUseful(900);
   bindNextLessonShortcut();
   bindTrainingGroundsEvents();
-  pushChallengeFilterToPage();
   startDomScan();
   maybeShowSettingsIntro().catch((err) => handleAsyncError(err, "intro"));
   maybeRunVersionCheck().catch((err) => handleAsyncError(err, "versionCheck"));
@@ -202,9 +200,6 @@ function handleSettingsChange(changes, area) {
   if (area === "local" && changes[IMPORT_BROADCAST_KEY]) {
     applyImportedData().catch((err) => handleAsyncError(err, "import"));
     return;
-  }
-  if (area === "local" && changes[CHALLENGE_FILTER_KEY]) {
-    adoptChallengeFilterChange(changes[CHALLENGE_FILTER_KEY].newValue);
   }
   if (area !== "sync" || !changes[SETTINGS_KEY]) return;
   const before = getSettings();

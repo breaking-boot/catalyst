@@ -47,9 +47,14 @@
   // CHALLENGE_TIERS in trainingGrounds.js.
   const DIFFICULTY_TIERS = { easy: [1, 4], medium: [5, 7], hard: [8, 10] };
   const CHALLENGE_SEARCH_PATH = "/v1/challenges/search";
-  const DIFF_URL_PARAM = "diff";
-  // null until the content script pushes state; null means "touch nothing".
-  let challengeFilter = null;
+  // Committed tiers arrive via a DOM attribute the content script maintains
+  // (trainingGrounds.js). An attribute read is synchronous, so a fetch fired
+  // in the same task as a Search click already sees the just-committed state
+  // — no postMessage race. Attribute absent = feature off / nothing committed.
+  const CHALLENGE_DIFF_ATTR = "data-be-diff";
+  // Throwaway router-query param used only to make the page re-run its search
+  // (any query change refetches); stripped from the URL by trainingGrounds.js.
+  const CHALLENGE_REFRESH_NONCE_PARAM = "be_r";
 
   function tierOfDifficulty(value) {
     const n = Number(value);
@@ -70,22 +75,24 @@
     });
   }
 
-  function normalizeChallengeFilter(payload) {
-    const requested = Array.isArray(payload?.tiers) ? payload.tiers : [];
-    return {
-      enabled: payload?.enabled === true,
-      // Known tiers only, deduped, in canonical order.
-      tiers: Object.keys(DIFFICULTY_TIERS).filter((t) => requested.includes(t)),
-    };
+  // "easy,hard" (any junk tolerated) -> known tiers only, deduped, canonical order.
+  function parseTierList(raw) {
+    const requested = String(raw ?? "").split(",");
+    return Object.keys(DIFFICULTY_TIERS).filter((t) => requested.includes(t));
+  }
+
+  // null = attribute absent (feature off / nothing committed): touch nothing.
+  function currentChallengeTiers() {
+    const raw = document.documentElement?.getAttribute?.(CHALLENGE_DIFF_ATTR);
+    if (raw === null || raw === undefined) return null;
+    return parseTierList(raw);
   }
 
   // All three tiers selected filters nothing, so it counts as inactive too.
   function challengeFilterActive() {
+    const tiers = currentChallengeTiers();
     return Boolean(
-      challengeFilter &&
-        challengeFilter.enabled &&
-        challengeFilter.tiers.length >= 1 &&
-        challengeFilter.tiers.length < Object.keys(DIFFICULTY_TIERS).length
+      tiers && tiers.length >= 1 && tiers.length < Object.keys(DIFFICULTY_TIERS).length
     );
   }
 
@@ -101,15 +108,16 @@
   // (the caller falls through to the untouched response + normal relay).
   async function maybeFilterChallengeSearch(url, method, res) {
     try {
+      const tiers = currentChallengeTiers() || [];
       const text = await res.clone().text();
       const json = JSON.parse(text);
       if (!Array.isArray(json)) return null;
-      const filtered = filterChallengeSearchArray(json, new Set(challengeFilter.tiers));
+      const filtered = filterChallengeSearchArray(json, new Set(tiers));
       const body = JSON.stringify(filtered);
       relay(url, method, res.status, body, null, {
         filtered: true,
         originalCount: json.length,
-        appliedTiers: challengeFilter.tiers.slice(),
+        appliedTiers: tiers,
       });
       const headers = new Headers(res.headers);
       // Stale after re-serialization / already decoded by fetch.
@@ -125,13 +133,15 @@
     }
   }
 
-  // Makes the page re-run its current search so a changed difficulty selection
-  // shows up. Primary: re-push the current route through the page's Vue router
-  // with a `diff` param carrying the selection — the URL changes exactly when
-  // the selection does, the server provably ignores the param, and the
-  // frontend refetches on the changed route (all owner-verified). __vue_app__
-  // is private Vue API, hence the guard; fallback is a hard reload, which
-  // re-runs the search because the URL carries q/t/l.
+  // Makes the page re-run its current search (e.g. after a Search click that
+  // Boot.dev skipped because q/t/l were unchanged, or on a cold load where the
+  // results were server-rendered with no API call). Re-pushes the current
+  // route through the page's Vue router with a fresh throwaway nonce param —
+  // always a query change, so the frontend always refetches; the server
+  // provably ignores unknown params. trainingGrounds.js cleans the nonce out
+  // of the URL (and maintains the cosmetic `diff` param) once the response
+  // arrives. __vue_app__ is private Vue API, hence the guard; the hard-reload
+  // fallback restores native (unfiltered) content at worst — fail-open.
   function refreshChallengeSearch() {
     try {
       const router = document.querySelector("#__nuxt")?.__vue_app__?.config
@@ -139,17 +149,9 @@
       const current = router?.currentRoute?.value;
       if (router && current) {
         const query = { ...(current.query || {}) };
-        if (challengeFilterActive()) {
-          query[DIFF_URL_PARAM] = challengeFilter.tiers.join(",");
-        } else {
-          delete query[DIFF_URL_PARAM];
-        }
-        // An identical push is a router no-op (no refetch); only the hard
-        // reload helps then.
-        if (JSON.stringify(query) !== JSON.stringify(current.query || {})) {
-          router.push({ path: window.location.pathname, query });
-          return;
-        }
+        query[CHALLENGE_REFRESH_NONCE_PARAM] = Date.now().toString(36);
+        router.push({ path: window.location.pathname, query });
+        return;
       }
     } catch (_) {}
     try {
@@ -321,10 +323,6 @@
     const msg = event.data;
     if (!msg || msg.source !== TAG || !msg.command) return;
 
-    if (msg.command === "BE_SET_CHALLENGE_FILTER") {
-      challengeFilter = normalizeChallengeFilter(msg.payload);
-      return;
-    }
     if (msg.command === "BE_REFRESH_CHALLENGE_SEARCH") {
       refreshChallengeSearch();
       return;
@@ -363,7 +361,7 @@
     window.__BOOTDEV_ENHANCER_TEST__.hooks = {
       tierOfDifficulty,
       filterChallengeSearchArray,
-      normalizeChallengeFilter,
+      parseTierList,
       isChallengeSearchUrl,
     };
   }

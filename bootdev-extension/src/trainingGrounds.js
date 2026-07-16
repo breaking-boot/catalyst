@@ -1,31 +1,47 @@
 // trainingGrounds.js
 // Training Grounds (Challenge Catalog) difficulty filter. Injects a Catalyst
-// "Difficulty" section into Boot.dev's filter popover, persists the selected
-// tiers, pushes them into the page context (injected.js filters the
+// "Difficulty" section into Boot.dev's filter popover; injected.js filters the
 // challenges/search response before Vue consumes it, so the native list,
-// count, and pagination stay correct), and commits selection changes by
-// asking the page to refresh its own search.
+// count, and pagination stay correct.
+//
+// Interaction model deliberately mirrors the native filter pills (2026-07-15
+// live QA): pill clicks — and "Clear filters" — are pending/visual only until
+// Boot.dev's Search button commits them; the committed state travels in the
+// page URL (`diff=easy,hard`); each tab is independent and nothing is stored.
+// Committed tiers are handed to injected.js through a DOM attribute
+// (`data-be-diff` on <html>) — a synchronous channel, so the fetch a Search
+// click triggers already sees the just-committed state.
+//
+// Cold loads (F5 / pasted URL) server-render the results with NO API call, so
+// a diff-armed load needs one self-triggered refresh before the filter shows.
 //
 // Evidence and design decisions: reference_data/catalyst_versions/
 // v0.10.0_challenge_difficulty_filter/difficulty_filter_plan.md
 
-const CHALLENGE_FILTER_KEY = "be_challenge_filter";
 const CHALLENGE_FILTER_FEATURE = "challengeDifficulty";
-// Also written into the page URL by injected.js on refresh; adopted back on
-// load so shared search URLs carry the difficulty between Catalyst users.
 const CHALLENGE_DIFF_URL_PARAM = "diff";
-// Keep ids/bounds in sync with DIFFICULTY_TIERS in injected.js. The bounds
-// mirror boot.dev's own difficulty icon tiers (easy/medium/hard filenames).
+// Keep both in sync with injected.js.
+const CHALLENGE_DIFF_ATTR = "data-be-diff";
+const CHALLENGE_REFRESH_NONCE_PARAM = "be_r";
+// Tier ids/bounds mirror boot.dev's own difficulty icons; keep in sync with
+// DIFFICULTY_TIERS in injected.js.
 const CHALLENGE_TIERS = [
   { id: "easy", label: "Easy", range: "1-4" },
   { id: "medium", label: "Medium", range: "5-7" },
   { id: "hard", label: "Hard", range: "8-10" },
 ];
+// How long after a commit / route entry to wait for a search response before
+// concluding Boot.dev skipped the request and triggering our own refresh.
+const CHALLENGE_COMMIT_VERIFY_MS = 1000;
+const CHALLENGE_ENTRY_HEAL_MS = 1500;
 
-let challengeFilterTiers = []; // selected tier ids, canonical order
+let pendingChallengeTiers = []; // popover selection, not yet applied
+let committedChallengeTiers = []; // applied by the last Search in this tab
 let lastChallengeSearch = null; // what the page currently renders (from relay)
-let lastChallengeRefreshSignature = null; // one refresh per selection; no loops
-let lastSeenChallengeDiffParam = null; // URL adoption fires on value change only
+let lastChallengeRefreshSignature = null; // backstop refreshes: one per selection
+let challengeCommitVerifyTimer = null;
+let challengeEntryHealTimer = null;
+let onTrainingGroundsRoute = false;
 
 function isTrainingGroundsPage() {
   // The catalog lands on /training-grounds; executing a search navigates the
@@ -34,7 +50,7 @@ function isTrainingGroundsPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Selection state
+// Tier state
 // ---------------------------------------------------------------------------
 
 function normalizeChallengeTiers(value) {
@@ -47,68 +63,95 @@ function challengeTiersEqual(a, b) {
 }
 
 // 1-2 tiers filter; none or all three means "all difficulties" (no filtering).
-function challengeSelectionActive() {
-  return challengeFilterTiers.length >= 1 && challengeFilterTiers.length < CHALLENGE_TIERS.length;
-}
-
-async function loadChallengeFilterState() {
-  const raw = await chromeGet(CHALLENGE_FILTER_KEY);
-  challengeFilterTiers = normalizeChallengeTiers(raw && raw.tiers);
-  adoptChallengeTiersFromUrl();
-}
-
-function persistChallengeTiers() {
-  chromeSet(CHALLENGE_FILTER_KEY, { tiers: challengeFilterTiers.slice() });
-}
-
-// A pasted /training-grounds/search?...&diff=easy,medium URL arms the filter
-// to match. Only reacts when the param's value changes, so Catalyst's own
-// refresh pushes (which write the current selection) are no-ops here.
-function adoptChallengeTiersFromUrl() {
-  let raw = null;
-  try {
-    raw = new URLSearchParams(location.search).get(CHALLENGE_DIFF_URL_PARAM);
-  } catch (_) {}
-  if (raw === lastSeenChallengeDiffParam) return;
-  lastSeenChallengeDiffParam = raw;
-  if (raw === null) return;
-  const tiers = normalizeChallengeTiers(raw.split(","));
-  if (!tiers.length || challengeTiersEqual(tiers, challengeFilterTiers)) return;
-  challengeFilterTiers = tiers;
-  persistChallengeTiers();
-  pushChallengeFilterToPage();
-  syncChallengeFilterUi();
-}
-
-// Another tab moved the selection (storage.onChanged). Adoption never writes
-// storage, so our own writes round-tripping through onChanged are no-ops.
-function adoptChallengeFilterChange(newValue) {
-  const tiers = normalizeChallengeTiers(newValue && newValue.tiers);
-  if (challengeTiersEqual(tiers, challengeFilterTiers)) return;
-  challengeFilterTiers = tiers;
-  pushChallengeFilterToPage();
-  syncChallengeFilterUi();
-  maybeCommitChallengeSelection();
-}
-
-// ---------------------------------------------------------------------------
-// Page-context messaging
-// ---------------------------------------------------------------------------
-
-function pushChallengeFilterToPage() {
-  if (enhancerStopped) return;
-  window.postMessage(
-    {
-      source: TAG,
-      command: "BE_SET_CHALLENGE_FILTER",
-      payload: {
-        enabled: isFeatureEnabled(CHALLENGE_FILTER_FEATURE),
-        tiers: challengeFilterTiers.slice(),
-      },
-    },
-    window.location.origin
+function committedChallengeActive() {
+  return (
+    committedChallengeTiers.length >= 1 &&
+    committedChallengeTiers.length < CHALLENGE_TIERS.length
   );
 }
+
+function readChallengeTiersFromUrl() {
+  try {
+    const raw = new URLSearchParams(location.search).get(CHALLENGE_DIFF_URL_PARAM);
+    if (raw !== null) return normalizeChallengeTiers(raw.split(","));
+  } catch (_) {}
+  return [];
+}
+
+// The synchronous state channel to injected.js: attribute present = filter
+// these tiers; absent = feature off / nothing committed.
+function syncChallengeFilterAttr() {
+  try {
+    const root = document.documentElement;
+    if (
+      onTrainingGroundsRoute &&
+      isFeatureEnabled(CHALLENGE_FILTER_FEATURE) &&
+      committedChallengeActive()
+    ) {
+      root.setAttribute(CHALLENGE_DIFF_ATTR, committedChallengeTiers.join(","));
+    } else {
+      root.removeAttribute(CHALLENGE_DIFF_ATTR);
+    }
+  } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
+// Route entry/leave (per-tab, URL-derived — like the native filters)
+// ---------------------------------------------------------------------------
+
+function enterTrainingGroundsRoute() {
+  onTrainingGroundsRoute = true;
+  lastChallengeSearch = null;
+  lastChallengeRefreshSignature = null;
+  committedChallengeTiers = readChallengeTiersFromUrl();
+  pendingChallengeTiers = committedChallengeTiers.slice();
+  syncChallengeFilterAttr();
+
+  // Cold loads server-render the results without an API call; if this entry
+  // arrived diff-armed and no search response shows up, trigger one refresh
+  // so the filter actually applies. One attempt only — a failure leaves the
+  // native unfiltered content (fail-open).
+  clearTrackedTimeout(challengeEntryHealTimer);
+  challengeEntryHealTimer = null;
+  if (committedChallengeActive()) {
+    challengeEntryHealTimer = setTrackedTimeout(() => {
+      if (!lastChallengeSearch && onTrainingGroundsRoute) {
+        requestChallengeSearchRefresh();
+      }
+    }, CHALLENGE_ENTRY_HEAL_MS);
+  }
+}
+
+function leaveTrainingGroundsRoute() {
+  onTrainingGroundsRoute = false;
+  pendingChallengeTiers = [];
+  committedChallengeTiers = [];
+  lastChallengeSearch = null;
+  lastChallengeRefreshSignature = null;
+  clearTrackedTimeout(challengeCommitVerifyTimer);
+  clearTrackedTimeout(challengeEntryHealTimer);
+  challengeCommitVerifyTimer = null;
+  challengeEntryHealTimer = null;
+  syncChallengeFilterAttr(); // removes the attribute
+}
+
+// Idempotent per-tick ensure: called on route change, the 2s DOM scan, and
+// (delayed) after clicks. Handles entry/leave transitions itself.
+function ensureTrainingGroundsUiState() {
+  if (enhancerStopped) return;
+  if (!isTrainingGroundsPage() || !isFeatureEnabled(CHALLENGE_FILTER_FEATURE)) {
+    if (onTrainingGroundsRoute) leaveTrainingGroundsRoute();
+    removeTrainingGroundsUi();
+    return;
+  }
+  if (!onTrainingGroundsRoute) enterTrainingGroundsRoute();
+  ensureChallengeFilterDot();
+  ensureDifficultySection();
+}
+
+// ---------------------------------------------------------------------------
+// Commit (Search click) and refresh
+// ---------------------------------------------------------------------------
 
 function requestChallengeSearchRefresh() {
   if (enhancerStopped) return;
@@ -118,11 +161,47 @@ function requestChallengeSearchRefresh() {
   );
 }
 
-// Router handler: record what the page now renders, then settle any pending
-// difficulty commit (also heals the mount race — an unfiltered first search
-// while a selection is armed gets one refresh).
+// Do the currently rendered results reflect the committed tiers?
+function resultsMatchCommitted() {
+  const effective = committedChallengeActive() ? committedChallengeTiers : [];
+  const applied = lastChallengeSearch?.filtered ? lastChallengeSearch.appliedTiers : [];
+  return challengeTiersEqual(effective, applied);
+}
+
+// Capture-phase form-submit listener: fires for the Search button and for
+// Enter in the search box, before Boot.dev's own handler runs — so the
+// attribute write below is visible to the fetch that handler may start.
+function handleTrainingGroundsSubmit(event) {
+  if (enhancerStopped || !isTrainingGroundsPage()) return;
+  if (!isFeatureEnabled(CHALLENGE_FILTER_FEATURE)) return;
+  const form = event.target;
+  if (!(form instanceof Element)) return;
+  if (!form.querySelector('input[aria-label="Search Challenges"]')) return;
+  commitChallengeSelection();
+}
+
+function commitChallengeSelection() {
+  committedChallengeTiers = pendingChallengeTiers.slice();
+  syncChallengeFilterAttr();
+  ensureChallengeFilterDot();
+
+  // Boot.dev skips the refetch when q/t/l are unchanged. If no response has
+  // arrived shortly after this commit and the shown results don't match it,
+  // ask the page to re-run the search itself.
+  const committedAt = Date.now();
+  clearTrackedTimeout(challengeCommitVerifyTimer);
+  challengeCommitVerifyTimer = setTrackedTimeout(() => {
+    if (!onTrainingGroundsRoute) return;
+    if (lastChallengeSearch && lastChallengeSearch.at >= committedAt) return;
+    if (resultsMatchCommitted()) return;
+    requestChallengeSearchRefresh();
+  }, CHALLENGE_COMMIT_VERIFY_MS);
+}
+
+// Router handler for /v1/challenges/search relays.
 function handleChallengeSearch(json, catalyst) {
-  if (!Array.isArray(json)) return;
+  if (!Array.isArray(json) || !isTrainingGroundsPage()) return;
+  if (!onTrainingGroundsRoute) ensureTrainingGroundsUiState();
   lastChallengeSearch = {
     at: Date.now(),
     shownCount: json.length,
@@ -131,29 +210,41 @@ function handleChallengeSearch(json, catalyst) {
     appliedTiers: normalizeChallengeTiers(catalyst?.appliedTiers),
   };
   console.debug("[catalyst] challenge search", lastChallengeSearch);
+  syncChallengeSearchUrl();
   ensureChallengeFilterDot();
-  maybeCommitChallengeSelection();
-}
 
-// Refresh the rendered results iff they don't reflect the current selection.
-// The signature guard makes every distinct selection worth at most one
-// automatic refresh, so a lost state push can never cause a refresh loop.
-function maybeCommitChallengeSelection() {
-  if (enhancerStopped || !isTrainingGroundsPage()) return;
-  if (!isFeatureEnabled(CHALLENGE_FILTER_FEATURE)) return;
-  if (!lastChallengeSearch) return; // nothing rendered yet; next search applies it
-  if (findChallengeFilterPopover()) return; // still open; commit on close
-  const effective = challengeSelectionActive() ? challengeFilterTiers : [];
-  const applied = lastChallengeSearch.filtered ? lastChallengeSearch.appliedTiers : [];
-  if (challengeTiersEqual(effective, applied)) {
+  // Backstop: if what rendered doesn't match the committed tiers (e.g. a
+  // fetch raced the commit), refresh once per distinct selection — the
+  // signature guard makes a loop impossible even if refreshes stop working.
+  if (resultsMatchCommitted()) {
     lastChallengeRefreshSignature = null;
     return;
   }
-  const signature = effective.join(",");
+  const signature = (committedChallengeActive() ? committedChallengeTiers : []).join(",");
   if (signature === lastChallengeRefreshSignature) return;
   lastChallengeRefreshSignature = signature;
-  pushChallengeFilterToPage(); // re-sync first in case a push was lost
   requestChallengeSearchRefresh();
+}
+
+// Keep the address bar honest after every search: strip the refresh nonce,
+// and add/remove `diff=` to match what is actually filtering the results
+// (native searches rebuild the URL and drop it). history.replaceState only
+// repaints the address bar — Vue's router is not involved.
+function syncChallengeSearchUrl() {
+  if (!isTrainingGroundsPage()) return;
+  try {
+    const url = new URL(location.href);
+    url.searchParams.delete(CHALLENGE_REFRESH_NONCE_PARAM);
+    const applied = lastChallengeSearch?.filtered ? lastChallengeSearch.appliedTiers : [];
+    if (applied.length && applied.length < CHALLENGE_TIERS.length) {
+      url.searchParams.set(CHALLENGE_DIFF_URL_PARAM, applied.join(","));
+    } else {
+      url.searchParams.delete(CHALLENGE_DIFF_URL_PARAM);
+    }
+    const next = url.pathname + url.search + url.hash;
+    const current = location.pathname + location.search + location.hash;
+    if (next !== current) history.replaceState(history.state, "", next);
+  } catch (_) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -173,25 +264,6 @@ function findChallengeFilterPopover() {
   const popover = btn.nextElementSibling;
   if (!popover) return null;
   return normalizeText(popover.textContent).toLowerCase().includes("filters") ? popover : null;
-}
-
-// Idempotent per-tick ensure: called on route change, the 2s DOM scan, and
-// (delayed) after clicks. Self-tears-down off-route or when disabled.
-function ensureTrainingGroundsUiState() {
-  if (enhancerStopped) return;
-  if (!isTrainingGroundsPage() || !isFeatureEnabled(CHALLENGE_FILTER_FEATURE)) {
-    removeTrainingGroundsUi();
-    if (!isTrainingGroundsPage()) {
-      lastChallengeSearch = null;
-      lastChallengeRefreshSignature = null;
-      lastSeenChallengeDiffParam = null;
-    }
-    return;
-  }
-  adoptChallengeTiersFromUrl();
-  ensureChallengeFilterDot();
-  ensureDifficultySection();
-  maybeCommitChallengeSelection(); // Esc-close backstop
 }
 
 function ensureDifficultySection() {
@@ -220,7 +292,12 @@ function buildDifficultySection() {
 
   const label = document.createElement("div");
   label.className = "be-tg-section-label";
-  label.textContent = "Difficulty";
+  // Lucide-style "//" glyph to match the native <> LANGUAGE and >_ TYPE icons.
+  label.innerHTML =
+    '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"' +
+    ' fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"' +
+    ' stroke-linejoin="round" aria-hidden="true"><path d="m11 4-4 16"></path>' +
+    '<path d="m17 4-4 16"></path></svg><span>Difficulty</span>';
 
   const pills = document.createElement("div");
   pills.className = "be-tg-pills";
@@ -242,7 +319,7 @@ function buildDifficultySection() {
 
 function syncDifficultyPills(section) {
   for (const btn of section.querySelectorAll(".be-tg-pill")) {
-    const on = challengeFilterTiers.includes(btn.dataset.beTier);
+    const on = pendingChallengeTiers.includes(btn.dataset.beTier);
     btn.setAttribute("aria-pressed", on ? "true" : "false");
   }
 }
@@ -253,26 +330,19 @@ function syncChallengeFilterUi() {
   ensureChallengeFilterDot();
 }
 
+// Pending only — nothing applies until Boot.dev's Search commits it, exactly
+// like the native pills.
 function toggleChallengeTier(id) {
-  challengeFilterTiers = challengeFilterTiers.includes(id)
-    ? challengeFilterTiers.filter((tier) => tier !== id)
-    : normalizeChallengeTiers([...challengeFilterTiers, id]);
-  persistChallengeTiers();
-  pushChallengeFilterToPage();
-  syncChallengeFilterUi();
-  // No refresh here: the commit happens when the popover closes.
-}
-
-function clearChallengeTiers() {
-  if (!challengeFilterTiers.length) return;
-  challengeFilterTiers = [];
-  persistChallengeTiers();
-  pushChallengeFilterToPage();
+  pendingChallengeTiers = pendingChallengeTiers.includes(id)
+    ? pendingChallengeTiers.filter((tier) => tier !== id)
+    : normalizeChallengeTiers([...pendingChallengeTiers, id]);
   syncChallengeFilterUi();
 }
 
-// Small gold dot on the filter button while a filtering selection is armed —
-// visible even with the popover closed, without duplicating any counts.
+// Small gold dot on the filter button while a committed selection is actually
+// filtering results — visible with the popover closed, without duplicating
+// any counts. Pending (uncommitted) picks don't show it, matching how native
+// pending pills have no indicator either.
 function ensureChallengeFilterDot() {
   const btn = findChallengeFilterButton();
   const existing = document.getElementById("be-tg-filter-dot");
@@ -280,7 +350,7 @@ function ensureChallengeFilterDot() {
     Boolean(btn) &&
     isTrainingGroundsPage() &&
     isFeatureEnabled(CHALLENGE_FILTER_FEATURE) &&
-    challengeSelectionActive();
+    committedChallengeActive();
   if (!want) {
     existing?.remove();
     return;
@@ -302,10 +372,9 @@ function removeTrainingGroundsUi() {
 // Events + settings
 // ---------------------------------------------------------------------------
 
-// One delegated listener (capture phase, so page handlers can't swallow it).
-// Covers: opening the popover (inject after Vue renders it), native
-// "Clear filters" (clears difficulty too), and closing by button/outside
-// click (commit). Esc-close is caught by the 2s scan.
+// Delegated capture-phase click listener: (re)inject after the popover opens
+// or re-renders, and mirror the native "Clear filters" (which is also only
+// pending until Search).
 function handleTrainingGroundsClick(event) {
   if (enhancerStopped || !isTrainingGroundsPage()) return;
   if (!isFeatureEnabled(CHALLENGE_FILTER_FEATURE)) return;
@@ -320,7 +389,8 @@ function handleTrainingGroundsClick(event) {
       !btn.closest("#be-tg-difficulty") &&
       normalizeText(btn.textContent).toLowerCase() === "clear filters"
     ) {
-      clearChallengeTiers();
+      pendingChallengeTiers = [];
+      syncChallengeFilterUi();
     }
   }
 
@@ -332,10 +402,12 @@ function handleTrainingGroundsClick(event) {
 
 function bindTrainingGroundsEvents() {
   document.addEventListener("click", handleTrainingGroundsClick, true);
+  document.addEventListener("submit", handleTrainingGroundsSubmit, true);
 }
 
 function unbindTrainingGroundsEvents() {
   document.removeEventListener("click", handleTrainingGroundsClick, true);
+  document.removeEventListener("submit", handleTrainingGroundsSubmit, true);
 }
 
 // Live-apply of the feature toggle (from applyFeatureSettings).
@@ -344,15 +416,21 @@ function applyChallengeFilterSetting(before, after) {
   const was = before[CHALLENGE_FILTER_FEATURE] !== false;
   const now = after[CHALLENGE_FILTER_FEATURE] !== false;
   if (was === now) return;
-  pushChallengeFilterToPage(); // carries the new enabled flag
   if (!now) {
+    // Restore the unfiltered view first (the relay it produces is still
+    // handled), then let the ensure pass tear the rest down.
+    const needRestore = isTrainingGroundsPage() && lastChallengeSearch?.filtered;
+    try {
+      document.documentElement.removeAttribute(CHALLENGE_DIFF_ATTR);
+    } catch (_) {}
     removeTrainingGroundsUi();
-    // Restore the unfiltered view the user is looking at right now.
-    if (isTrainingGroundsPage() && lastChallengeSearch?.filtered) {
+    if (needRestore) {
       lastChallengeRefreshSignature = null;
       requestChallengeSearchRefresh();
     }
   } else {
+    // Re-enter so the URL's diff= (if any) is adopted under the new flag.
+    onTrainingGroundsRoute = false;
     ensureTrainingGroundsUiState();
   }
 }
