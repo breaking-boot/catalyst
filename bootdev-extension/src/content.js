@@ -173,6 +173,7 @@ function renderRouteScopedUi() {
   if (!isProfilePage()) {
     removeProfileXpBadge();
   }
+  ensureProfileUiState();
 }
 
 // The leaderboard-page fetches, kept separate so settings changes can re-render
@@ -278,6 +279,7 @@ function startDomScan() {
     learnCurrentUserHandleFromDom();
     ensureLeaderboardUiState();
     ensureTrainingGroundsUiState();
+    ensureProfileUiState();
     checkFrameAssetsForRot();
   }, 2000);
 }
