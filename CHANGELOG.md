@@ -13,7 +13,7 @@
 
 ### Fixes
 - **Profile pages survive a refresh again.** Refreshing (or directly opening) a profile serves it pre-rendered without the profile API call Catalyst listens for, so the Total XP badge and the "Add to Personal Leaderboards" button silently vanished until you navigated away and back. Catalyst now requests the data itself when a profile page shows nothing injected.
-- **No more phantom boss reminders.** Long after an event ends, the boss API can return no event at all; that response was mistaken for a live event, occasionally toasting "boss event is live" on fresh installs between events. An event now has to actually exist to count as active, and an event-less response no longer resets the stored per-event stats.
+- **No more phantom boss reminders.** Between events, the boss API returns the last event in a shape Catalyst couldn't read (the response switches to camelCase field names — `event.uuid` instead of `Event.UUID`), and the unreadable event was mistaken for a live one, occasionally toasting "boss event is live" on fresh installs. Boss responses are now accepted in both casings, an event has to be genuinely readable and unexpired to count as active, and an unreadable response no longer resets the stored per-event stats. The both-casings support also future-proofs the tracker in case the next live event arrives camelCase too.
 
 ## v0.9.0 - Backup & restore (import/export)
 

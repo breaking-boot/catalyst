@@ -112,7 +112,45 @@ async function restoreBossPanel() {
 // ===========================================================================
 // FEATURE 5: Boss-event tracker
 // ===========================================================================
+// 2026-07-16: a between-events capture came back entirely camelCase
+// (event.uuid, xpBonus, …) while every live-event capture is PascalCase
+// (Event.UUID, XPBonus, …) — see boss_events_progress_between_events.json in
+// reference_data. Whether boot.dev changed the serializer for good is
+// unknowable until the next event, so accept both shapes: map camelCase onto
+// the PascalCase names the rest of this file reads. PascalCase wins if both
+// somehow exist.
+function normalizeBossProgressJson(json) {
+  if (!isPlainObject(json) || json.Event || !isPlainObject(json.event)) return json;
+  const e = json.event;
+  return {
+    ...json,
+    Event: {
+      UUID: e.uuid,
+      StartsAt: e.startsAt,
+      ExpiresAt: e.expiresAt,
+      DefeatedAt: e.defeatedAt,
+      HealthPoints: e.healthPoints,
+      Boss: isPlainObject(e.boss) ? { UUID: e.boss.uuid, Name: e.boss.name } : undefined,
+    },
+    XPBonus: json.xpBonus,
+    XPTotal: json.xpTotal,
+    XPUser: json.xpUser,
+    NumLessonsCompletedHourly: json.numLessonsCompletedHourly,
+    Rewards: Array.isArray(json.rewards)
+      ? json.rewards.map((r) => ({
+          UUID: r?.uuid,
+          ChestUUID: r?.chestUUID,
+          XPThreshold: r?.xpThreshold,
+          UserXPThreshold: r?.userXPThreshold,
+          IsUnlocked: r?.isUnlocked,
+          IsUnlockedByUser: r?.isUnlockedByUser,
+        }))
+      : json.Rewards,
+  };
+}
+
 async function handleBossProgress(json) {
+  json = normalizeBossProgressJson(json);
   if (!isFeatureEnabled("bossTracker")) {
     // Quiet mode: never touch be_boss_state (previous-event stats stay intact
     // for whenever the tracker is re-enabled); at most offer the tracker via
@@ -124,9 +162,9 @@ async function handleBossProgress(json) {
   const active = isBossEventActive(json);
   bossEventActive = active;
 
-  // An event-less response (long gap between events) must not fall through to
-  // the new-event detection below — it would reset the stored per-event stats
-  // to a synthetic "unknown-event". Mark things inactive and keep the last
+  // A response without a readable event must not fall through to the
+  // new-event detection below — it would reset the stored per-event stats to
+  // a synthetic "unknown-event". Mark things inactive and keep the last
   // event's stats for whenever the next one starts.
   if (!hasBossEventIdentity(json)) {
     clearBossRefreshTimer();
@@ -205,11 +243,13 @@ function getEventExpiry(json) {
   return Number.isFinite(t) ? t : null;
 }
 
-// Does the response carry a real event at all? Long after an event ends the
-// API can return no event object; that must never count as "active" (it used
-// to, via the missing-expiry fail-open, producing phantom reminder toasts on
-// fresh installs between events). Identity fields mirror the eventId fallback
-// used by the tracker.
+// Does the response carry a readable event at all? A response whose event
+// Catalyst cannot read (or that has none) must never count as "active" — the
+// missing-expiry fail-open used to treat exactly that as a live event,
+// producing phantom reminder toasts between events (root cause: the
+// between-events response is camelCase, so the PascalCase reads all came back
+// undefined; see normalizeBossProgressJson). Identity fields mirror the
+// eventId fallback used by the tracker.
 function hasBossEventIdentity(json) {
   return Boolean(json?.Event?.UUID || json?.Event?.StartsAt);
 }
