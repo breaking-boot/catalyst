@@ -123,6 +123,23 @@ async function handleBossProgress(json) {
   }
   const active = isBossEventActive(json);
   bossEventActive = active;
+
+  // An event-less response (long gap between events) must not fall through to
+  // the new-event detection below — it would reset the stored per-event stats
+  // to a synthetic "unknown-event". Mark things inactive and keep the last
+  // event's stats for whenever the next one starts.
+  if (!hasBossEventIdentity(json)) {
+    clearBossRefreshTimer();
+    await notifyBossInactiveOnce();
+    if (enhancerStopped || !bossState) return;
+    bossState.eventActive = false;
+    bossState.updatedAt = Date.now();
+    await chromeSet(BOSS_KEY, { state: bossState });
+    if (enhancerStopped) return;
+    renderBossPanel(bossState);
+    return;
+  }
+
   const rewards = getBossRewards(json);
   const cur = {
     eventId: json?.Event?.UUID ?? json?.Event?.StartsAt ?? "unknown-event",
@@ -179,15 +196,26 @@ async function handleBossProgress(json) {
   if (active) maybeNotifyNearHigh(state);
 }
 
-// An event is active until its ExpiresAt passes. Missing/unparseable expiry is
-// treated as active so a schema change never wrongly hides a running event.
+// An event is active until its ExpiresAt passes. Missing/unparseable expiry on
+// a response that clearly carries a real event is treated as active so a
+// schema change never wrongly hides a running event.
 function getEventExpiry(json) {
   const raw = json?.Event?.ExpiresAt;
   const t = raw ? Date.parse(raw) : NaN;
   return Number.isFinite(t) ? t : null;
 }
 
+// Does the response carry a real event at all? Long after an event ends the
+// API can return no event object; that must never count as "active" (it used
+// to, via the missing-expiry fail-open, producing phantom reminder toasts on
+// fresh installs between events). Identity fields mirror the eventId fallback
+// used by the tracker.
+function hasBossEventIdentity(json) {
+  return Boolean(json?.Event?.UUID || json?.Event?.StartsAt);
+}
+
 function isBossEventActive(json) {
+  if (!hasBossEventIdentity(json)) return false;
   const expiry = getEventExpiry(json);
   if (expiry == null) return true;
   return Date.now() < expiry;
