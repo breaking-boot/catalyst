@@ -29,6 +29,7 @@
     /^\/v1\/dashboard_content$/,
     /^\/v1\/users\/lessons\/[^/]+$/,
     /^\/v1\/course_progress_by_lesson\/[^/]+$/,
+    /^\/v1\/challenges\/search$/,
   ];
 
   function shouldRelay(url) {
@@ -39,6 +40,124 @@
       return false;
     }
   }
+  // --- Training Grounds difficulty filter ---------------------------------
+  // The tier bounds are Catalyst's UI mapping of boot.dev's difficulty icons
+  // (difficulty_easy/medium/hard filenames); the API has no tier concept and
+  // no difficulty parameter (probe-verified). Keep in sync with
+  // CHALLENGE_TIERS in trainingGrounds.js.
+  const DIFFICULTY_TIERS = { easy: [1, 4], medium: [5, 7], hard: [8, 10] };
+  const CHALLENGE_SEARCH_PATH = "/v1/challenges/search";
+  const DIFF_URL_PARAM = "diff";
+  // null until the content script pushes state; null means "touch nothing".
+  let challengeFilter = null;
+
+  function tierOfDifficulty(value) {
+    const n = Number(value);
+    if (!Number.isInteger(n)) return null;
+    for (const tier of Object.keys(DIFFICULTY_TIERS)) {
+      const [lo, hi] = DIFFICULTY_TIERS[tier];
+      if (n >= lo && n <= hi) return tier;
+    }
+    return null;
+  }
+
+  // Records with no resolvable tier are always kept: hiding a challenge on
+  // bad data is worse than showing an occasional mis-tiered one.
+  function filterChallengeSearchArray(records, tierSet) {
+    return records.filter((record) => {
+      const tier = tierOfDifficulty(record?.Topics?.Difficulty);
+      return tier === null || tierSet.has(tier);
+    });
+  }
+
+  function normalizeChallengeFilter(payload) {
+    const requested = Array.isArray(payload?.tiers) ? payload.tiers : [];
+    return {
+      enabled: payload?.enabled === true,
+      // Known tiers only, deduped, in canonical order.
+      tiers: Object.keys(DIFFICULTY_TIERS).filter((t) => requested.includes(t)),
+    };
+  }
+
+  // All three tiers selected filters nothing, so it counts as inactive too.
+  function challengeFilterActive() {
+    return Boolean(
+      challengeFilter &&
+        challengeFilter.enabled &&
+        challengeFilter.tiers.length >= 1 &&
+        challengeFilter.tiers.length < Object.keys(DIFFICULTY_TIERS).length
+    );
+  }
+
+  function isChallengeSearchUrl(url) {
+    try {
+      return new URL(url, window.location.origin).pathname === CHALLENGE_SEARCH_PATH;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  // Returns a replacement Response when the filter applied cleanly, else null
+  // (the caller falls through to the untouched response + normal relay).
+  async function maybeFilterChallengeSearch(url, method, res) {
+    try {
+      const text = await res.clone().text();
+      const json = JSON.parse(text);
+      if (!Array.isArray(json)) return null;
+      const filtered = filterChallengeSearchArray(json, new Set(challengeFilter.tiers));
+      const body = JSON.stringify(filtered);
+      relay(url, method, res.status, body, null, {
+        filtered: true,
+        originalCount: json.length,
+        appliedTiers: challengeFilter.tiers.slice(),
+      });
+      const headers = new Headers(res.headers);
+      // Stale after re-serialization / already decoded by fetch.
+      headers.delete("content-length");
+      headers.delete("content-encoding");
+      return new Response(body, {
+        status: res.status,
+        statusText: res.statusText,
+        headers,
+      });
+    } catch (_) {
+      return null; // fail open: boot.dev gets its original response
+    }
+  }
+
+  // Makes the page re-run its current search so a changed difficulty selection
+  // shows up. Primary: re-push the current route through the page's Vue router
+  // with a `diff` param carrying the selection — the URL changes exactly when
+  // the selection does, the server provably ignores the param, and the
+  // frontend refetches on the changed route (all owner-verified). __vue_app__
+  // is private Vue API, hence the guard; fallback is a hard reload, which
+  // re-runs the search because the URL carries q/t/l.
+  function refreshChallengeSearch() {
+    try {
+      const router = document.querySelector("#__nuxt")?.__vue_app__?.config
+        ?.globalProperties?.$router;
+      const current = router?.currentRoute?.value;
+      if (router && current) {
+        const query = { ...(current.query || {}) };
+        if (challengeFilterActive()) {
+          query[DIFF_URL_PARAM] = challengeFilter.tiers.join(",");
+        } else {
+          delete query[DIFF_URL_PARAM];
+        }
+        // An identical push is a router no-op (no refetch); only the hard
+        // reload helps then.
+        if (JSON.stringify(query) !== JSON.stringify(current.query || {})) {
+          router.push({ path: window.location.pathname, query });
+          return;
+        }
+      }
+    } catch (_) {}
+    try {
+      window.location.reload();
+    } catch (_) {}
+  }
+  // -------------------------------------------------------------------------
+
   const HEADER_ALLOWLIST = new Set([
     "accept",
     "authorization",
@@ -49,7 +168,7 @@
   let lastApiHeaders = {};
   const pendingAuthFetches = new Map();
 
-  function relay(url, method, status, bodyText, requestId = null) {
+  function relay(url, method, status, bodyText, requestId = null, catalyst = null) {
     let json = null;
     try {
       json = JSON.parse(bodyText);
@@ -59,10 +178,9 @@
     // Passive broadcasts (no requestId) are limited to consumed paths; explicit
     // request responses (with a requestId) always go through to their caller.
     if (!requestId && !shouldRelay(url)) return;
-    window.postMessage(
-      { source: TAG, payload: { url, method, status, json, requestId } },
-      window.location.origin
-    );
+    const payload = { url, method, status, json, requestId };
+    if (catalyst) payload.catalyst = catalyst; // e.g. challenge-filter metadata
+    window.postMessage({ source: TAG, payload }, window.location.origin);
   }
 
   function rememberApiHeaders(...sources) {
@@ -147,6 +265,18 @@
           (args[1] && args[1].method) ||
           (typeof args[0] !== "string" && args[0]?.method) ||
           "GET";
+        // Challenge search with an active difficulty selection: hand the page
+        // a filtered copy so its own list/count/pagination render the reduced
+        // set. Any hiccup falls through to the untouched response below.
+        if (
+          res.ok &&
+          String(method).toUpperCase() === "GET" &&
+          isChallengeSearchUrl(url) &&
+          challengeFilterActive()
+        ) {
+          const replaced = await maybeFilterChallengeSearch(url, method, res);
+          if (replaced) return replaced;
+        }
         // clone() so we read the body without consuming the page's copy
         res
           .clone()
@@ -189,7 +319,17 @@
     if (event.origin !== window.location.origin) return;
 
     const msg = event.data;
-    if (!msg || msg.source !== TAG || msg.command !== "BE_FETCH_JSON") return;
+    if (!msg || msg.source !== TAG || !msg.command) return;
+
+    if (msg.command === "BE_SET_CHALLENGE_FILTER") {
+      challengeFilter = normalizeChallengeFilter(msg.payload);
+      return;
+    }
+    if (msg.command === "BE_REFRESH_CHALLENGE_SEARCH") {
+      refreshChallengeSearch();
+      return;
+    }
+    if (msg.command !== "BE_FETCH_JSON") return;
 
     const url = String(msg.payload?.url || "");
     const requestId = msg.payload?.requestId || null;
@@ -215,6 +355,18 @@
       await fetchAndRelay(parsed.href, [requestId]);
     } catch (_) {}
   });
+
+  // Test-only seam: the Node harness (scripts/check_challenge_filter.mjs)
+  // predefines __BOOTDEV_ENHANCER_TEST__ before evaluating this file so it can
+  // reach the pure helpers. Never defined on the real page.
+  if (window.__BOOTDEV_ENHANCER_TEST__) {
+    window.__BOOTDEV_ENHANCER_TEST__.hooks = {
+      tierOfDifficulty,
+      filterChallengeSearchArray,
+      normalizeChallengeFilter,
+      isChallengeSearchUrl,
+    };
+  }
 
   if (DEBUG) console.debug("[catalyst] interceptor installed");
 })();

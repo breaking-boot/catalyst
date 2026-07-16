@@ -20,6 +20,7 @@ const SETTINGS_DEFAULTS = {
   personalLeaderboards: true,
   profileXp: true,
   nextLesson: true,
+  challengeDifficulty: true, // Training Grounds difficulty filter (inert until tiers are picked)
   comparisons: true, // master gate for all XP/karma comparisons
 
   // Per-board comparison toggles (options page only); each is ANDed with `comparisons`.
@@ -52,6 +53,7 @@ const FEATURE_TOGGLES = [
   { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
+  { key: "challengeDifficulty", label: "Training Grounds difficulty filter", desc: "Easy/Medium/Hard pills in the Challenge Catalog's filter popover." },
   { key: "comparisons", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
 ];
 

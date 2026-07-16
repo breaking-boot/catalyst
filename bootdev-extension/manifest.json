@@ -38,6 +38,7 @@
         "src/boss.js",
         "src/nextLesson.js",
         "src/updateCheck.js",
+        "src/trainingGrounds.js",
         "src/content.js"
       ],
       "css": ["src/styles.css"],
