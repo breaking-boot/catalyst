@@ -29,8 +29,14 @@ let cliShortcutKeydownHandler = null;
 // Which command a keydown asks for, or null. Matching is on event.code so
 // layout and Alt-modified characters don't matter (macOS Alt+C types "ç"),
 // with event.key as the fallback for layouts where the "c" key is elsewhere.
+//
+// Auto-repeat asks for nothing new: one press is one copy and one toast, no
+// matter how long the key is held. Releasing C and pressing it again is a fresh
+// keydown, so it copies again — including when Shift was added mid-hold, which
+// is why pressing Shift alone does nothing until C is re-pressed.
 function matchCliShortcut(event) {
-  if (!event || !event.altKey || event.ctrlKey || event.metaKey) return null;
+  if (!event || event.repeat) return null;
+  if (!event.altKey || event.ctrlKey || event.metaKey) return null;
   const code = typeof event.code === "string" ? event.code : "";
   const key = typeof event.key === "string" ? event.key.toLowerCase() : "";
   if (code !== "KeyC" && key !== "c") return null;

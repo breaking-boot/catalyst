@@ -105,6 +105,14 @@ const keyEvent = (over = {}) => ({
 
 check("Alt+C -> run", matchCliShortcut(keyEvent()), "run");
 check("Alt+Shift+C -> submit", matchCliShortcut(keyEvent({ shiftKey: true, key: "C" })), "submit");
+// Holding the keys must copy once, not once per auto-repeat.
+check("held Alt+C (auto-repeat) -> null", matchCliShortcut(keyEvent({ repeat: true })), null);
+check(
+  "held Alt+Shift+C (auto-repeat) -> null",
+  matchCliShortcut(keyEvent({ shiftKey: true, key: "C", repeat: true })),
+  null
+);
+check("a fresh press after a repeat run still copies", matchCliShortcut(keyEvent({ repeat: false })), "run");
 check("macOS Alt+C (key is ç) still matches via event.code", matchCliShortcut(keyEvent({ key: "ç" })), "run");
 check(
   "macOS Alt+Shift+C (key is Ç) still matches via event.code",
