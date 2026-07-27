@@ -124,6 +124,7 @@ async function initEnhancer() {
   bindNextLessonShortcut();
   bindTrainingGroundsEvents();
   bindSubmitConfirm();
+  bindCliShortcuts();
   startDomScan();
   maybeShowSettingsIntro().catch((err) => handleAsyncError(err, "intro"));
   maybeRunVersionCheck().catch((err) => handleAsyncError(err, "versionCheck"));
@@ -396,6 +397,7 @@ function stopEnhancer() {
   unbindNextLessonShortcut();
   unbindTrainingGroundsEvents();
   unbindSubmitConfirm();
+  unbindCliShortcuts();
   closeSubmitConfirmDialog();
   try {
     chrome.storage.onChanged.removeListener(handleSettingsChange);

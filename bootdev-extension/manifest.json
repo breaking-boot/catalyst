@@ -40,6 +40,7 @@
         "src/updateCheck.js",
         "src/trainingGrounds.js",
         "src/submitConfirm.js",
+        "src/cliShortcuts.js",
         "src/content.js"
       ],
       "css": ["src/styles.css"],

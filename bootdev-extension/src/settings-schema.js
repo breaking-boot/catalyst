@@ -23,6 +23,7 @@ const SETTINGS_DEFAULTS = {
   profileXp: true,
   nextLesson: true,
   challengeDifficulty: true, // Training Grounds difficulty filter (inert until tiers are picked)
+  cliShortcuts: true, // Alt+C / Alt+Shift+C copy the lesson's bootdev commands
   submitConfirm: false, // default-OFF: never interrupt a native action uninvited
   comparisons: true, // master gate for all XP/karma comparisons
 
@@ -57,6 +58,7 @@ const FEATURE_TOGGLES = [
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
   { key: "challengeDifficulty", label: "Training Grounds difficulty filter", desc: "Easy/Medium/Hard pills in the Challenge Catalog's filter popover." },
+  { key: "cliShortcuts", label: "CLI command shortcuts", desc: "On lessons that show bootdev commands, Alt+C copies the run command and Alt+Shift+C the submit command." },
   { key: "submitConfirm", label: "Confirm code submissions", desc: "Ask before submitting when you click Submit on a code lesson, so a stray click can't cost your streak. Boot.dev's Ctrl+Shift+Enter still submits immediately." },
   { key: "comparisons", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
 ];
