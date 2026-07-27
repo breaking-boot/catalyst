@@ -123,6 +123,7 @@ async function initEnhancer() {
   requestDashboardContentIfUseful(900);
   bindNextLessonShortcut();
   bindTrainingGroundsEvents();
+  bindSubmitConfirm();
   startDomScan();
   maybeShowSettingsIntro().catch((err) => handleAsyncError(err, "intro"));
   maybeRunVersionCheck().catch((err) => handleAsyncError(err, "versionCheck"));
@@ -161,6 +162,9 @@ function renderRouteScopedUi() {
   captureNextLessonFromDom();
   learnCurrentUserHandleFromDom();
   ensureTrainingGroundsUiState();
+  // Also reached from applyFeatureSettings, so switching the setting off closes
+  // an open dialog as well as leaving the lesson route does.
+  ensureSubmitConfirmUiState();
 
   if (isLeaderboardPage()) {
     if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
@@ -391,6 +395,8 @@ function stopEnhancer() {
   document.removeEventListener("visibilitychange", handleVisibilityChange);
   unbindNextLessonShortcut();
   unbindTrainingGroundsEvents();
+  unbindSubmitConfirm();
+  closeSubmitConfirmDialog();
   try {
     chrome.storage.onChanged.removeListener(handleSettingsChange);
   } catch (_) {}
