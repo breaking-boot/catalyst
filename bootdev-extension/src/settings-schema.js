@@ -4,14 +4,16 @@
 // defaults, feature labels, and per-board ordering live in exactly one place and
 // can never drift between the two contexts. No logic here — data only.
 
-// Every flag except versionCheck and bossTracker defaults to true: a missing or
-// corrupt value means "feature on" so the extension fails open (full
-// functionality) rather than silently dark. normalizeSettings seeds every key
-// from this map. The two default-OFF exceptions are deliberate: versionCheck
-// because it can reach off-device, bossTracker because the floating panel
-// should be quiet by default — users who want it opt in via the popup or the
-// boss-event reminder toast (see boss.js). An explicit stored boolean always
-// wins over these defaults.
+// Every flag except versionCheck, bossTracker, and submitConfirm defaults to
+// true: a missing or corrupt value means "feature on" so the extension fails
+// open (full functionality) rather than silently dark. normalizeSettings seeds
+// every key from this map. The three default-OFF exceptions are deliberate:
+// versionCheck because it can reach off-device, bossTracker because the
+// floating panel should be quiet by default (users opt in via the popup or the
+// boss-event reminder toast, see boss.js), and submitConfirm because it puts a
+// step in front of a native Boot.dev action — nobody should meet a confirmation
+// dialog they didn't ask for. An explicit stored boolean always wins over these
+// defaults.
 const SETTINGS_DEFAULTS = {
   // Top-level features (shown in the popup and options page).
   bossTracker: false, // default-OFF: panel must not auto-appear on install
@@ -21,6 +23,8 @@ const SETTINGS_DEFAULTS = {
   profileXp: true,
   nextLesson: true,
   challengeDifficulty: true, // Training Grounds difficulty filter (inert until tiers are picked)
+  cliShortcuts: true, // Alt+C / Alt+Shift+C copy the lesson's bootdev commands
+  submitConfirm: false, // default-OFF: never interrupt a native action uninvited
   comparisons: true, // master gate for all XP/karma comparisons
 
   // Per-board comparison toggles (options page only); each is ANDed with `comparisons`.
@@ -54,6 +58,8 @@ const FEATURE_TOGGLES = [
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
   { key: "challengeDifficulty", label: "Training Grounds difficulty filter", desc: "Easy/Medium/Hard pills in the Challenge Catalog's filter popover." },
+  { key: "cliShortcuts", label: "CLI command shortcuts", desc: "On lessons that show bootdev commands, Alt+C copies the run command and Alt+Shift+C the submit command." },
+  { key: "submitConfirm", label: "Confirm code submissions", desc: "Ask before submitting when you click Submit on a code lesson, so a stray click can't cost your streak. Boot.dev's Ctrl+Shift+Enter still submits immediately." },
   { key: "comparisons", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
 ];
 

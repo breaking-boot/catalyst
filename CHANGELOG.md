@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.11.0 - Submit confirmation and CLI command shortcuts
+
+### Code lessons
+- **New optional confirmation before submitting.** Turn on **Confirm code submissions** (off by default) and clicking **Submit** on a code lesson asks first — a small dialog with **Cancel** and **Submit** — so a lagging mouse or a stray click can't cost you a streak or spree. Cancel and Escape leave the lesson exactly as it was; confirming submits once through Boot.dev's own button.
+- Boot.dev's deliberate **Ctrl+Shift+Enter** submit shortcut is untouched, and so are Run, Solution, quiz answers, and interview submissions. The confirmation applies to mouse and touch clicks only — the accidental case.
+- Catalyst never replaces Boot.dev's Submit button; it only pauses the pointer click and re-uses the native control, preserving Boot.dev's existing submission behavior and tooltip. If the page ever changes shape, the guard steps aside and Submit works natively.
+
+### CLI lessons
+- **New keyboard shortcuts for the `bootdev` commands.** On any lesson that shows CLI commands (courses and projects), **Alt+C** copies the run command and **Alt+Shift+C** copies the submit command, with a short confirmation toast — no more reaching for the copy icon. Shift means submit, the same as Boot.dev's own Ctrl+Enter / Ctrl+Shift+Enter.
+- Catalyst copies the command **the page actually displays** for the lesson you're on. On the newer safe-submission lessons, which show a submit command but no run command, Alt+Shift+C works and **Alt+C copies nothing** rather than inventing a command the lesson doesn't support. On lessons with no CLI commands, both shortcuts stay silent and leave your clipboard alone.
+- New **CLI command shortcuts** toggle (popup + options page, on by default). The shortcuts ignore keystrokes typed into the editor, the search box, or any other text field, and plain Ctrl+C copying is untouched.
+
+### Under the hood
+- No new permissions or API calls. The two new settings are persisted through Catalyst's existing settings storage, but no lesson UUIDs, CLI commands, or command-capability data are stored.
+- `Alt+R` was tested and rejected for the run shortcut: NVIDIA's GPU overlay claims it as a system-wide hotkey and swallows the keypress before the browser sees it, which would have made the shortcut appear broken on those machines.
+
 ## v0.10.0 - Training Grounds difficulty filter
 
 ### Training Grounds

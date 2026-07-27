@@ -43,6 +43,8 @@ catalyst/
       nextLesson.js        Next Lesson nav link and Alt+N shortcut
       updateCheck.js       Opt-in GitHub release check
       trainingGrounds.js   Training Grounds difficulty filter
+      submitConfirm.js     Optional confirmation before a code submission
+      cliShortcuts.js      Alt+C / Alt+Shift+C copy the lesson's bootdev commands
       content.js           postMessage listener and URL router (loaded last)
       injected.js          Page-context fetch/XHR interceptor
       backup.js            Backup & restore core (options page only, not a content script)
@@ -115,7 +117,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 ### Settings
 
 - Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chromium browsers hide extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
-- The popup toggles the eight features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds difficulty filter, and leaderboard comparisons (XP/karma).
+- The popup toggles the ten features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds difficulty filter, the CLI command shortcuts, code submission confirmation (off by default), and leaderboard comparisons (XP/karma).
 - The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), and per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards).
 - Settings sync across your devices (`chrome.storage.sync`; in Brave they stay on-device) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on Boot.dev.
 
@@ -132,6 +134,13 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 - A **Next Lesson** link is added to the top nav on all Boot.dev pages once the extension learns your current lesson from `/v1/dashboard_content`. The dashboard **Continue Learning** button is used as a same-page fallback.
 - Press `Alt+N` from any Boot.dev page to open the Next Lesson link directly. The shortcut is ignored while typing in inputs or editors.
 - Lesson progress responses trigger a delayed dashboard refresh so the link updates automatically after you complete a lesson.
+
+### Lessons
+
+- **CLI command shortcuts.** On any lesson that shows `bootdev` commands (courses and projects), press `Alt+C` to copy the run command and `Alt+Shift+C` to copy the submit command — Shift means submit, the same as Boot.dev's own `Ctrl+Enter` / `Ctrl+Shift+Enter`. A short toast confirms what was copied.
+- Catalyst copies the command **the page actually displays** for the lesson you're on. On "safe submission" lessons, which show a submit command but no run command, `Alt+Shift+C` works and `Alt+C` copies nothing rather than inventing an unsupported command. On lessons with no CLI commands the shortcuts stay silent and leave your clipboard untouched, and they're ignored while you're typing in the editor, the search box, or any other field (ordinary `Ctrl+C` copying is unaffected).
+- **Confirm code submissions** (off by default). Turn it on and clicking **Submit** on a code lesson asks first, so a lagging mouse or a stray click can't forfeit a streak or spree. Cancel and `Escape` leave the lesson untouched; confirming submits once through Boot.dev's own button.
+- The confirmation covers mouse and touch clicks only — the accidental case. Boot.dev's deliberate `Ctrl+Shift+Enter` submit shortcut, the Run and Solution buttons, quiz answers, and interview submissions all behave exactly as before.
 
 ### Training Grounds
 
@@ -232,10 +241,13 @@ node --check src/profile.js
 node --check src/boss.js
 node --check src/nextLesson.js
 node --check src/trainingGrounds.js
+node --check src/submitConfirm.js
+node --check src/cliShortcuts.js
 node --check src/injected.js
 node --check src/content.js
 node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest.json ok')"
 node ../scripts/check_challenge_filter.mjs
+node ../scripts/check_lesson_features.mjs
 ```
 
 To build a release zip, run `bash scripts/package-extension.sh` from the repo root. See [CLAUDE.md](CLAUDE.md) for architecture details and agent guidance.

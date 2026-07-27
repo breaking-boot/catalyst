@@ -109,6 +109,15 @@ function isEditableTarget(target) {
   return Boolean(target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']"));
 }
 
+// The lesson UUID from a /lessons/<uuid> route, lowercased — the argument the
+// bootdev CLI takes. Null on every other route.
+const LESSON_PATH_RE = /^\/lessons\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
+function lessonUuidFromPath(pathname) {
+  const path = String(pathname == null ? location.pathname : pathname);
+  const match = LESSON_PATH_RE.exec(path);
+  return match ? match[1].toLowerCase() : null;
+}
+
 function normalizeHandle(value) {
   const raw = String(value || "")
     .trim()
