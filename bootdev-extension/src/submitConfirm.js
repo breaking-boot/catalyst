@@ -154,8 +154,21 @@ function openSubmitConfirmDialog() {
   actions.append(cancel, confirm);
 
   dialog.append(title, body, actions);
-  // Escape fires `cancel`; treat it exactly like the Cancel button.
+  // Escape, handled two ways on purpose. The native `cancel` event is the
+  // spec path, but on Boot.dev it never fires — something on the page
+  // preventDefaults the Escape keydown before the dialog's close-watcher sees
+  // it, so Escape only moved the focus ring (observed 2026-07-26). The keydown
+  // listener below is the one that actually closes; it sits on the dialog, which
+  // holds focus while modal, and stops the key from reaching the page's own
+  // Escape handling. Both paths call the same close, and closing twice is a
+  // no-op.
   dialog.addEventListener("cancel", () => closeSubmitConfirmDialog());
+  dialog.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeSubmitConfirmDialog();
+  });
   dialog.addEventListener("close", () => dialog.remove());
   document.body.appendChild(dialog);
 
