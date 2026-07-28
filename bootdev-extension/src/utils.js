@@ -104,11 +104,6 @@ function localDateKey() {
   return new Date().toLocaleDateString("en-CA");
 }
 
-function isEditableTarget(target) {
-  if (!(target instanceof Element)) return false;
-  return Boolean(target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']"));
-}
-
 // The lesson UUID from a /lessons/<uuid> route, lowercased — the argument the
 // bootdev CLI takes. Null on every other route.
 const LESSON_PATH_RE = /^\/lessons\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
