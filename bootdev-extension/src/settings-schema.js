@@ -62,7 +62,7 @@ const FEATURE_TOGGLES = [
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
   { key: "challengeDifficulty", label: "Training Grounds difficulty filter", desc: "Easy/Medium/Hard pills in the Challenge Catalog's filter popover." },
   { key: "cliShortcuts", label: "CLI command shortcuts", desc: "On lessons that show bootdev commands, Alt+C copies the run command and Alt+Shift+C the submit command." },
-  { key: "assignmentShortcuts", label: "Assignment step shortcuts", desc: "On lessons with checklist steps, Alt+1-Alt+9 tick the matching top-level step, Alt+0 ticks the next unfinished box, and Alt+` (left of the 1 key) sends you back to the code editor or answer box — all of it while you're typing in the editor, a terminal, or an answer box. Off by default: on some Mac layouts Alt+digit types characters such as #." },
+  { key: "assignmentShortcuts", label: "Assignment step shortcuts", desc: "On lessons and challenges, Alt+1-Alt+9 tick the matching top-level checklist step, Alt+0 ticks the next unfinished box, and Alt+` (left of the 1 key) sends you back to the code editor or answer box — all of it while you're typing in the editor, a terminal, or an answer box. Off by default: on some Mac layouts Alt+digit types characters such as #." },
   { key: "submitConfirm", label: "Confirm code submissions", desc: "Ask before submitting when you click Submit on a code lesson, so a stray click can't cost your streak. Boot.dev's Ctrl+Shift+Enter still submits immediately." },
   { key: "comparisons", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
 ];

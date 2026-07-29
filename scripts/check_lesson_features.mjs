@@ -433,6 +433,20 @@ const CHECKLIST_FIXTURES = [
     topLevel: 3,
     digits: [N, N, N, N, N, N, N, N, N],
   },
+  // Challenges list their steps with no <details> wrapper at all, which is why
+  // the checklist is scoped to the lesson-text pane rather than to sections.
+  {
+    file: "challenge_unordered_checkbox_list.html",
+    total: 4,
+    topLevel: 4,
+    digits: [N, N, N, N, N, N, N, N, N],
+  },
+  {
+    file: "challenge_numbered_checkbox_list.html",
+    total: 4,
+    topLevel: 4,
+    digits: ["checkbox-0", "checkbox-1", "checkbox-2", "checkbox-3", N, N, N, N, N],
+  },
 ];
 
 let checklistFixturesRun = 0;

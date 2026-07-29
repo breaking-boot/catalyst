@@ -113,6 +113,18 @@ function lessonUuidFromPath(pathname) {
   return match ? match[1].toLowerCase() : null;
 }
 
+// The UUID from a /lessons/<uuid> OR /challenges/<uuid> route. The two page
+// types share a layout (#lesson-container wrapping #markdown-side plus an
+// answer side), so features that work on the rendered page rather than the CLI
+// gate on this. Null on every other route.
+const LESSON_OR_CHALLENGE_PATH_RE =
+  /^\/(?:lessons|challenges)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
+function lessonOrChallengeUuidFromPath(pathname) {
+  const path = String(pathname == null ? location.pathname : pathname);
+  const match = LESSON_OR_CHALLENGE_PATH_RE.exec(path);
+  return match ? match[1].toLowerCase() : null;
+}
+
 function normalizeHandle(value) {
   const raw = String(value || "")
     .trim()

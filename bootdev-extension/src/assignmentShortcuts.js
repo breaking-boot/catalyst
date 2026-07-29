@@ -20,13 +20,14 @@
 // never serve a stale target. Boot.dev's own <input> is clicked, so its
 // handlers stay authoritative.
 //
-// Scope is "checkbox steps in the lesson's content sections", NOT "the
-// Assignment section": guided-project lessons put identical checklists under
-// their own headings (`_solve_r Method`, `How Does PostgreSQL Work?`) with no
-// Assignment section at all. A section is an open, visible, outermost <details>
-// whose own <summary> holds a heading — the shape every lesson-content section
-// uses — and only checkboxes inside a list item count. That keeps the search
-// well away from page furniture without depending on any one heading's text.
+// Scope is the lesson-text pane (#markdown-side), NOT "the Assignment
+// section". Two rounds of evidence pushed it there: guided-project lessons put
+// identical checklists under their own headings with no Assignment section at
+// all, and challenges list their steps as a bare <ul>/<ol> with no <details>
+// wrapper. The pane is a plain id shared by both page types, so one rule
+// covers every layout, and only checkboxes inside a list item count. A
+// collapsed <details> needs no special case: its contents have a zero-size box,
+// which the visibility test already rejects.
 //
 // Capture phase, because bubble is too late: the Linux-course terminal writes
 // the digit from its own keydown handler, and preventDefault after the fact
@@ -45,9 +46,9 @@
 // v0.12.0_assignment_checkbox_shortcuts/implementation_plan.md
 
 const ASSIGNMENT_SHORTCUT_FEATURE = "assignmentShortcuts";
-const CHECKLIST_HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
-// The lesson-text pane — a plain id, not a hashed class. Everything the learner
-// answers with lives outside it; the Boots chat textarea lives inside it, which
+// The lesson-text pane — a plain id, not a hashed class, and present on both
+// lessons and challenges. It holds the checklist; everything the learner
+// answers with lives outside it. The Boots chat textarea lives inside it, which
 // is what keeps Alt+` from landing there.
 const LESSON_TEXT_PANE_ID = "markdown-side";
 // The common ancestor of both panes. <main> is not used here: it is confirmed
@@ -117,25 +118,18 @@ function selectNextUncheckedTarget(records) {
 // Page reading
 // ---------------------------------------------------------------------------
 
-// The lesson's content sections, in document order. Boot.dev gives them no id,
-// data-*, or aria-* hook, so the shape is the landmark: <details> + own
-// <summary> + a heading inside it. Collapsed sections are skipped rather than
-// opened — running a shortcut shouldn't change the page's layout — and nested
-// <details> are left to their outermost ancestor so nothing is counted twice.
-function findChecklistSections() {
-  const scope = document.querySelector("main") || document.body;
-  if (!scope) return [];
-
-  const sections = [];
-  for (const details of scope.querySelectorAll("details")) {
-    if (!details.open) continue;
-    if (details.parentElement?.closest("details")) continue;
-    const summary = details.querySelector(":scope > summary");
-    if (!summary?.querySelector(CHECKLIST_HEADING_SELECTOR)) continue;
-    if (!isVisible(details)) continue;
-    sections.push(details);
-  }
-  return sections;
+// Where the checklist lives. The text pane is the answer on both page types —
+// lessons wrap their steps in <details> sections inside it, challenges list
+// them directly — so scoping to the pane covers both without modelling either.
+//
+// The fallback is deliberate: checkbox placement inside the pane is confirmed
+// directly on challenges and inferred on lessons, so if the pane ever holds no
+// checkboxes the whole lesson container is searched rather than the feature
+// silently going quiet.
+function findChecklistRoot() {
+  const pane = document.getElementById(LESSON_TEXT_PANE_ID);
+  if (pane?.querySelector('input[type="checkbox"]')) return pane;
+  return document.getElementById(LESSON_CONTAINER_ID) || document.body || null;
 }
 
 // Displayed numbers for one ordered list's own items, honouring start= and
@@ -157,7 +151,7 @@ function collectListItemNumbers(list, numbers) {
   }
 }
 
-// Every checklist checkbox in the given sections, in document order (which is
+// Every checklist checkbox under the given root, in document order (which is
 // visual order — verified against the captures through six levels of nesting).
 //
 // `topLevel` is the whole hierarchy model: the checkbox's *nearest* <li> has no
@@ -167,39 +161,37 @@ function collectListItemNumbers(list, numbers) {
 // nesting depth, list style, or the labelled groups between lists.
 //
 // A checkbox outside any list item is not a checklist step and is ignored.
-function collectChecklistCheckboxes(sections) {
+function collectChecklistCheckboxes(root) {
   const records = [];
-  if (!Array.isArray(sections)) return records;
+  if (!root) return records;
 
   const numbers = new Map(); // top-level <li> -> displayed number
   const numberedLists = new Set();
 
-  for (const section of sections) {
-    for (const input of section.querySelectorAll('input[type="checkbox"]')) {
-      const item = input.closest("li");
-      if (!item || !section.contains(item)) continue;
+  for (const input of root.querySelectorAll('input[type="checkbox"]')) {
+    const item = input.closest("li");
+    if (!item || !root.contains(item)) continue;
 
-      const topLevel = !item.parentElement?.closest("li");
-      let number = null;
-      if (topLevel) {
-        const list = item.parentElement;
-        if (list && !numberedLists.has(list)) {
-          numberedLists.add(list);
-          collectListItemNumbers(list, numbers);
-        }
-        number = numbers.has(item) ? numbers.get(item) : null;
+    const topLevel = !item.parentElement?.closest("li");
+    let number = null;
+    if (topLevel) {
+      const list = item.parentElement;
+      if (list && !numberedLists.has(list)) {
+        numberedLists.add(list);
+        collectListItemNumbers(list, numbers);
       }
-
-      records.push({
-        input,
-        topLevel,
-        number,
-        checked: Boolean(input.checked),
-        // Hidden covers a collapsed nested <details>, display:none, and
-        // [hidden] in one cheap read; the worst observed lesson has 33 boxes.
-        usable: !input.disabled && isVisible(input),
-      });
+      number = numbers.has(item) ? numbers.get(item) : null;
     }
+
+    records.push({
+      input,
+      topLevel,
+      number,
+      checked: Boolean(input.checked),
+      // Hidden covers a collapsed <details>, display:none, and [hidden] in one
+      // cheap read; the worst observed lesson has 33 boxes.
+      usable: !input.disabled && isVisible(input),
+    });
   }
 
   return records;
@@ -248,7 +240,8 @@ function handleAssignmentShortcutKeydown(event) {
   if (!shortcut) return;
   // The confirmation dialog owns the keyboard while it is open.
   if (document.getElementById(SUBMIT_CONFIRM_DIALOG_ID)) return;
-  if (!lessonUuidFromPath()) return;
+  // Lessons and challenges both render a checklist and an answer side.
+  if (!lessonOrChallengeUuidFromPath()) return;
 
   if (shortcut.kind === "answer") {
     const answer = findAnswerTarget();
@@ -261,12 +254,10 @@ function handleAssignmentShortcutKeydown(event) {
     return;
   }
 
-  const sections = findChecklistSections();
-  // Nothing checklist-shaped on this lesson: the keypress was meant for
-  // something else. Never widen the search to the rest of the page.
-  if (!sections.length) return;
+  const root = findChecklistRoot();
+  if (!root) return;
 
-  const records = collectChecklistCheckboxes(sections);
+  const records = collectChecklistCheckboxes(root);
   const target = shortcut.kind === "next"
     ? selectNextUncheckedTarget(records)
     : selectNumberedTarget(records, shortcut.digit);
