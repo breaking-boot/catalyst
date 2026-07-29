@@ -4,16 +4,18 @@
 // defaults, feature labels, and per-board ordering live in exactly one place and
 // can never drift between the two contexts. No logic here — data only.
 
-// Every flag except versionCheck, bossTracker, and submitConfirm defaults to
-// true: a missing or corrupt value means "feature on" so the extension fails
-// open (full functionality) rather than silently dark. normalizeSettings seeds
-// every key from this map. The three default-OFF exceptions are deliberate:
-// versionCheck because it can reach off-device, bossTracker because the
-// floating panel should be quiet by default (users opt in via the popup or the
-// boss-event reminder toast, see boss.js), and submitConfirm because it puts a
-// step in front of a native Boot.dev action — nobody should meet a confirmation
-// dialog they didn't ask for. An explicit stored boolean always wins over these
-// defaults.
+// Every flag except versionCheck, bossTracker, submitConfirm, and
+// assignmentShortcuts defaults to true: a missing or corrupt value means
+// "feature on" so the extension fails open (full functionality) rather than
+// silently dark. normalizeSettings seeds every key from this map. The four
+// default-OFF exceptions are deliberate: versionCheck because it can reach
+// off-device, bossTracker because the floating panel should be quiet by default
+// (users opt in via the popup or the boss-event reminder toast, see boss.js),
+// submitConfirm because it puts a step in front of a native Boot.dev action —
+// nobody should meet a confirmation dialog they didn't ask for — and
+// assignmentShortcuts because it claims ten Alt+digit combinations inside the
+// code editor, which is character entry on some Mac layouts. An explicit stored
+// boolean always wins over these defaults.
 const SETTINGS_DEFAULTS = {
   // Top-level features (shown in the popup and options page).
   bossTracker: false, // default-OFF: panel must not auto-appear on install
@@ -24,6 +26,7 @@ const SETTINGS_DEFAULTS = {
   nextLesson: true,
   challengeDifficulty: true, // Training Grounds difficulty filter (inert until tiers are picked)
   cliShortcuts: true, // Alt+C / Alt+Shift+C copy the lesson's bootdev commands
+  assignmentShortcuts: false, // default-OFF: claims Alt+0-9 even while typing
   submitConfirm: false, // default-OFF: never interrupt a native action uninvited
   comparisons: true, // master gate for all XP/karma comparisons
 
@@ -50,6 +53,11 @@ const SETTINGS_DEFAULTS = {
 };
 
 // Top-level feature toggles, in display order, rendered on both pages.
+//
+// `desc` is the full explanation and is what the options page shows. The popup
+// is a glance-sized list, so it prefers `shortDesc` when a toggle has one —
+// add it only when the full text is too long to skim (one sentence, no
+// caveats, no "off by default"; the switch already says that).
 const FEATURE_TOGGLES = [
   { key: "bossTracker", label: "Boss event tracker", desc: "Floating panel: boss aura, damage, and chest progress." },
   { key: "bossReminders", label: "Boss event reminders", desc: "When the tracker is hidden and a boss event is live, show a small toast (at most once a day per event)." },
@@ -59,7 +67,8 @@ const FEATURE_TOGGLES = [
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
   { key: "challengeDifficulty", label: "Training Grounds difficulty filter", desc: "Easy/Medium/Hard pills in the Challenge Catalog's filter popover." },
   { key: "cliShortcuts", label: "CLI command shortcuts", desc: "On lessons that show bootdev commands, Alt+C copies the run command and Alt+Shift+C the submit command." },
-  { key: "submitConfirm", label: "Confirm code submissions", desc: "Ask before submitting when you click Submit on a code lesson, so a stray click can't cost your streak. Boot.dev's Ctrl+Shift+Enter still submits immediately." },
+  { key: "assignmentShortcuts", label: "Assignment step shortcuts", shortDesc: "Keyboard shortcuts to tick checklist steps and jump back to your code.", desc: "On lessons and challenges, Alt+1-Alt+9 tick the matching top-level checklist step, Alt+0 ticks the next unfinished box, and Alt+` (left of the 1 key) sends you back to the code editor or answer box — all of it while you're typing in the editor, a terminal, or an answer box. Off by default: on some Mac layouts Alt+digit types characters such as #." },
+  { key: "submitConfirm", label: "Confirm code submissions", shortDesc: "Ask before submitting when you click Submit on a code lesson.", desc: "Ask before submitting when you click Submit on a code lesson, so a stray click can't cost your streak. Boot.dev's Ctrl+Shift+Enter still submits immediately." },
   { key: "comparisons", label: "Leaderboard comparisons", desc: "Show how far ahead/behind you are on XP and karma." },
 ];
 

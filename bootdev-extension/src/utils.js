@@ -104,17 +104,24 @@ function localDateKey() {
   return new Date().toLocaleDateString("en-CA");
 }
 
-function isEditableTarget(target) {
-  if (!(target instanceof Element)) return false;
-  return Boolean(target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true']"));
-}
-
 // The lesson UUID from a /lessons/<uuid> route, lowercased — the argument the
 // bootdev CLI takes. Null on every other route.
 const LESSON_PATH_RE = /^\/lessons\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
 function lessonUuidFromPath(pathname) {
   const path = String(pathname == null ? location.pathname : pathname);
   const match = LESSON_PATH_RE.exec(path);
+  return match ? match[1].toLowerCase() : null;
+}
+
+// The UUID from a /lessons/<uuid> OR /challenges/<uuid> route. The two page
+// types share a layout (#lesson-container wrapping #markdown-side plus an
+// answer side), so features that work on the rendered page rather than the CLI
+// gate on this. Null on every other route.
+const LESSON_OR_CHALLENGE_PATH_RE =
+  /^\/(?:lessons|challenges)\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/?$/i;
+function lessonOrChallengeUuidFromPath(pathname) {
+  const path = String(pathname == null ? location.pathname : pathname);
+  const match = LESSON_OR_CHALLENGE_PATH_RE.exec(path);
   return match ? match[1].toLowerCase() : null;
 }
 

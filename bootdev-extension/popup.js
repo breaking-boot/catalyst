@@ -39,7 +39,15 @@ function persist() {
   chrome.storage.sync.set({ [SETTINGS_KEY]: settings });
 }
 
-function makeToggle({ key, label, desc }) {
+// The options page renders sections the popup doesn't, so the presence of one
+// tells the two surfaces apart. The popup is a glance-sized list and takes the
+// schema's shortDesc where there is one; the options page always shows the
+// full text.
+function isOptionsPage() {
+  return Boolean(document.getElementById("be-update-settings"));
+}
+
+function makeToggle({ key, label, desc, shortDesc }) {
   const row = document.createElement("label");
   row.className = "be-toggle";
 
@@ -50,6 +58,8 @@ function makeToggle({ key, label, desc }) {
   title.className = "be-toggle-title";
   title.textContent = label;
   text.appendChild(title);
+
+  if (!isOptionsPage() && shortDesc) desc = shortDesc;
 
   if (desc) {
     const sub = document.createElement("span");

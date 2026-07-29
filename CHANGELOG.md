@@ -1,5 +1,32 @@
 # Changelog
 
+## v0.12.0 - Checklist shortcuts and work-area focus
+
+### Lessons and challenges
+
+* **Added keyboard shortcuts for checklist steps** (off by default). Enable **Assignment step shortcuts** to use `Alt+1` through `Alt+9` to toggle the matching top-level numbered step.
+* **`Alt+0` checks the next unfinished box** in reading order. It recalculates after every press, includes nested checklist items, skips non-checkbox sub-steps, and does nothing once every box is checked.
+* **<code>Alt+`</code> returns focus to the work area**, including the code editor, Linux course terminal, interview answer box, or guided-project repo-URL field. The cursor remains where you left it.
+* The shortcuts work while you're typing, including in the editor and terminal, so checklist progress can be updated without reaching for the mouse.
+* Once a checkbox is focused, native `Space`, `Tab`, and `Shift+Tab` behavior remains available for toggling and moving through checklist items.
+* Catalyst activates Boot.dev's own checkbox, so progress is recorded exactly as it would be from a mouse click. When no matching checklist step exists, the keypress is left alone.
+* When numbering restarts beneath a later heading, numbered shortcuts target the first matching step on the page. Later groups remain reachable through `Alt+0` and normal keyboard navigation.
+* Numpad digits are not intercepted, preserving Windows `Alt`+numpad character entry. The feature defaults to off because some Mac keyboard layouts use `Alt`+digit combinations to type characters such as `#`.
+
+### Other shortcuts
+
+* **`Alt+N`, `Alt+C`, and `Alt+Shift+C` now work while you're typing.** Previously, they were disabled whenever focus was inside the editor, terminal, or another editable field. Ordinary `Ctrl+C` copying remains unaffected because Catalyst's shortcuts require `Alt`.
+
+### Settings
+
+* Shortened the popup descriptions for **Assignment step shortcuts** and **Confirm code submissions**. Their full explanations remain available on the options page.
+
+### Under the hood
+
+* No new permissions, API calls, storage keys, or dependencies.
+* Checklist state is read only when a shortcut is pressed and is not stored by Catalyst.
+
+
 ## v0.11.0 - Submit confirmation and CLI command shortcuts
 
 ### Code lessons

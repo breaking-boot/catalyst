@@ -88,9 +88,9 @@ function handleCliShortcutKeydown(event) {
 
   const kind = matchCliShortcut(event);
   if (!kind) return;
-  // Typing in the editor, the search box, or any field is never a shortcut —
-  // and this is what keeps Alt+C clear of ordinary copy expectations.
-  if (isEditableTarget(event.target)) return;
+  // Focus is deliberately not consulted: copying the lesson's command is just
+  // as useful mid-edit, and Boot.dev's own shortcuts work while typing too.
+  // Ordinary Ctrl+C is untouched either way — this needs Alt.
   // The confirmation dialog owns the keyboard while it is open.
   if (document.getElementById(SUBMIT_CONFIRM_DIALOG_ID)) return;
 

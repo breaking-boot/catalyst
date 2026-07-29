@@ -174,8 +174,9 @@ function bindNextLessonShortcut() {
     if (!isFeatureEnabled("nextLesson")) return;
     if (!nextLessonHref || !event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
     if (event.key.toLowerCase() !== "n") return;
-    if (isEditableTarget(event.target)) return;
-
+    // Focus is deliberately not consulted: Boot.dev's own next-lesson shortcut
+    // (ctrl+.) works while typing in the editor or an answer box, and Alt+N
+    // means the same thing wherever you are.
     event.preventDefault();
     location.href = nextLessonHref;
   };
