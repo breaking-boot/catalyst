@@ -3,6 +3,13 @@
 // `assignmentShortcuts`, default OFF):
 //   Alt+1 .. Alt+9  -> toggle the checkbox on the matching top-level step
 //   Alt+0           -> check the first unfinished box anywhere in the checklist
+//   Alt+`           -> focus back to the answer side (code editor / answer box)
+//
+// The keys form one contiguous row, and Alt+` is matched by position
+// (`Backquote` is the key left of 1 on every layout) rather than by the
+// character printed on it. Alt+0 out, Alt+` back: the round trip needs no
+// stored state, and CodeMirror restores its own caret position on refocus
+// (verified — see ui/dom/focus_target_probe.json).
 //
 // Nested steps are never interpreted. Once a shortcut focuses a checkbox the
 // learner continues with native Tab / Shift+Tab / Space, which is why nothing
@@ -39,6 +46,18 @@
 
 const ASSIGNMENT_SHORTCUT_FEATURE = "assignmentShortcuts";
 const CHECKLIST_HEADING_SELECTOR = "h1, h2, h3, h4, h5, h6";
+// The lesson-text pane — a plain id, not a hashed class. Everything the learner
+// answers with lives outside it; the Boots chat textarea lives inside it, which
+// is what keeps Alt+` from landing there.
+const LESSON_TEXT_PANE_ID = "markdown-side";
+// The common ancestor of both panes. <main> is not used here: it is confirmed
+// to contain the lesson-text side, but not that it wraps the editor side.
+const LESSON_CONTAINER_ID = "lesson-container";
+const ANSWER_EDITOR_SELECTOR =
+  '[role="textbox"][contenteditable=""], [role="textbox"][contenteditable="true"]';
+// Types a learner can actually answer in. Checkboxes and buttons are excluded,
+// so Alt+` can never land back on the checklist it just came from.
+const ANSWER_INPUT_TYPES = new Set(["", "text", "url", "email", "search", "tel", "number", "password"]);
 
 let assignmentShortcutKeydownHandler = null;
 
@@ -62,11 +81,13 @@ function matchAssignmentShortcut(event) {
   const code = typeof event.code === "string" ? event.code : "";
   let digit;
   if (code) {
+    if (code === "Backquote") return { kind: "answer" };
     const match = /^Digit([0-9])$/.exec(code);
     if (!match) return null;
     digit = Number(match[1]);
   } else {
     const key = typeof event.key === "string" ? event.key : "";
+    if (key === "`") return { kind: "answer" };
     if (!/^[0-9]$/.test(key)) return null;
     digit = Number(key);
   }
@@ -184,6 +205,38 @@ function collectChecklistCheckboxes(sections) {
   return records;
 }
 
+// Is this something the learner can be sent back to? Anything inside the
+// lesson-text pane is not: that side is where the checklist and the Boots chat
+// box live.
+function isAnswerSideTarget(el) {
+  if (!el || el.disabled || el.readOnly) return false;
+  if (el.closest(`#${LESSON_TEXT_PANE_ID}`)) return false;
+  return isVisible(el);
+}
+
+// Where Alt+` sends focus: the code editor on a code lesson, otherwise the
+// lesson's own answer field (the repo-URL box on later guided-project steps).
+// Null on lessons with no answer-side input at all, e.g. quizzes.
+//
+// The editor is looked for first rather than taking the first candidate in
+// document order, so a console or terminal field can't win on a code lesson.
+// A code lesson renders two role=textbox divs and only one has a box, so the
+// visibility test is what picks the real editor.
+function findAnswerTarget() {
+  const scope = document.getElementById(LESSON_CONTAINER_ID) || document.body;
+  if (!scope) return null;
+
+  for (const el of scope.querySelectorAll(ANSWER_EDITOR_SELECTOR)) {
+    if (isAnswerSideTarget(el)) return el;
+  }
+  for (const el of scope.querySelectorAll("textarea, input")) {
+    if (el.tagName === "INPUT" &&
+        !ANSWER_INPUT_TYPES.has(String(el.getAttribute("type") || "").toLowerCase())) continue;
+    if (isAnswerSideTarget(el)) return el;
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Shortcut handling
 // ---------------------------------------------------------------------------
@@ -196,6 +249,17 @@ function handleAssignmentShortcutKeydown(event) {
   // The confirmation dialog owns the keyboard while it is open.
   if (document.getElementById(SUBMIT_CONFIRM_DIALOG_ID)) return;
   if (!lessonUuidFromPath()) return;
+
+  if (shortcut.kind === "answer") {
+    const answer = findAnswerTarget();
+    if (!answer) return;
+    event.preventDefault();
+    event.stopPropagation();
+    // No click: focusing is the whole job, and CodeMirror restores its own
+    // caret position from where the learner left it.
+    answer.focus();
+    return;
+  }
 
   const sections = findChecklistSections();
   // Nothing checklist-shaped on this lesson: the keypress was meant for

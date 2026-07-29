@@ -178,6 +178,20 @@ check(
   { kind: "number", digit: 9 }
 );
 check("Alt+0 -> next unchecked", matchAssignmentShortcut(digitEvent({ code: "Digit0", key: "0" })), { kind: "next" });
+// Matched by position: Backquote is the key left of 1 whatever is printed on it.
+check("Alt+` -> answer side", matchAssignmentShortcut(digitEvent({ code: "Backquote", key: "`" })), { kind: "answer" });
+check(
+  "Alt+` on a layout where that key prints something else",
+  matchAssignmentShortcut(digitEvent({ code: "Backquote", key: "²" })),
+  { kind: "answer" }
+);
+check(
+  "` key fallback when code is absent",
+  matchAssignmentShortcut(digitEvent({ code: "", key: "`" })),
+  { kind: "answer" }
+);
+check("Alt+Shift+` (tilde) -> null", matchAssignmentShortcut(digitEvent({ code: "Backquote", key: "~", shiftKey: true })), null);
+check("held Alt+` (auto-repeat) -> null", matchAssignmentShortcut(digitEvent({ code: "Backquote", key: "`", repeat: true })), null);
 check(
   "macOS Alt+3 (key is £) still matches via event.code",
   matchAssignmentShortcut(digitEvent({ code: "Digit3", key: "£" })),
