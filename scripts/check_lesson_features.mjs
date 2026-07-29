@@ -1,17 +1,18 @@
 #!/usr/bin/env node
-// Unit checks for the v0.11.0 lesson features' pure helpers, exercised against
-// the REAL shipped code: bootdev-extension/src/cliShortcuts.js and
-// src/submitConfirm.js are evaluated in a vm sandbox with a stubbed window, and
-// the helpers are pulled off the __BOOTDEV_ENHANCER_TEST__ hook (which is inert
-// in production because that global never exists on the real page).
+// Unit checks for the lesson features' pure helpers (v0.11.0 submit
+// confirmation + CLI shortcuts, v0.12.0 assignment shortcuts), exercised
+// against the REAL shipped code: the feature files are evaluated in a vm
+// sandbox with a stubbed window, and the helpers are pulled off the
+// __BOOTDEV_ENHANCER_TEST__ hook (which is inert in production because that
+// global never exists on the real page).
 //
 // Run from anywhere:  node scripts/check_lesson_features.mjs
 // Exits non-zero on any failure (same spirit as the node --check gate).
 //
-// The command-classification checks run against the real DOM captures in
-// reference_data/catalyst_versions/v0.11.0_*/ui/html/, so the safe
-// submit-only guarantee (no run command to copy) is verified against evidence
-// rather than a hand-written string.
+// Both fixture blocks run against the real DOM captures in
+// reference_data/catalyst_versions/, so the safe submit-only guarantee (no run
+// command to copy) and the checklist targeting rules are verified against
+// evidence rather than hand-written strings.
 
 import { readFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -20,6 +21,10 @@ import vm from "node:vm";
 const SRC = new URL("../bootdev-extension/src/", import.meta.url);
 const CAPTURES = new URL(
   "../reference_data/catalyst_versions/v0.11.0_submit_confirmation_and_cli_shortcuts/ui/html/",
+  import.meta.url
+);
+const CAPTURES_V12 = new URL(
+  "../reference_data/catalyst_versions/v0.12.0_assignment_checkbox_shortcuts/ui/html/",
   import.meta.url
 );
 
@@ -41,19 +46,21 @@ vm.runInContext(
   sandbox
 );
 
-for (const file of ["submitConfirm.js", "cliShortcuts.js"]) {
+for (const file of ["submitConfirm.js", "cliShortcuts.js", "assignmentShortcuts.js"]) {
   const url = new URL(file, SRC);
   vm.runInContext(readFileSync(url, "utf8"), sandbox, { filename: fileURLToPath(url) });
 }
 
 const cli = testHook.cliShortcuts;
 const confirmHooks = testHook.submitConfirm;
-if (!cli || !confirmHooks) {
+const assignment = testHook.assignmentShortcuts;
+if (!cli || !confirmHooks || !assignment) {
   console.error("FAIL: feature files did not expose test hooks");
   process.exit(1);
 }
 const { matchCliShortcut, classifyBootdevCommand } = cli;
 const { isPointerActivation, isSubmitButtonLabel } = confirmHooks;
+const { matchAssignmentShortcut, selectNumberedTarget, selectNextUncheckedTarget } = assignment;
 
 // --- tiny assert ------------------------------------------------------------
 
@@ -152,6 +159,96 @@ check('"Submit Code" (the tooltip text) -> false', isSubmitButtonLabel("Submit C
 check('"Resubmit" -> false', isSubmitButtonLabel("Resubmit"), false);
 check("empty -> false", isSubmitButtonLabel(""), false);
 
+// --- matchAssignmentShortcut: Alt+digit, and everything it must not claim ----
+
+const digitEvent = (over = {}) => ({
+  altKey: true,
+  ctrlKey: false,
+  metaKey: false,
+  shiftKey: false,
+  code: "Digit1",
+  key: "1",
+  ...over,
+});
+
+check("Alt+1 -> step 1", matchAssignmentShortcut(digitEvent()), { kind: "number", digit: 1 });
+check(
+  "Alt+9 -> step 9",
+  matchAssignmentShortcut(digitEvent({ code: "Digit9", key: "9" })),
+  { kind: "number", digit: 9 }
+);
+check("Alt+0 -> next unchecked", matchAssignmentShortcut(digitEvent({ code: "Digit0", key: "0" })), { kind: "next" });
+check(
+  "macOS Alt+3 (key is £) still matches via event.code",
+  matchAssignmentShortcut(digitEvent({ code: "Digit3", key: "£" })),
+  { kind: "number", digit: 3 }
+);
+check(
+  "event.key fallback when code is absent",
+  matchAssignmentShortcut(digitEvent({ code: "", key: "4" })),
+  { kind: "number", digit: 4 }
+);
+// Windows Alt+numpad is the OS character-code input method (Alt+0233 -> é).
+// Numpad presses always carry a Numpad* code, so the key fallback can't let
+// them through either.
+check("Alt+Numpad1 -> null", matchAssignmentShortcut(digitEvent({ code: "Numpad1" })), null);
+check("held Alt+1 (auto-repeat) -> null", matchAssignmentShortcut(digitEvent({ repeat: true })), null);
+// AltGr reports ctrl+alt, so international character entry is never a shortcut.
+check("AltGr+1 (ctrl+alt) -> null", matchAssignmentShortcut(digitEvent({ ctrlKey: true })), null);
+check("Alt+Shift+1 -> null", matchAssignmentShortcut(digitEvent({ shiftKey: true, key: "!" })), null);
+check("Cmd+Alt+1 -> null", matchAssignmentShortcut(digitEvent({ metaKey: true })), null);
+check("plain 1 -> null", matchAssignmentShortcut(digitEvent({ altKey: false })), null);
+check("Alt+C is never swallowed", matchAssignmentShortcut(digitEvent({ code: "KeyC", key: "c" })), null);
+check("Alt+N is never swallowed", matchAssignmentShortcut(digitEvent({ code: "KeyN", key: "n" })), null);
+check("missing event -> null", matchAssignmentShortcut(null), null);
+
+// --- target selection over hand-built records -------------------------------
+
+const rec = (over = {}) => ({ input: "x", topLevel: true, number: null, checked: false, usable: true, ...over });
+
+check(
+  "duplicate top-level numbers -> the first in document order",
+  selectNumberedTarget(
+    [rec({ input: "first", number: 1 }), rec({ input: "second", number: 1 })],
+    1
+  )?.input,
+  "first"
+);
+check(
+  "a nested item is never selected by number",
+  selectNumberedTarget([rec({ input: "nested", number: 1, topLevel: false })], 1),
+  null
+);
+check(
+  "an unusable top-level checkbox yields nothing (never a nested fallback)",
+  selectNumberedTarget(
+    [rec({ input: "hidden", number: 1, usable: false }), rec({ input: "child", number: 1, topLevel: false })],
+    1
+  ),
+  null
+);
+check("no step with that number -> null", selectNumberedTarget([rec({ number: 1 })], 7), null);
+check("empty records -> null", selectNumberedTarget([], 1), null);
+check("non-array -> null", selectNumberedTarget(null, 1), null);
+
+check(
+  "Alt+0 skips checked boxes",
+  selectNextUncheckedTarget([rec({ input: "done", checked: true }), rec({ input: "todo" })])?.input,
+  "todo"
+);
+check(
+  "Alt+0 skips unusable boxes",
+  selectNextUncheckedTarget([rec({ input: "hidden", usable: false }), rec({ input: "todo" })])?.input,
+  "todo"
+);
+check(
+  "Alt+0 reaches nested boxes too",
+  selectNextUncheckedTarget([rec({ input: "nested", topLevel: false })])?.input,
+  "nested"
+);
+check("Alt+0 with everything checked -> null", selectNextUncheckedTarget([rec({ checked: true })]), null);
+check("Alt+0 on an empty checklist -> null", selectNextUncheckedTarget([]), null);
+
 // --- real capture fixtures --------------------------------------------------
 // Pull the displayed <p> text out of the captured containers and classify it,
 // so the run/submit/neither distinction is proven against real markup.
@@ -192,6 +289,163 @@ for (const [name, uuid, expected] of FIXTURES) {
 if (!fixturesRun) {
   console.log("note: v0.11.0 UI captures not present; skipped fixture checks");
 }
+
+// --- v0.12.0 checklist fixtures ---------------------------------------------
+// Rebuild the checklist records from a capture: one entry per checkbox in
+// document order, applying the same rules as the DOM adapter — a checkbox
+// counts only inside an <li>, it is top-level when its nearest <li> has no <li>
+// ancestor, and its displayed number comes from that item's own <ol>.
+//
+// This re-derives structure from HTML instead of exercising
+// collectChecklistCheckboxes directly (the repo has no DOM implementation and
+// no dependencies), so what it proves is that the selection rules land on the
+// right controls in real markup. The ids are exact oracles: in every capture
+// they run checkbox-0..N in document order.
+function checklistRecordsFromCapture(name) {
+  const html = readFileSync(new URL(name, CAPTURES_V12), "utf8");
+  const records = [];
+  const lists = []; // open <ol>/<ul>, innermost last
+  const items = []; // open <li>, innermost last
+
+  for (const [, closing, rawTag, attrs] of html.matchAll(/<(\/?)(ol|ul|li|input)\b([^>]*)>/gi)) {
+    const tag = rawTag.toLowerCase();
+
+    if (tag === "input") {
+      if (!/type\s*=\s*"checkbox"/i.test(attrs)) continue;
+      // A checkbox outside any list item is not a checklist step.
+      if (!items.length) continue;
+      const topLevel = items.length === 1;
+      records.push({
+        input: /id\s*=\s*"([^"]+)"/i.exec(attrs)?.[1] ?? null,
+        topLevel,
+        number: topLevel ? items[0].number : null,
+        checked: false,
+        usable: true,
+      });
+      continue;
+    }
+
+    if (tag === "li") {
+      if (closing) items.pop();
+      else {
+        const list = lists[lists.length - 1];
+        items.push({ number: list?.ordered ? ++list.n : null });
+      }
+      continue;
+    }
+
+    if (closing) lists.pop();
+    else lists.push({ ordered: tag === "ol", n: 0 });
+  }
+  return records;
+}
+
+// Repeated Alt+0 from an all-unchecked start, in visit order.
+function altZeroWalk(records) {
+  const state = records.map((r) => ({ ...r }));
+  const visited = [];
+  for (let target; (target = selectNextUncheckedTarget(state)); ) {
+    target.checked = true;
+    visited.push(target.input);
+  }
+  return visited;
+}
+
+const N = null;
+const CHECKLIST_FIXTURES = [
+  // Two labelled groups, the second restarting at 1: Alt+1 must stay on the
+  // first group's step 1 (checkbox-0), never the second's (checkbox-5).
+  {
+    file: "assignment_multiple_numbered_sections.html",
+    total: 7,
+    topLevel: 6,
+    digits: ["checkbox-0", "checkbox-1", "checkbox-2", "checkbox-4", N, N, N, N, N],
+  },
+  // Nested bullets, two of which carry no checkbox at all.
+  {
+    file: "assignment_mixed_nested_section.html",
+    total: 10,
+    topLevel: 5,
+    digits: ["checkbox-0", "checkbox-1", "checkbox-4", "checkbox-8", "checkbox-9", N, N, N, N],
+  },
+  // Six list items, three checkboxes: the plain <li> entries contribute none.
+  {
+    file: "assignment_non_checkbox_nested_section.html",
+    total: 3,
+    topLevel: 3,
+    digits: ["checkbox-0", "checkbox-1", "checkbox-2", N, N, N, N, N, N],
+  },
+  // Six nesting levels but only two top-level steps, so Alt+3..Alt+9 have no
+  // target even though the lesson shows plenty of numbered sub-steps.
+  {
+    file: "assignment_deep_nested_section.html",
+    total: 33,
+    topLevel: 2,
+    digits: ["checkbox-0", "checkbox-1", N, N, N, N, N, N, N],
+  },
+  // The same Assignment surrounded by its sibling sections: the other three
+  // sections hold no checkboxes, so the records must match the standalone
+  // capture exactly.
+  {
+    file: "assignment_surrounding_details_context.html",
+    total: 7,
+    topLevel: 6,
+    digits: ["checkbox-0", "checkbox-1", "checkbox-2", "checkbox-4", N, N, N, N, N],
+  },
+  // Guided project with no Assignment section — the checklist lives under
+  // "_solve_r Method". Targeting must not depend on the heading text.
+  {
+    file: "project_non_assignment_section.html",
+    total: 9,
+    topLevel: 5,
+    digits: ["checkbox-0", "checkbox-1", "checkbox-2", "checkbox-3", "checkbox-8", N, N, N, N],
+  },
+  // Every top-level <li> wraps its content in <p>, so each checkbox is a
+  // grandchild of its item: the regression guard for the "nearest <li>" rule.
+  {
+    file: "project_non_assignment_paragraph_items.html",
+    total: 9,
+    topLevel: 9,
+    digits: [
+      "checkbox-0", "checkbox-1", "checkbox-2", "checkbox-3", "checkbox-4",
+      "checkbox-5", "checkbox-6", "checkbox-7", "checkbox-8",
+    ],
+  },
+  // Bulleted top level: clickable steps with no displayed number, so Alt+0 is
+  // the only way to reach them.
+  {
+    file: "assignment_unordered_top_level_section.html",
+    total: 3,
+    topLevel: 3,
+    digits: [N, N, N, N, N, N, N, N, N],
+  },
+];
+
+let checklistFixturesRun = 0;
+for (const { file, total, topLevel, digits } of CHECKLIST_FIXTURES) {
+  if (!existsSync(new URL(file, CAPTURES_V12))) continue;
+  checklistFixturesRun += 1;
+  const records = checklistRecordsFromCapture(file);
+
+  check(`${file}: checkbox count`, records.length, total);
+  check(`${file}: top-level count`, records.filter((r) => r.topLevel).length, topLevel);
+  check(
+    `${file}: Alt+1..Alt+9 targets`,
+    digits.map((_, i) => selectNumberedTarget(records, i + 1)?.input ?? null),
+    digits
+  );
+  // Every checkbox is reachable by repeated Alt+0, in document order, and the
+  // walk stops instead of wrapping.
+  check(
+    `${file}: Alt+0 walks every box in order`,
+    altZeroWalk(records),
+    records.map((r) => r.input)
+  );
+}
+if (!checklistFixturesRun) {
+  console.log("note: v0.12.0 UI captures not present; skipped checklist fixture checks");
+}
+fixturesRun += checklistFixturesRun;
 
 // -----------------------------------------------------------------------------
 
