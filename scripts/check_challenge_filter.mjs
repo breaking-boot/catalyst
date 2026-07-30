@@ -22,6 +22,12 @@ const FIXTURE_DIR = new URL(
   "../reference_data/catalyst_versions/v0.10.0_challenge_difficulty_filter/",
   import.meta.url
 );
+// Boot.dev flipped the response to camelCase on 2026-07-30; this capture is the
+// post-flip ground truth (see the v0.12.1 bundle's README).
+const FIXTURE_DIR_CAMEL = new URL(
+  "../reference_data/catalyst_versions/v0.12.1_training_grounds_filter_repair/api/responses/",
+  import.meta.url
+);
 
 // --- evaluate injected.js in a sandbox -------------------------------------
 
@@ -56,7 +62,8 @@ if (!hooks) {
   console.error("FAIL: injected.js did not expose test hooks");
   process.exit(1);
 }
-const { tierOfDifficulty, filterChallengeSearchArray, parseTierList, isChallengeSearchUrl } = hooks;
+const { tierOfDifficulty, challengeDifficulty, filterChallengeSearchArray, parseTierList, isChallengeSearchUrl } =
+  hooks;
 
 // --- tiny assert ------------------------------------------------------------
 
@@ -87,6 +94,47 @@ check("tier 7.5 -> null (non-integer)", tierOfDifficulty(7.5), null);
 check("tier null -> null", tierOfDifficulty(null), null);
 check("tier undefined -> null", tierOfDifficulty(undefined), null);
 check('tier "x" -> null', tierOfDifficulty("x"), null);
+
+// --- challengeDifficulty: response casing ------------------------------------
+// Boot.dev served PascalCase (Topics.Difficulty) through 2026-07-14 and
+// camelCase (topics.difficulty) by 2026-07-30. Both must resolve, or the
+// "keep records with no resolvable tier" rule silently disables the filter.
+
+check("PascalCase Topics.Difficulty", challengeDifficulty({ Topics: { Difficulty: 6 } }), 6);
+check("camelCase topics.difficulty", challengeDifficulty({ topics: { difficulty: 6 } }), 6);
+check("difficulty 0 is read, not skipped", challengeDifficulty({ topics: { difficulty: 0 } }), 0);
+check("PascalCase wins when a record carries both", challengeDifficulty({ Topics: { Difficulty: 3 }, topics: { difficulty: 9 } }), 3);
+check("no topics container -> undefined", challengeDifficulty({ UUID: "x" }), undefined);
+check("null topics -> undefined", challengeDifficulty({ topics: null }), undefined);
+check("non-object topics -> undefined", challengeDifficulty({ topics: "nope" }), undefined);
+check("topics without a difficulty key -> undefined", challengeDifficulty({ topics: { mainTopic: "Loops" } }), undefined);
+check("null record -> undefined", challengeDifficulty(null), undefined);
+
+// The regression itself: a camelCase-only record must be TIERED, not waved
+// through by the keep-on-unknown rule. Before v0.12.1 this returned both
+// records, so every selection rendered the full unfiltered result set.
+const camelRecs = [
+  { uuid: "a", topics: { difficulty: 2 } },
+  { uuid: "b", topics: { difficulty: 9 } },
+];
+check(
+  "camelCase records filter by tier (v0.12.1 regression)",
+  filterChallengeSearchArray(camelRecs, new Set(["easy"])).map((r) => r.uuid),
+  ["a"]
+);
+check(
+  "camelCase records are not all kept when no tier matches",
+  filterChallengeSearchArray(camelRecs, new Set(["medium"])).map((r) => r.uuid),
+  []
+);
+check(
+  "mixed-casing result set filters correctly",
+  filterChallengeSearchArray(
+    [{ uuid: "camel", topics: { difficulty: 10 } }, { UUID: "pascal", Topics: { Difficulty: 10 } }],
+    new Set(["hard"])
+  ).length,
+  2
+);
 
 // --- filterChallengeSearchArray: keep-on-unknown, order, non-mutation -------
 
@@ -155,14 +203,16 @@ check("rejects garbage", isChallengeSearchUrl("::not a url::"), false);
 // --- real capture fixtures (skipped when reference_data is absent) ----------
 
 const FIXTURES = [
-  ["challenges_search_response_code_python.json", { easy: 22, medium: 13, hard: 15 }],
-  ["challenges_search_response_interview_nolang.json", { easy: 8, medium: 11, hard: 31 }],
-  ["challenges_search_response_quiz_go.json", { easy: 11, medium: 4, hard: 0 }],
+  [FIXTURE_DIR, "challenges_search_response_code_python.json", { easy: 22, medium: 13, hard: 15 }],
+  [FIXTURE_DIR, "challenges_search_response_interview_nolang.json", { easy: 8, medium: 11, hard: 31 }],
+  [FIXTURE_DIR, "challenges_search_response_quiz_go.json", { easy: 11, medium: 4, hard: 0 }],
+  // Post-camelCase-flip capture (q=loops, 2026-07-30).
+  [FIXTURE_DIR_CAMEL, "challenges_search_response_raw_2026-07-30.json", { easy: 7, medium: 15, hard: 6 }],
 ];
 
 let fixturesRun = 0;
-for (const [name, expected] of FIXTURES) {
-  const url = new URL(name, FIXTURE_DIR);
+for (const [dir, name, expected] of FIXTURES) {
+  const url = new URL(name, dir);
   if (!existsSync(url)) continue;
   fixturesRun += 1;
   const records = JSON.parse(readFileSync(url, "utf8"));
