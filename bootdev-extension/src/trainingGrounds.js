@@ -181,6 +181,20 @@ function resultsMatchCommitted() {
   return challengeTiersEqual(effective, applied);
 }
 
+// Is this the challenge-catalog search form? The /training-grounds/search page
+// labels its box `aria-label="Search Challenges"`, but the search field
+// Boot.dev added to the landing page (2026-07-30) words it differently
+// ("Search existing challenges"), so a single exact string missed it and
+// difficulty picks made on the landing page were dropped. Match the
+// search+challenge word pair in the label or placeholder instead.
+function isChallengeSearchForm(form) {
+  for (const input of form.querySelectorAll("input")) {
+    const text = `${input.getAttribute("aria-label") || ""} ${input.placeholder || ""}`;
+    if (/search/i.test(text) && /challenge/i.test(text)) return true;
+  }
+  return false;
+}
+
 // Capture-phase form-submit listener: fires for the Search button and for
 // Enter in the search box, before Boot.dev's own handler runs — so the
 // attribute write below is visible to the fetch that handler may start.
@@ -189,7 +203,7 @@ function handleTrainingGroundsSubmit(event) {
   if (!isFeatureEnabled(CHALLENGE_FILTER_FEATURE)) return;
   const form = event.target;
   if (!(form instanceof Element)) return;
-  if (!form.querySelector('input[aria-label="Search Challenges"]')) return;
+  if (!isChallengeSearchForm(form)) return;
   commitChallengeSelection();
 }
 
