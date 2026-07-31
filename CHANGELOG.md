@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.12.1 - Training Grounds difficulty filter repair
+
+### Fixed
+
+* **Restored the Training Grounds difficulty filter.** Boot.dev changed its challenge-search response fields from PascalCase to camelCase, so Catalyst could no longer determine each challenge's difficulty. Because Catalyst deliberately keeps challenges it cannot classify, the filter appeared active but quietly retained every result. Catalyst now supports both response formats to prevent either casing from breaking the filter.
+* **Preserved difficulty selections made on the Training Grounds landing page.** Boot.dev's new landing-page search field uses different wording from the search field on the results page. Catalyst did not recognize that form, so a difficulty selected before searching was dropped during navigation. Both search forms are now recognized.
+
+### Notes
+
+* No new permissions, API calls, storage keys, or dependencies.
+* Filtering still occurs before Boot.dev paginates the results, so its native result counts and Prev/Next controls remain accurate.
+
 ## v0.12.0 - Checklist shortcuts and work-area focus
 
 ### Lessons and challenges
@@ -25,7 +37,6 @@
 
 * No new permissions, API calls, storage keys, or dependencies.
 * Checklist state is read only when a shortcut is pressed and is not stored by Catalyst.
-
 
 ## v0.11.0 - Submit confirmation and CLI command shortcuts
 

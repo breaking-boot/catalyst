@@ -66,11 +66,24 @@
     return null;
   }
 
+  // Boot.dev reshaped this response from PascalCase to camelCase between
+  // 2026-07-14 and 2026-07-30 (Topics.Difficulty -> topics.difficulty). Because
+  // an unreadable difficulty is deliberately treated as "keep" below, that
+  // flip disabled the filter silently: every record survived and the catalog
+  // just looked unfiltered. Read both casings so either shape works and a flip
+  // back cannot break it again — same hazard normalizeBossProgressJson (boss.js)
+  // handles for boss_events_progress.
+  function challengeDifficulty(record) {
+    const topics = record?.Topics ?? record?.topics;
+    if (!topics || typeof topics !== "object") return undefined;
+    return topics.Difficulty ?? topics.difficulty;
+  }
+
   // Records with no resolvable tier are always kept: hiding a challenge on
   // bad data is worse than showing an occasional mis-tiered one.
   function filterChallengeSearchArray(records, tierSet) {
     return records.filter((record) => {
-      const tier = tierOfDifficulty(record?.Topics?.Difficulty);
+      const tier = tierOfDifficulty(challengeDifficulty(record));
       return tier === null || tierSet.has(tier);
     });
   }
@@ -360,6 +373,7 @@
   if (window.__BOOTDEV_ENHANCER_TEST__) {
     window.__BOOTDEV_ENHANCER_TEST__.hooks = {
       tierOfDifficulty,
+      challengeDifficulty,
       filterChallengeSearchArray,
       parseTierList,
       isChallengeSearchUrl,
