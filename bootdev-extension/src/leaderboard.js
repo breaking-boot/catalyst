@@ -322,7 +322,9 @@ function getCurrentUserHandle(navLink = findCurrentUserProfileLink()) {
   if (currentUserHandle) return currentUserHandle;
   const nativeHandle = isLeaderboardPage() ? findNativeCurrentUserHandle() : "";
   const navHandle = getProfileHandleFromHref(navLink?.getAttribute("href"));
-  return normalizeHandle(nativeHandle || navHandle);
+  // The Nuxt payload is the only source left off the leaderboard page now that
+  // the nav profile link is gone (see findNuxtCurrentUserHandle).
+  return normalizeHandle(nativeHandle || navHandle || findNuxtCurrentUserHandle());
 }
 
 function getCurrentUserDisplayName(navLink) {
@@ -365,6 +367,46 @@ function getProfileHandleFromHref(href) {
     const match = /^\/u\/([^/]+)\/?$/.exec(String(href));
     return normalizeHandle(match?.[1] ? decodeURIComponent(match[1]) : "");
   }
+}
+
+// Boot.dev's top nav no longer renders an <a href="/u/..."> for the signed-in
+// user — the avatar is a <button> that opens a menu. Confirmed 2026-07-31: on
+// /leaderboard all 195 "/u/" links are leaderboard cards, none in the nav band,
+// so findCurrentUserProfileLink now returns null on every route. That left a
+// fresh install with no way to learn its own handle unless it happened to open
+// /leaderboard (where the gold-glow card still works), and with no handle there
+// is no karma baseline, so every Daily Karma comparison read "unavailable".
+//
+// The signed-in user is in the server-rendered Nuxt payload. Reading it there
+// is the documented last resort for a value with no API source — Catalyst has
+// no "who am I" endpoint, and /v1/users/public/{handle} needs the handle
+// already. Same class of read as findTotalStudents.
+//
+// Parsed at most once per page load: the payload runs to a few hundred KB and
+// the DOM scan ticks every 2 seconds.
+let nuxtHandleChecked = false;
+function findNuxtCurrentUserHandle() {
+  if (nuxtHandleChecked) return "";
+  try {
+    const raw = document.getElementById("__NUXT_DATA__")?.textContent;
+    if (!raw) return ""; // not marked checked: the payload may not be parsed yet
+    nuxtHandleChecked = true;
+    const parsed = JSON.parse(raw);
+    // devalue serializes to a flat array; every field value is an INDEX into it.
+    const flat = Array.isArray(parsed) ? parsed : parsed?.data;
+    if (!Array.isArray(flat)) return "";
+    for (const node of flat) {
+      if (!isPlainObject(node) || !("Handle" in node)) continue;
+      // Require a field only the signed-in user's own object carries, so a
+      // public profile embedded in the same payload can never match.
+      if (!("Email" in node) && !("IsAdmin" in node)) continue;
+      const handle = normalizeHandle(flat[node.Handle]);
+      if (isValidHandle(handle)) return handle;
+    }
+  } catch (_) {
+    nuxtHandleChecked = true;
+  }
+  return "";
 }
 
 function findNativeCurrentUserHandle() {
@@ -426,7 +468,14 @@ function learnCurrentUserHandleFromDom() {
   // since that heuristic can transiently match a scrolled-past profile card.
   if (currentUserHandle) return;
   const navHandle = getProfileHandleFromHref(findCurrentUserProfileLink()?.getAttribute("href"));
-  if (navHandle) void rememberCurrentUserHandle(navHandle);
+  if (navHandle) {
+    void rememberCurrentUserHandle(navHandle);
+    return;
+  }
+  // Last resort, and since 2026-07-31 the only one that works off the
+  // leaderboard page: the signed-in user in the server-rendered Nuxt payload.
+  const nuxtHandle = findNuxtCurrentUserHandle();
+  if (nuxtHandle) void rememberCurrentUserHandle(nuxtHandle);
 }
 
 // ---------------------------------------------------------------------------
