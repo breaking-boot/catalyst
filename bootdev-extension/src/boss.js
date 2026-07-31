@@ -112,40 +112,63 @@ async function restoreBossPanel() {
 // ===========================================================================
 // FEATURE 5: Boss-event tracker
 // ===========================================================================
-// 2026-07-16: a between-events capture came back entirely camelCase
-// (event.uuid, xpBonus, …) while every live-event capture is PascalCase
-// (Event.UUID, XPBonus, …) — see boss_events_progress_between_events.json in
-// reference_data. Whether boot.dev changed the serializer for good is
-// unknowable until the next event, so accept both shapes: map camelCase onto
-// the PascalCase names the rest of this file reads. PascalCase wins if both
-// somehow exist.
+// This endpoint is mid-migration and the normalizer is load-bearing TODAY:
+// the live-event capture (2026-06-26) is PascalCase, and between-events
+// captures on 2026-07-16 AND 2026-07-31 are entirely camelCase (event.uuid,
+// xpBonus, …). See boss_events_progress_between_events.json in reference_data
+// and the v0.12.2 audit bundle.
+//
+// Reads are per-FIELD, not gated on the shape of the whole response. The
+// earlier version bailed out whenever `Event` was present, which meant a mixed
+// response — a live event restoring `Event` while leaving `xpBonus` camel —
+// slipped past untouched. That failure is silent in the worst way: `XPBonus`
+// reads undefined, the `cur.bonusPct != null` guard skips the write, and the
+// panel keeps rendering its previous aura % under a freshly-updated
+// "Last updated" time. PascalCase wins when both spellings are present.
+function pickField(obj, pascal, camel) {
+  if (!isPlainObject(obj)) return undefined;
+  return obj[pascal] !== undefined ? obj[pascal] : obj[camel];
+}
+
 function normalizeBossProgressJson(json) {
-  if (!isPlainObject(json) || json.Event || !isPlainObject(json.event)) return json;
-  const e = json.event;
+  if (!isPlainObject(json)) return json;
+  const event = pickField(json, "Event", "event");
+  const rewards = pickField(json, "Rewards", "rewards");
+  // Nothing boss-shaped to normalize (an error body, or an empty response):
+  // hand it back untouched so hasBossEventIdentity can rule it inactive.
+  if (!isPlainObject(event) && !Array.isArray(rewards)) return json;
+
+  const boss = pickField(event, "Boss", "boss");
   return {
     ...json,
-    Event: {
-      UUID: e.uuid,
-      StartsAt: e.startsAt,
-      ExpiresAt: e.expiresAt,
-      DefeatedAt: e.defeatedAt,
-      HealthPoints: e.healthPoints,
-      Boss: isPlainObject(e.boss) ? { UUID: e.boss.uuid, Name: e.boss.name } : undefined,
-    },
-    XPBonus: json.xpBonus,
-    XPTotal: json.xpTotal,
-    XPUser: json.xpUser,
-    NumLessonsCompletedHourly: json.numLessonsCompletedHourly,
-    Rewards: Array.isArray(json.rewards)
-      ? json.rewards.map((r) => ({
-          UUID: r?.uuid,
-          ChestUUID: r?.chestUUID,
-          XPThreshold: r?.xpThreshold,
-          UserXPThreshold: r?.userXPThreshold,
-          IsUnlocked: r?.isUnlocked,
-          IsUnlockedByUser: r?.isUnlockedByUser,
+    Event: isPlainObject(event)
+      ? {
+          ...event,
+          UUID: pickField(event, "UUID", "uuid"),
+          StartsAt: pickField(event, "StartsAt", "startsAt"),
+          ExpiresAt: pickField(event, "ExpiresAt", "expiresAt"),
+          DefeatedAt: pickField(event, "DefeatedAt", "defeatedAt"),
+          HealthPoints: pickField(event, "HealthPoints", "healthPoints"),
+          Boss: isPlainObject(boss)
+            ? { ...boss, UUID: pickField(boss, "UUID", "uuid"), Name: pickField(boss, "Name", "name") }
+            : boss,
+        }
+      : event,
+    XPBonus: pickField(json, "XPBonus", "xpBonus"),
+    XPTotal: pickField(json, "XPTotal", "xpTotal"),
+    XPUser: pickField(json, "XPUser", "xpUser"),
+    NumLessonsCompletedHourly: pickField(json, "NumLessonsCompletedHourly", "numLessonsCompletedHourly"),
+    Rewards: Array.isArray(rewards)
+      ? rewards.map((r) => ({
+          ...(isPlainObject(r) ? r : {}),
+          UUID: pickField(r, "UUID", "uuid"),
+          ChestUUID: pickField(r, "ChestUUID", "chestUUID"),
+          XPThreshold: pickField(r, "XPThreshold", "xpThreshold"),
+          UserXPThreshold: pickField(r, "UserXPThreshold", "userXPThreshold"),
+          IsUnlocked: pickField(r, "IsUnlocked", "isUnlocked"),
+          IsUnlockedByUser: pickField(r, "IsUnlockedByUser", "isUnlockedByUser"),
         }))
-      : json.Rewards,
+      : rewards,
   };
 }
 
@@ -717,4 +740,19 @@ function chestTier(index) {
   // The reward payload has ChestUUIDs but no tier names; the modal renders
   // these thresholds in this order in the captured boss page.
   return ["Common", "Uncommon", "Rare", "Mythic"][index] ?? `Tier ${index + 1}`;
+}
+
+// Test hook: scripts/check_boss_normalizer.mjs predefines this global before
+// evaluating the file. Never defined on the real page.
+if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
+  window.__BOOTDEV_ENHANCER_TEST__.boss = {
+    pickField,
+    normalizeBossProgressJson,
+    hasBossEventIdentity,
+    isBossEventActive,
+    getBossRewards,
+    getNextChestAt,
+    getLastChestTier,
+    getNextChestTier,
+  };
 }

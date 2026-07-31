@@ -254,6 +254,7 @@ node --check src/content.js
 node -e "JSON.parse(require('fs').readFileSync('manifest.json', 'utf8')); console.log('manifest.json ok')"
 node ../scripts/check_challenge_filter.mjs
 node ../scripts/check_lesson_features.mjs
+node ../scripts/check_boss_normalizer.mjs
 ```
 
 To build a release zip, run `bash scripts/package-extension.sh` from the repo root. See [CLAUDE.md](CLAUDE.md) for architecture details and agent guidance.

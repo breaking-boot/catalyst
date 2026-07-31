@@ -1,4 +1,31 @@
 # Changelog
+## v0.12.2 - League comparisons, boss tracker resilience, and rename detection
+
+A follow-up to v0.12.1. That release fixed one silently broken feature; this one
+is the result of auditing every Boot.dev field Catalyst reads to determine
+whether anything else had been affected. No additional active casing regression
+was found, but the audit exposed two unrelated silent failures, a weakness in
+the boss-response normalizer, and several fallbacks that could produce incorrect
+information. All 11 endpoints Catalyst reads were checked against the live API.
+
+### Fixed
+
+* **Restored the League leaderboard comparisons.** Boot.dev's two League boards require a signed-in credential that Catalyst only picks up by watching the site's own requests. Catalyst did not know those boards needed it, so it asked for them too early, was refused, and gave up without retrying. The comparisons then simply never appeared — most often after a page refresh, where the site did not make a suitable authenticated request Catalyst could learn from. Catalyst now waits for the credential and retries, the same way it already did for the boss tracker and Next Lesson. Unhandled authentication failures also leave a console warning instead of disappearing silently.
+* **Restored Catalyst's ability to recognize your own account.** Boot.dev replaced the profile link in the top navigation with a menu button, which was the only way Catalyst could learn your username outside the leaderboard page. A new installation that never visited the leaderboard could not identify you at all, so the "Daily Karma" comparison had nothing to compare against and stayed unavailable. Catalyst now reads the signed-in username from the page's server-rendered data.
+* **Made the boss tracker resistant to partial format changes.** Boot.dev is midway through changing the format of the boss-event data. Catalyst could handle the old format and the new one, but not a mix of the two — and a mixed response could have left the tracker displaying a frozen "Current aura" while still reporting itself as freshly updated. All boss fields are now read in both formats independently.
+* **Stopped "Daily XP" from ever showing a lifetime total.** If Boot.dev renamed the daily-XP field, Catalyst would have fallen back to the lifetime XP total and presented it as a daily figure — a wrong number rather than a missing one. That fallback is gone.
+* **Stopped the activity estimate from reporting a confident zero.** If Catalyst could not read a tracked learner's activity history, it reported "no lessons completed today" instead of admitting it had no data.
+
+### Added
+
+* **Rename detection.** Catalyst's features are built to degrade quietly when data is missing, which is exactly why the v0.12.1 breakage went unnoticed for so long. Catalyst now writes a clear console warning whenever it receives a non-empty response and cannot read the field it needs from any of the returned records — covering the challenge difficulty filter, the XP and karma leaderboards, the activity heatmap, and Next Lesson.
+* **Automated checks for the boss data format** (`scripts/check_boss_normalizer.mjs`), run against real captured responses in both observed formats plus a deliberately mixed synthetic response.
+
+### Notes
+
+* No new permissions, API calls, storage keys, or dependencies.
+* All 11 Boot.dev endpoints Catalyst reads were verified against the live API on 2026-07-31. Only the challenge-search and boss-event responses have been observed serving camelCase; Catalyst handles both PascalCase and camelCase for those responses.
+* Maintainer-only audit notes, diagnostic tooling, and captured responses are retained locally under `reference_data/catalyst_versions/v0.12.2_api_casing_audit/`.
 
 ## v0.12.1 - Training Grounds difficulty filter repair
 

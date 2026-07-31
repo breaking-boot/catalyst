@@ -233,10 +233,12 @@ function handleChallengeSearch(json, catalyst) {
     at: Date.now(),
     shownCount: json.length,
     originalCount: Number.isFinite(catalyst?.originalCount) ? catalyst.originalCount : json.length,
+    resolvedCount: Number.isFinite(catalyst?.resolvedCount) ? catalyst.resolvedCount : null,
     filtered: catalyst?.filtered === true,
     appliedTiers: normalizeChallengeTiers(catalyst?.appliedTiers),
   };
   console.debug("[catalyst] challenge search", lastChallengeSearch);
+  warnIfNoDifficultiesResolved(lastChallengeSearch);
   syncChallengeSearchUrl();
   // A relay can land while Vue is still settling its own URL push (internal
   // landing -> search transitions), which then overwrites ours — re-sync
@@ -255,6 +257,25 @@ function handleChallengeSearch(json, catalyst) {
   if (signature === lastChallengeRefreshSignature) return;
   lastChallengeRefreshSignature = signature;
   requestChallengeSearchRefresh();
+}
+
+// The v0.12.1 tripwire. Filtering deliberately keeps any record whose tier it
+// cannot read, so a renamed difficulty field produces a perfectly healthy-
+// looking feature that filters nothing: pills toggle, `diff=` reaches the URL,
+// and the relay still reports filtered:true. The one number that gives it away
+// is how many records were tierable — 0 out of N means the field moved again.
+// Warn once per page load so the console says it plainly instead of the
+// symptom having to be noticed by eye.
+let noDifficultyWarned = false;
+function warnIfNoDifficultiesResolved(search) {
+  if (noDifficultyWarned) return;
+  if (!search.filtered || search.resolvedCount === null) return;
+  if (search.originalCount <= 0 || search.resolvedCount > 0) return;
+  noDifficultyWarned = true;
+  console.warn(
+    `[catalyst] difficulty filter read ${search.originalCount} challenges and could not tier any of them — ` +
+    "Boot.dev likely renamed the difficulty field again. See challengeDifficulty() in injected.js."
+  );
 }
 
 // Keep the address bar honest after every search: strip the refresh nonce,

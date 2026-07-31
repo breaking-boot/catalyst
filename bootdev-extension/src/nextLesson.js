@@ -46,7 +46,23 @@ async function loadNextLessonHref() {
 // ===========================================================================
 async function handleDashboardContent(json) {
   const href = getDashboardLessonHref(json);
-  if (href) await rememberNextLessonHref(href);
+  if (href) {
+    await rememberNextLessonHref(href);
+    return;
+  }
+  // A stored href has no expiry, so if CurrentLessonUUID were ever renamed the
+  // nav link would keep working and keep pointing at a lesson finished weeks
+  // ago — stale rather than absent, and therefore invisible. No expiry is added
+  // (that would break the legitimate "away for a while" case); the breadcrumb
+  // is the fix. Only meaningful on a well-formed response, hence the shape test.
+  const data = json?.data ?? json;
+  if (isPlainObject(data) && Object.keys(data).length) {
+    warnOnce(
+      "dashboard-lesson-uuid",
+      "dashboard_content had no readable CurrentLessonUUID — Next Lesson may be stale. " +
+      "See getDashboardLessonHref() in nextLesson.js."
+    );
+  }
 }
 
 function refreshNextLessonFromDashboardSoon() {
