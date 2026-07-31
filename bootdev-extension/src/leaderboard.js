@@ -292,9 +292,11 @@ function getLeaderboardEntries(json) {
   return [];
 }
 
+// Handle comparison only. No IsCurrentUser / IsSelf / IsMe field exists in any
+// observed response (re-confirmed against live captures of every board,
+// 2026-07-31), so speculatively checking for them only added places for a
+// wrong answer to come from.
 function isCurrentLeaderboardEntry(entry, currentIdentity) {
-  if (entry?.IsCurrentUser || entry?.IsSelf || entry?.IsMe) return true;
-
   const identity = typeof currentIdentity === "string"
     ? { handle: currentIdentity }
     : currentIdentity || {};
@@ -495,6 +497,8 @@ function handleAllTimeLeaderboard(json) {
 
   const entries = getLeaderboardEntries(json);
   if (!entries.length) return;
+  // A renamed XP would render 25 rows of "0 xp" rather than failing outright.
+  reportUsableFields("/v1/leaderboard_xp/alltime", entries, "XP", (e) => e?.XP);
   cachedAllTimeEntries = entries;
   markBoardSeen("alltime");
   chromeSet(LEADERBOARD_CACHE_KEY, { entries, updatedAt: Date.now() });
@@ -515,14 +519,23 @@ function getMyValue(kind) {
 
   let value = null;
   if (kind === "xp") {
-    value = fromEntries(cachedAllTimeEntries, "XP", "TotalXP")
+    // TotalXP has never appeared on a leaderboard entry (full key list checked
+    // against live responses 2026-07-31), so it is not carried as a fallback.
+    value = fromEntries(cachedAllTimeEntries, "XP")
       ?? fromEntries(cachedLeagueEntries, "XP")
       ?? fromEntries(cachedLeagueDailyEntries, "XP");
   } else if (kind === "daily") {
     // Daily XP earned is universal, so the league-daily response is a valid
-    // fallback when we rank outside the global daily top 25.
-    value = fromEntries(cachedDailyEntries, "XPEarned", "XP")
-      ?? fromEntries(cachedLeagueDailyEntries, "XPEarned", "XP");
+    // fallback when we rank outside the global daily top 25 (verified
+    // 2026-07-31: the same handle's XPEarned matches on both boards).
+    //
+    // XP is deliberately NOT a fallback here. It is the LIFETIME total, not the
+    // trailing-24h figure, so if XPEarned were ever renamed this would quietly
+    // report ~1,266,000 as a "daily" number and compare it against the native
+    // board's ~16,000. A missing value is recoverable; a plausible wrong one is
+    // the exact failure mode that hid the v0.12.1 regression.
+    value = fromEntries(cachedDailyEntries, "XPEarned")
+      ?? fromEntries(cachedLeagueDailyEntries, "XPEarned");
   } else if (kind === "karma") {
     value = fromEntries(cachedKarmaEntries, "Karma");
   } else if (kind === "dailyKarma") {
@@ -676,7 +689,7 @@ function _applyAllTimeContent(panel, entries) {
       entry: e,
       handle,
       displayName: getDisplayName(e, handle),
-      xp: e.XP ?? e.TotalXP ?? e.XPEarned ?? 0,
+      xp: e.XP ?? e.XPEarned ?? 0,
       rank: e.Position ?? e.Rank ?? i + 1,
       isCurrentUser: isCurrentLeaderboardEntry(e, currentIdentity),
       href: handle ? `/u/${encodeURIComponent(handle)}` : "#",
@@ -967,7 +980,9 @@ function augmentNativeDailyLeaderboard() {
   if (!isComparisonEnabled("comparisonsGlobalDaily")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
-    mapByHandle(cachedDailyEntries, "XPEarned", "XP"),
+    // XPEarned only — see the note in getMyValue: XP here is the lifetime
+    // total and would render six-figure "daily" comparisons.
+    mapByHandle(cachedDailyEntries, "XPEarned"),
     getMyValue("daily"),
     "xp"
   );
@@ -1123,7 +1138,7 @@ function harvestPersonalSnapshots(entries, { backdate = false, asOf = 0 } = {}) 
     const handle = normalizeHandle(getHandle(entry));
     if (!handle || !isPersonalHandle(handle)) continue;
 
-    const total = num(entry?.XP ?? entry?.TotalXP);
+    const total = num(entry?.XP);
     if (total == null) continue;
 
     const record = ensurePersonalRecord(handle);
@@ -1174,6 +1189,7 @@ function persistDailyBoardLookup(boardKey, entries) {
 
 function handleDailyXpLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
+  reportUsableFields("/v1/leaderboard_xp/day", entries, "XPEarned", (e) => e?.XPEarned);
   cachedDailyEntries = entries;
   markBoardSeen("daily");
   persistDailyBoardLookup("daily", entries);
@@ -1184,6 +1200,9 @@ function handleDailyXpLeaderboard(json) {
 function handleKarmaLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
   if (!entries.length) return;
+  // Karma has no second source, so a rename here shows up as a permanent
+  // "Not enough data yet" — indistinguishable from a normal cold start.
+  reportUsableFields("/v1/leaderboard_karma/alltime", entries, "Karma", (e) => e?.Karma);
   cachedKarmaEntries = entries;
   markBoardSeen("karma");
   harvestPersonalKarmaSnapshots(entries);
@@ -1265,8 +1284,10 @@ function updatePersonalUserData(username, isStats, json) {
   const requestedHandle = normalizeHandle(username);
   const data = json?.data ?? json;
   const responseHandle = normalizeHandle(data?.Handle);
-  // My own profile/stats responses (e.g. Boot.dev fetching my profile page)
-  // feed the current-user karma series even when I'm not a tracked handle.
+  // My own stats response feeds the current-user karma series even when I'm not
+  // a tracked handle. Both branches route through here, but only /stats carries
+  // a karma field (the public profile has none), so the profile branch is a
+  // harmless no-op — recordCurrentUserKarma ignores a non-numeric value.
   if ((responseHandle || requestedHandle) === currentUserHandle) {
     recordCurrentUserKarma(data?.Karma);
   }
@@ -1279,9 +1300,11 @@ function updatePersonalUserData(username, isStats, json) {
     record.stats = data;
     recordKarmaSnapshot(record, data?.Karma);
   } else {
+    // No karma snapshot here: the public profile response has no karma field
+    // (see getPersonalValue). A tracked user's karma series advances on /stats
+    // refreshes and karma-board sightings only.
     record.profile = data;
     recordXpSnapshot(record, data?.XP);
-    recordKarmaSnapshot(record, data?.Karma);
   }
   record.updatedAt = Date.now();
 
@@ -1640,7 +1663,8 @@ async function addPersonalHandle(handle) {
   record.profile = profile;
   record.profileError = null;
   recordXpSnapshot(record, profile.XP);
-  recordKarmaSnapshot(record, profile.Karma);
+  // No karma here — the profile response has none; refreshPersonalStats below
+  // is what opens the karma series.
   // The new handle may already sit on a board received earlier this session
   // (league-daily especially) — harvest those now so the exact/measured tiers
   // apply immediately instead of after the next page load.
@@ -1701,7 +1725,10 @@ function getPersonalRows(kind) {
 function getPersonalValue(record, kind) {
   if (kind === "daily") return computeDailyXpView(record).value;
   if (kind === "dailyKarma") return computeDailyKarmaView(record).value;
-  if (kind === "karma") return num(record.stats?.Karma ?? record.profile?.Karma);
+  // Karma comes from /stats only. The public profile response carries no karma
+  // field in any casing (full key list checked 2026-07-31), so reading it from
+  // record.profile was a fallback that could never fire.
+  if (kind === "karma") return num(record.stats?.Karma);
   return num(record.profile?.XP);
 }
 
@@ -1892,7 +1919,7 @@ async function refreshPersonalHandle(handle) {
   record.profile = profile;
   record.profileError = null;
   recordXpSnapshot(record, profile.XP);
-  recordKarmaSnapshot(record, profile.Karma);
+  // Karma comes from the /stats refresh below, not from the profile response.
   savePersonalCache();
   schedulePersonalLeaderboardRender();
 
@@ -1979,12 +2006,28 @@ function distillHeatmap(json) {
   const today = localDateKey();
   const activeDays = new Set();
   let lessonsToday = 0;
+  let readable = 0; // entries that yielded BOTH a date and a numeric count
   for (const entry of calendar) {
     const key = String(entry?.Date || "").slice(0, 10);
     const count = num(entry?.Count);
+    if (key && count != null) readable += 1;
     if (!key || !count) continue;
     activeDays.add(key);
     if (key === today) lessonsToday = count;
+  }
+
+  // "No lessons today" and "I could not read this response" produce identical
+  // numbers here, and the estimate tier renders the first as a confident
+  // "0 xp / est." with a tooltip saying so. If a non-empty calendar yields
+  // nothing readable, the fields moved — report no heatmap rather than a
+  // fabricated zero, and say so once.
+  if (calendar.length && !readable) {
+    warnOnce(
+      "heatmap-fields",
+      `activity heatmap returned ${calendar.length} days and none had a readable Date/Count — ` +
+      "Boot.dev likely renamed those fields. See distillHeatmap() in leaderboard.js."
+    );
+    return null;
   }
   for (const entry of commits) {
     const key = String(entry?.Date || "").slice(0, 10);

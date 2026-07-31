@@ -62,8 +62,16 @@ if (!hooks) {
   console.error("FAIL: injected.js did not expose test hooks");
   process.exit(1);
 }
-const { tierOfDifficulty, challengeDifficulty, filterChallengeSearchArray, parseTierList, isChallengeSearchUrl } =
-  hooks;
+const {
+  tierOfDifficulty,
+  challengeDifficulty,
+  filterChallengeSearchArray,
+  countResolvedTiers,
+  challengeSearchRecords,
+  parseTierList,
+  isChallengeSearchUrl,
+  requiresAuth,
+} = hooks;
 
 // --- tiny assert ------------------------------------------------------------
 
@@ -175,6 +183,57 @@ check(
 
 check("empty input -> empty output", filterChallengeSearchArray([], new Set(["easy"])), []);
 
+// --- countResolvedTiers: the rename tripwire ---------------------------------
+// The keep-on-unknown rule means a renamed difficulty field cannot fail
+// visibly, so this count is what trainingGrounds.js warns on. 0-of-N is the
+// exact signature of the v0.12.1 regression.
+
+check("census counts tierable records", countResolvedTiers(camelRecs), 2);
+check(
+  "census is 0 when the difficulty field is unreadable (the v0.12.1 signature)",
+  countResolvedTiers([{ uuid: "a", topics: { hardness: 2 } }, { uuid: "b", topics: { hardness: 9 } }]),
+  0
+);
+check("census ignores out-of-range difficulties", countResolvedTiers([{ topics: { difficulty: 42 } }]), 0);
+check("census of an empty result set", countResolvedTiers([]), 0);
+
+// --- challengeSearchRecords: shape tolerance --------------------------------
+// Every capture (2026-07-14, 2026-07-31) is a bare array. A wrapper appearing
+// later must not silently disable the filter the way the casing flip did.
+
+const bare = [{ uuid: "a" }];
+check("bare array is recognized", challengeSearchRecords(bare).records, bare);
+check("bare array round-trips unwrapped", challengeSearchRecords(bare).rewrap([{ uuid: "b" }]), [{ uuid: "b" }]);
+
+const wrapped = { data: [{ uuid: "a" }, { uuid: "b" }], meta: { page: 1 } };
+check("data-wrapped array is recognized", challengeSearchRecords(wrapped).records.length, 2);
+check(
+  "data-wrapped array is re-wrapped with siblings intact",
+  challengeSearchRecords(wrapped).rewrap([{ uuid: "a" }]),
+  { data: [{ uuid: "a" }], meta: { page: 1 } }
+);
+check("results-wrapped array is recognized", challengeSearchRecords({ results: [1, 2] }).records.length, 2);
+check("challenges-wrapped array is recognized", challengeSearchRecords({ challenges: [1] }).records.length, 1);
+check("object with no record array -> null (fails open)", challengeSearchRecords({ meta: {} }), null);
+check("null -> null", challengeSearchRecords(null), null);
+check("string -> null", challengeSearchRecords("nope"), null);
+
+// --- requiresAuth: which paths must be queued rather than sent bare ---------
+// Measured 2026-07-31: a cookie-only GET returns 401 for these and 200 for the
+// rest. The league boards were missing here, so on a cold server-rendered
+// /leaderboard (nothing fetched, so no Authorization header harvested) both
+// League comparison boards silently failed with no retry.
+
+check("boss progress requires auth", requiresAuth("/v1/boss_events_progress"), true);
+check("dashboard content requires auth", requiresAuth("/v1/dashboard_content"), true);
+check("league daily requires auth", requiresAuth("/v1/league_leaderboard_xp/day"), true);
+check("league alltime requires auth", requiresAuth("/v1/league_leaderboard_xp/alltime"), true);
+check("global XP board does not", requiresAuth("/v1/leaderboard_xp/day"), false);
+check("global karma board does not", requiresAuth("/v1/leaderboard_karma/alltime"), false);
+check("public profile does not", requiresAuth("/v1/users/public/a-fleming"), false);
+check("challenge search does not", requiresAuth("/v1/challenges/search"), false);
+check("league pattern does not over-match a deeper path", requiresAuth("/v1/league_leaderboard_xp/day/extra"), false);
+
 // --- parseTierList (data-be-diff / diff= values): validation + canonical order
 
 check("parse drops unknown tiers, dedupes, canonical order", parseTierList("hard,banana,easy,hard"), ["easy", "hard"]);
@@ -225,6 +284,9 @@ for (const [dir, name, expected] of FIXTURES) {
   }
   check(`${name} per-tier counts`, counts, expected);
   check(`${name} tiers partition the set (no unknown difficulties)`, keptTotal, total);
+  // The tripwire on real data: every record in a healthy capture is tierable,
+  // so a 0 here would mean the difficulty field moved again.
+  check(`${name} every record is tierable (rename tripwire)`, countResolvedTiers(records), total);
   check(
     `${name} all-tiers set keeps everything`,
     filterChallengeSearchArray(records, new Set(["easy", "medium", "hard"])).length,

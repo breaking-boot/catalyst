@@ -98,6 +98,36 @@
     });
   }
 
+  // How many records Catalyst could actually tier. The keep-on-unknown rule
+  // above means a renamed difficulty field disables the filter without any
+  // symptom — that is exactly what happened in v0.12.1 — so this number rides
+  // along in the relay metadata and trainingGrounds.js warns when it is 0 out
+  // of N. Detection, not tolerance: the next rename should announce itself.
+  function countResolvedTiers(records) {
+    let resolved = 0;
+    for (const record of records) {
+      if (tierOfDifficulty(challengeDifficulty(record)) !== null) resolved += 1;
+    }
+    return resolved;
+  }
+
+  // The response has been a bare JSON array in every capture (2026-07-14 and
+  // 2026-07-31). A wrapped shape is accepted anyway, and re-wrapped on the way
+  // out, because a wrapper appearing later would otherwise disable the filter
+  // in the same silent way the casing flip did. Returns null when no record
+  // array can be found, which fails open to Boot.dev's own response.
+  function challengeSearchRecords(json) {
+    if (Array.isArray(json)) return { records: json, rewrap: (list) => list };
+    if (json && typeof json === "object") {
+      for (const key of ["data", "results", "challenges"]) {
+        if (Array.isArray(json[key])) {
+          return { records: json[key], rewrap: (list) => ({ ...json, [key]: list }) };
+        }
+      }
+    }
+    return null;
+  }
+
   // "easy,hard" (any junk tolerated) -> known tiers only, deduped, canonical order.
   function parseTierList(raw) {
     const requested = String(raw ?? "").split(",");
@@ -134,12 +164,14 @@
       const tiers = currentChallengeTiers() || [];
       const text = await res.clone().text();
       const json = JSON.parse(text);
-      if (!Array.isArray(json)) return null;
-      const filtered = filterChallengeSearchArray(json, new Set(tiers));
-      const body = JSON.stringify(filtered);
+      const shape = challengeSearchRecords(json);
+      if (!shape) return null;
+      const filtered = filterChallengeSearchArray(shape.records, new Set(tiers));
+      const body = JSON.stringify(shape.rewrap(filtered));
       relay(url, method, res.status, body, null, {
         filtered: true,
-        originalCount: json.length,
+        originalCount: shape.records.length,
+        resolvedCount: countResolvedTiers(shape.records),
         appliedTiers: tiers,
       });
       const headers = new Headers(res.headers);
@@ -388,8 +420,11 @@
       tierOfDifficulty,
       challengeDifficulty,
       filterChallengeSearchArray,
+      countResolvedTiers,
+      challengeSearchRecords,
       parseTierList,
       isChallengeSearchUrl,
+      requiresAuth,
     };
   }
 

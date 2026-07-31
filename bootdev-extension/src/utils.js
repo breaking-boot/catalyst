@@ -100,6 +100,37 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+// --- rename detection -------------------------------------------------------
+// Catalyst's features are all built to degrade gracefully when a value is
+// missing, which is exactly what makes a renamed API field invisible: the UI
+// keeps working and just shows less. These two helpers are the counterweight —
+// they cost nothing when everything is fine and put one line in the console
+// when a response arrives full of records that yield no usable values.
+const warnedOnce = new Set();
+function warnOnce(key, message) {
+  if (warnedOnce.has(key)) return;
+  warnedOnce.add(key);
+  console.warn(`[catalyst] ${message}`);
+}
+
+// Warn when a non-empty list yields zero usable values for a field Catalyst
+// depends on. Returns the count so callers can use it too.
+function reportUsableFields(label, entries, field, read) {
+  if (!Array.isArray(entries) || !entries.length) return null;
+  let usable = 0;
+  for (const entry of entries) {
+    if (num(read(entry)) != null) usable += 1;
+  }
+  if (!usable) {
+    warnOnce(
+      `usable:${label}:${field}`,
+      `${label} returned ${entries.length} records and none had a usable ${field} — ` +
+      "Boot.dev may have renamed it."
+    );
+  }
+  return usable;
+}
+
 function localDateKey() {
   return new Date().toLocaleDateString("en-CA");
 }
