@@ -11,10 +11,20 @@
   const TAG = "BOOTDEV_ENHANCER";
   const API = "api.boot.dev";
   const DEBUG = false;
+  // Paths the session cookie alone cannot reach: they need the Authorization
+  // header harvested from Boot.dev's own requests, so a request made before one
+  // has been seen must be queued rather than sent bare (it would 401 and be
+  // dropped). Measured 2026-07-31: a credentialed cookie-only GET returns 401
+  // for these and 200 for every other endpoint Catalyst reads.
   const AUTH_REQUIRED_PATHS = new Set([
     "/v1/boss_events_progress",
     "/v1/dashboard_content",
   ]);
+  // The league boards need the header too, but carry a period segment, so they
+  // need a pattern rather than an exact path. Omitting them used to mean a
+  // cold, server-rendered /leaderboard (where Boot.dev fetches nothing, so
+  // nothing is harvested) silently lost both League comparison boards.
+  const AUTH_REQUIRED_PATTERNS = [/^\/v1\/league_leaderboard_xp\/[^/]+$/];
   // Passively-observed responses are only broadcast for the handful of paths the
   // content-script router actually consumes, so unrelated (and possibly
   // sensitive) api.boot.dev payloads are never re-exposed on the window bus.
@@ -216,7 +226,10 @@
   }
 
   function requiresAuth(pathname) {
-    return AUTH_REQUIRED_PATHS.has(pathname);
+    return (
+      AUTH_REQUIRED_PATHS.has(pathname) ||
+      AUTH_REQUIRED_PATTERNS.some((re) => re.test(pathname))
+    );
   }
 
   function queueAuthFetch(url, requestId) {

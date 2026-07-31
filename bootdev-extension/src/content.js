@@ -387,6 +387,13 @@ function handleUnauthorizedApi(path) {
     dashboardAuthUnavailableUntil = Date.now() + AUTH_RETRY_MS;
   } else if (path === "/v1/boss_events_progress") {
     markBossAuthUnavailable(AUTH_RETRY_MS, false);
+  } else {
+    // Anything else lands here and is dropped — the feature that asked for it
+    // simply renders nothing. That silence is what hid the league-board 401s
+    // (they were missing from AUTH_REQUIRED_PATHS in injected.js, so they were
+    // sent bare instead of queued). Leave a breadcrumb so the next one is
+    // findable in the console rather than invisible.
+    console.debug("[catalyst] unhandled 401 from", path);
   }
 }
 
