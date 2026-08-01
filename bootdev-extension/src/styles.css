@@ -831,6 +831,11 @@
   padding: 4px 10px;
   cursor: pointer;
   transition: color 0.15s ease, border-color 0.15s ease;
+  /* Every pill is sized for the widest label ("10") so the row doesn't
+     reflow when switching tiers changes 8/9/10 to 1/2/3/4. */
+  min-width: 2.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 .be-tg-pill:hover,
 .be-tg-pill[aria-pressed="true"] {
