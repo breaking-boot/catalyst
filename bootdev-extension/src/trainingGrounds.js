@@ -260,6 +260,7 @@ function ensureTrainingGroundsUiState() {
   // Idempotent per-tick: the 2s scan re-badges whatever is rendered now, which
   // covers local pagination and Vue re-renders without an observer.
   ensureLevelBadges();
+  ensureChallengeFilterNote();
 }
 
 // ---------------------------------------------------------------------------
@@ -551,6 +552,62 @@ function ensureChallengeFilterDot() {
 }
 
 // ---------------------------------------------------------------------------
+// Filter note
+// ---------------------------------------------------------------------------
+
+// A client-side pass can only narrow what the server chose to send, so a short
+// result list is ambiguous: few exist, or few survived the filter? Boot.dev's
+// own "Showing 1-10 of 14" already updates itself (injected.js rewrites the
+// response before Vue reads it), but it can't say what the 14 came out of.
+// This one line supplies that.
+//
+// Anchored to the native count paragraph by its text shape. On a zero-result
+// page Boot.dev hides the whole pagination row, so the note is inserted AFTER
+// that row rather than inside it — which is exactly the case where the
+// explanation matters most.
+function findChallengeCountRow() {
+  for (const el of document.querySelectorAll("p")) {
+    if (/^showing\s+\d+\s*-\s*\d+\s+of\s+\d+$/i.test(normalizeText(el.textContent))) {
+      return el.parentElement;
+    }
+  }
+  return null;
+}
+
+function ensureChallengeFilterNote() {
+  const search = lastChallengeSearch;
+  const want =
+    isFeatureEnabled(CHALLENGE_FILTER_FEATURE) &&
+    Boolean(search?.filtered) &&
+    search.appliedLevels.length > 0 &&
+    search.originalCount > search.shownCount;
+
+  const existing = document.getElementById("be-tg-filter-note");
+  if (!want) {
+    existing?.remove();
+    return;
+  }
+
+  const levels = search.appliedLevels;
+  const text =
+    `Level ${levels.join(", ")} — showing ${search.shownCount} of ` +
+    `${search.originalCount} results Boot.dev returned`;
+
+  if (existing) {
+    if (existing.textContent !== text) existing.textContent = text;
+    return;
+  }
+  const row = findChallengeCountRow();
+  if (!row) return; // no anchor: skip the note, everything else still works
+
+  const note = document.createElement("p");
+  note.id = "be-tg-filter-note";
+  note.className = "be-tg-filter-note";
+  note.textContent = text;
+  row.insertAdjacentElement("afterend", note);
+}
+
+// ---------------------------------------------------------------------------
 // Result-row level badges
 // ---------------------------------------------------------------------------
 
@@ -613,6 +670,7 @@ function removeLevelBadges() {
 function removeTrainingGroundsUi() {
   document.getElementById("be-tg-level")?.remove();
   document.getElementById("be-tg-filter-dot")?.remove();
+  document.getElementById("be-tg-filter-note")?.remove();
   removeLevelBadges();
 }
 
