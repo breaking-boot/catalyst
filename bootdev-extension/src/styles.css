@@ -793,7 +793,7 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Training Grounds difficulty filter (trainingGrounds.js)
+   Training Grounds difficulty level filter (trainingGrounds.js)
    Colors mirror the native popover pills (bootdev_palette.css tokens):
    gray-600 #4e5564 / gray-400 #919dab unselected, gray-200 #d7dee6 selected,
    yellow-400 #e5ae3c accents.
@@ -844,6 +844,15 @@
   outline-offset: 0;
   border-color: #e8ecf1;
   color: #d7dee6;
+}
+.be-tg-empty {
+  /* Matches the native Type section's "Select a language first" state:
+     italic gray-300, same min-height so the popover doesn't jump. */
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.4;
+  color: #b6c0cc; /* --gray-300 */
+  min-height: 26px;
 }
 .be-tg-filter-dot {
   position: absolute; /* the native filter button is position:relative */

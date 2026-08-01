@@ -50,30 +50,33 @@
       return false;
     }
   }
-  // --- Training Grounds difficulty filter ---------------------------------
-  // The tier bounds are Catalyst's UI mapping of boot.dev's difficulty icons
-  // (difficulty_easy/medium/hard filenames); the API has no tier concept and
-  // no difficulty parameter (probe-verified). Keep in sync with
-  // CHALLENGE_TIERS in trainingGrounds.js.
-  const DIFFICULTY_TIERS = { easy: [1, 4], medium: [5, 7], hard: [8, 10] };
+  // --- Training Grounds difficulty level filter ---------------------------
+  // Boot.dev shipped its own Easy/Medium/Hard filter on 2026-08-01 (d=easy in
+  // the query, filtered server-side), so Catalyst no longer tiers anything: it
+  // narrows the already tier-filtered response down to exact levels, which is
+  // the thing the native filter cannot do. Only the 1-10 bound matters here —
+  // the tier -> level mapping lives in trainingGrounds.js (CHALLENGE_TIERS),
+  // which is now the single copy rather than one of two kept in sync.
+  const LEVEL_MIN = 1;
+  const LEVEL_MAX = 10;
   const CHALLENGE_SEARCH_PATH = "/v1/challenges/search";
-  // Committed tiers arrive via a DOM attribute the content script maintains
+  // Committed levels arrive via a DOM attribute the content script maintains
   // (trainingGrounds.js). An attribute read is synchronous, so a fetch fired
   // in the same task as a Search click already sees the just-committed state
   // — no postMessage race. Attribute absent = feature off / nothing committed.
-  const CHALLENGE_DIFF_ATTR = "data-be-diff";
+  const CHALLENGE_LEVEL_ATTR = "data-be-dl";
   // Throwaway router-query param used only to make the page re-run its search
   // (any query change refetches); stripped from the URL by trainingGrounds.js.
   const CHALLENGE_REFRESH_NONCE_PARAM = "be_r";
 
-  function tierOfDifficulty(value) {
+  // 1-10 in every captured record. Anything else (missing, non-integer, out of
+  // range) is "unresolvable", which the filter below treats as keep — the same
+  // rule the tier version had, where an out-of-range value tiered to null.
+  function challengeLevel(value) {
     const n = Number(value);
     if (!Number.isInteger(n)) return null;
-    for (const tier of Object.keys(DIFFICULTY_TIERS)) {
-      const [lo, hi] = DIFFICULTY_TIERS[tier];
-      if (n >= lo && n <= hi) return tier;
-    }
-    return null;
+    if (n < LEVEL_MIN || n > LEVEL_MAX) return null;
+    return n;
   }
 
   // Boot.dev reshaped this response from PascalCase to camelCase between
@@ -89,24 +92,25 @@
     return topics.Difficulty ?? topics.difficulty;
   }
 
-  // Records with no resolvable tier are always kept: hiding a challenge on
-  // bad data is worse than showing an occasional mis-tiered one.
-  function filterChallengeSearchArray(records, tierSet) {
+  // Records with no resolvable level are always kept: hiding a challenge on
+  // bad data is worse than showing an occasional mis-levelled one.
+  function filterChallengeSearchArray(records, levelSet) {
     return records.filter((record) => {
-      const tier = tierOfDifficulty(challengeDifficulty(record));
-      return tier === null || tierSet.has(tier);
+      const level = challengeLevel(challengeDifficulty(record));
+      return level === null || levelSet.has(level);
     });
   }
 
-  // How many records Catalyst could actually tier. The keep-on-unknown rule
-  // above means a renamed difficulty field disables the filter without any
-  // symptom — that is exactly what happened in v0.12.1 — so this number rides
-  // along in the relay metadata and trainingGrounds.js warns when it is 0 out
-  // of N. Detection, not tolerance: the next rename should announce itself.
-  function countResolvedTiers(records) {
+  // How many records Catalyst could actually read a level from. The
+  // keep-on-unknown rule above means a renamed difficulty field disables the
+  // filter without any symptom — that is exactly what happened in v0.12.1 — so
+  // this number rides along in the relay metadata and trainingGrounds.js warns
+  // when it is 0 out of N. Detection, not tolerance: the next rename should
+  // announce itself.
+  function countResolvedLevels(records) {
     let resolved = 0;
     for (const record of records) {
-      if (tierOfDifficulty(challengeDifficulty(record)) !== null) resolved += 1;
+      if (challengeLevel(challengeDifficulty(record)) !== null) resolved += 1;
     }
     return resolved;
   }
@@ -128,25 +132,29 @@
     return null;
   }
 
-  // "easy,hard" (any junk tolerated) -> known tiers only, deduped, canonical order.
-  function parseTierList(raw) {
-    const requested = String(raw ?? "").split(",");
-    return Object.keys(DIFFICULTY_TIERS).filter((t) => requested.includes(t));
+  // "8,10" (any junk tolerated) -> in-range levels only, deduped, ascending.
+  function parseLevelList(raw) {
+    const seen = new Set();
+    for (const part of String(raw ?? "").split(",")) {
+      const level = challengeLevel(part.trim());
+      if (level !== null) seen.add(level);
+    }
+    return [...seen].sort((a, b) => a - b);
   }
 
   // null = attribute absent (feature off / nothing committed): touch nothing.
-  function currentChallengeTiers() {
-    const raw = document.documentElement?.getAttribute?.(CHALLENGE_DIFF_ATTR);
+  function currentChallengeLevels() {
+    const raw = document.documentElement?.getAttribute?.(CHALLENGE_LEVEL_ATTR);
     if (raw === null || raw === undefined) return null;
-    return parseTierList(raw);
+    return parseLevelList(raw);
   }
 
-  // All three tiers selected filters nothing, so it counts as inactive too.
+  // trainingGrounds.js already refuses to write the attribute when the
+  // selection covers every level the native tier offers (that would filter
+  // nothing), so any non-empty list here is a real narrowing.
   function challengeFilterActive() {
-    const tiers = currentChallengeTiers();
-    return Boolean(
-      tiers && tiers.length >= 1 && tiers.length < Object.keys(DIFFICULTY_TIERS).length
-    );
+    const levels = currentChallengeLevels();
+    return Boolean(levels && levels.length);
   }
 
   function isChallengeSearchUrl(url) {
@@ -161,18 +169,18 @@
   // (the caller falls through to the untouched response + normal relay).
   async function maybeFilterChallengeSearch(url, method, res) {
     try {
-      const tiers = currentChallengeTiers() || [];
+      const levels = currentChallengeLevels() || [];
       const text = await res.clone().text();
       const json = JSON.parse(text);
       const shape = challengeSearchRecords(json);
       if (!shape) return null;
-      const filtered = filterChallengeSearchArray(shape.records, new Set(tiers));
+      const filtered = filterChallengeSearchArray(shape.records, new Set(levels));
       const body = JSON.stringify(shape.rewrap(filtered));
       relay(url, method, res.status, body, null, {
         filtered: true,
         originalCount: shape.records.length,
-        resolvedCount: countResolvedTiers(shape.records),
-        appliedTiers: tiers,
+        resolvedCount: countResolvedLevels(shape.records),
+        appliedLevels: levels,
       });
       const headers = new Headers(res.headers);
       // Stale after re-serialization / already decoded by fetch.
@@ -194,7 +202,7 @@
   // route through the page's Vue router with a fresh throwaway nonce param —
   // always a query change, so the frontend always refetches; the server
   // provably ignores unknown params. trainingGrounds.js cleans the nonce out
-  // of the URL (and maintains the cosmetic `diff` param) once the response
+  // of the URL (and maintains the cosmetic `dl` param) once the response
   // arrives. __vue_app__ is private Vue API, hence the guard; the hard-reload
   // fallback restores native (unfiltered) content at worst — fail-open.
   function refreshChallengeSearch() {
@@ -325,9 +333,10 @@
           (args[1] && args[1].method) ||
           (typeof args[0] !== "string" && args[0]?.method) ||
           "GET";
-        // Challenge search with an active difficulty selection: hand the page
-        // a filtered copy so its own list/count/pagination render the reduced
-        // set. Any hiccup falls through to the untouched response below.
+        // Challenge search with an active level selection: hand the page a
+        // filtered copy so its own list, "Showing X-Y of Z" line, and
+        // pagination all render the reduced set. Any hiccup falls through to
+        // the untouched response below.
         if (
           res.ok &&
           String(method).toUpperCase() === "GET" &&
@@ -417,12 +426,12 @@
   // reach the pure helpers. Never defined on the real page.
   if (window.__BOOTDEV_ENHANCER_TEST__) {
     window.__BOOTDEV_ENHANCER_TEST__.hooks = {
-      tierOfDifficulty,
+      challengeLevel,
       challengeDifficulty,
       filterChallengeSearchArray,
-      countResolvedTiers,
+      countResolvedLevels,
       challengeSearchRecords,
-      parseTierList,
+      parseLevelList,
       isChallengeSearchUrl,
       requiresAuth,
     };
