@@ -74,6 +74,7 @@ const {
   countResolvedLevels,
   challengeSearchRecords,
   parseLevelList,
+  parseChallengeFilter,
   isChallengeSearchUrl,
   requiresAuth,
 } = hooks;
@@ -252,6 +253,25 @@ check("parse of empty string -> no levels", parseLevelList(""), []);
 check("parse of legacy tier names -> no levels (old diff= links fail open)", parseLevelList("easy,hard"), []);
 check("parse handles null/undefined", parseLevelList(null), []);
 check("parse of a full tier, any order -> canonical", parseLevelList("10,8,9"), [8, 9, 10]);
+
+// --- parseChallengeFilter (the data-be-dl attribute) ------------------------
+// The tier rides in the attribute so injected.js can require that the request
+// actually carries it. Boot.dev can drop its own difficulty filter without the
+// popover ever opening (clearing the search box, a fresh search with no
+// filters, navigating back to the catalog), and a selection scoped to Hard
+// must not filter a search that carries no d= at all.
+
+check("parses tier and levels", parseChallengeFilter("hard:8,10"), { tier: "hard", levels: [8, 10] });
+check("parses a single level", parseChallengeFilter("easy:3"), { tier: "easy", levels: [3] });
+check("lowercases the tier", parseChallengeFilter("HARD:10"), { tier: "hard", levels: [10] });
+check("levels are validated through parseLevelList", parseChallengeFilter("hard:10,banana,0"), { tier: "hard", levels: [10] });
+check("no tier -> null (the pre-v0.13.0 attribute shape must not filter)", parseChallengeFilter("8,10"), null);
+check("empty tier -> null", parseChallengeFilter(":10"), null);
+check("no levels -> null", parseChallengeFilter("hard:"), null);
+check("no usable levels -> null", parseChallengeFilter("hard:banana"), null);
+check("absent attribute -> null", parseChallengeFilter(null), null);
+check("undefined attribute -> null", parseChallengeFilter(undefined), null);
+check("empty string -> null", parseChallengeFilter(""), null);
 
 // --- isChallengeSearchUrl: exact endpoint only -------------------------------
 

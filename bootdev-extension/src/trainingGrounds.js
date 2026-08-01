@@ -175,7 +175,13 @@ function syncChallengeFilterAttr() {
       isFeatureEnabled(CHALLENGE_FILTER_FEATURE) &&
       committedChallengeActive()
     ) {
-      root.setAttribute(CHALLENGE_LEVEL_ATTR, committedChallengeLevels.join(","));
+      // Tier-prefixed ("hard:8,10"): injected.js only applies the filter to a
+      // request that actually carries that tier, so a selection left over from
+      // a search Boot.dev has since cleared can never filter anything.
+      root.setAttribute(
+        CHALLENGE_LEVEL_ATTR,
+        `${committedNativeTier}:${committedChallengeLevels.join(",")}`
+      );
     } else {
       root.removeAttribute(CHALLENGE_LEVEL_ATTR);
     }
@@ -186,14 +192,11 @@ function syncChallengeFilterAttr() {
 // Route entry/leave (per-tab, URL-derived — like the native filters)
 // ---------------------------------------------------------------------------
 
-function enterTrainingGroundsRoute() {
-  onTrainingGroundsRoute = true;
-  lastTrainingGroundsPath = location.pathname;
-  lastChallengeSearch = null;
-  lastChallengeRefreshSignature = null;
-  // Adopt the URL, scoped to whatever tier Boot.dev committed. An incoherent
-  // shared link (`d=easy&dl=10`) normalizes to no levels and therefore filters
-  // nothing, which is the right fail-open answer rather than an empty page.
+// The page URL is the single authority on what is applied here: `d=` for
+// Boot.dev's tier, `dl=` for Catalyst's levels. An incoherent shared link
+// (`d=easy&dl=10`) normalizes to no levels and therefore filters nothing,
+// which is the right fail-open answer rather than an empty page.
+function adoptChallengeSelectionFromUrl() {
   committedNativeTier = nativeTierFromUrl();
   committedChallengeLevels = normalizeChallengeLevels(
     readChallengeLevelsFromUrl(),
@@ -202,6 +205,21 @@ function enterTrainingGroundsRoute() {
   pendingNativeTier = committedNativeTier;
   pendingChallengeLevels = committedChallengeLevels.slice();
   syncChallengeFilterAttr();
+}
+
+function enterTrainingGroundsRoute() {
+  onTrainingGroundsRoute = true;
+  lastTrainingGroundsPath = location.pathname;
+  lastChallengeSearch = null;
+  lastChallengeRefreshSignature = null;
+  adoptChallengeSelectionFromUrl();
+
+  // A cold load arrives server-rendered and Vue hydrates it shortly after, so
+  // badges written before hydration can be discarded with the nodes they were
+  // attached to. Re-run a couple of times on the way in rather than waiting up
+  // to 2s for the next DOM scan. Idempotent, so extra passes cost nothing.
+  setTrackedTimeout(ensureLevelBadges, 300);
+  setTrackedTimeout(ensureLevelBadges, 1200);
 
   // Cold loads server-render the results without an API call; if this entry
   // arrived level-armed and no search response shows up, trigger one refresh
@@ -246,13 +264,15 @@ function ensureTrainingGroundsUiState() {
   if (!onTrainingGroundsRoute) {
     enterTrainingGroundsRoute();
   } else if (location.pathname !== lastTrainingGroundsPath) {
-    // Internal navigation (landing <-> search): boot.dev remembers and
-    // re-runs its own search, so the committed filter stays — but
-    // uncommitted pill picks reset to the committed state, exactly like the
-    // native pending pills do on a remount.
+    // Internal navigation (landing <-> search). Re-adopt from the URL rather
+    // than carrying the old selection across: the destination's URL is the
+    // authority on what is actually applied there, and the catalog page has no
+    // filter at all. Carrying it forward is what let a selection made on the
+    // search page reappear on a later unfiltered search.
     lastTrainingGroundsPath = location.pathname;
-    pendingNativeTier = committedNativeTier;
-    pendingChallengeLevels = committedChallengeLevels.slice();
+    lastChallengeSearch = null;
+    lastChallengeRefreshSignature = null;
+    adoptChallengeSelectionFromUrl();
     syncChallengeFilterUi();
   }
   ensureChallengeFilterDot();
@@ -274,9 +294,17 @@ function requestChallengeSearchRefresh() {
   );
 }
 
+// The committed selection is scoped to one native tier, so it only applies to
+// a search that still carries that tier. Boot.dev can drop its difficulty
+// without the popover ever opening, which leaves the cached tier stale.
+function effectiveCommittedLevels() {
+  if (!committedChallengeActive()) return [];
+  return nativeTierFromUrl() === committedNativeTier ? committedChallengeLevels : [];
+}
+
 // Do the currently rendered results reflect the committed levels?
 function resultsMatchCommitted() {
-  const effective = committedChallengeActive() ? committedChallengeLevels : [];
+  const effective = effectiveCommittedLevels();
   const applied = lastChallengeSearch?.filtered ? lastChallengeSearch.appliedLevels : [];
   return challengeLevelsEqual(effective, applied);
 }
@@ -363,7 +391,7 @@ function handleChallengeSearch(json, catalyst) {
     lastChallengeRefreshSignature = null;
     return;
   }
-  const signature = (committedChallengeActive() ? committedChallengeLevels : []).join(",");
+  const signature = effectiveCommittedLevels().join(",");
   if (signature === lastChallengeRefreshSignature) return;
   lastChallengeRefreshSignature = signature;
   requestChallengeSearchRefresh();
@@ -536,10 +564,16 @@ function toggleChallengeLevel(level) {
   syncChallengeFilterUi();
 }
 
-// Small gold dot on the filter button while a committed selection is actually
-// filtering results — visible with the popover closed, without duplicating
-// any counts. Pending (uncommitted) picks don't show it, matching how native
-// pending pills have no indicator either.
+// Small gold dot on the filter button while a level selection is actually
+// filtering the results on screen — visible with the popover closed, without
+// duplicating any counts. Pending (uncommitted) picks don't show it, matching
+// how native pending pills have no indicator either.
+//
+// Driven by what the last relayed search ACTUALLY filtered, not by the
+// committed state: Boot.dev can drop its difficulty tier without Catalyst
+// seeing it, and the dot must never advertise a filter that isn't in effect —
+// which is what left it lit on the catalog page after navigating away from a
+// filtered search.
 function ensureChallengeFilterDot() {
   const btn = findChallengeFilterButton();
   const existing = document.getElementById("be-tg-filter-dot");
@@ -547,7 +581,8 @@ function ensureChallengeFilterDot() {
     Boolean(btn) &&
     isTrainingGroundsPage() &&
     isFeatureEnabled(CHALLENGE_FILTER_FEATURE) &&
-    committedChallengeActive();
+    Boolean(lastChallengeSearch?.filtered) &&
+    lastChallengeSearch.appliedLevels.length > 0;
   if (!want) {
     existing?.remove();
     return;
@@ -604,6 +639,10 @@ function levelBadgeAnchor(row, img) {
 }
 
 function ensureLevelBadges() {
+  // Also reached directly from timers, so it re-checks its own preconditions
+  // rather than relying on the ensure pass that usually calls it.
+  if (enhancerStopped || !isTrainingGroundsPage()) return;
+  if (!isFeatureEnabled(CHALLENGE_FILTER_FEATURE)) return;
   const rows = document.querySelectorAll('a[href^="/challenges/"]');
   if (!rows.length) return;
   // Sweep up any badge that is no longer inside a result row — the per-row

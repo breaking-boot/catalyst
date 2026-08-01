@@ -142,19 +142,39 @@
     return [...seen].sort((a, b) => a - b);
   }
 
-  // null = attribute absent (feature off / nothing committed): touch nothing.
-  function currentChallengeLevels() {
-    const raw = document.documentElement?.getAttribute?.(CHALLENGE_LEVEL_ATTR);
+  // "hard:8,10" -> { tier: "hard", levels: [8, 10] }. The tier rides along
+  // because a level selection is only meaningful inside the native tier it was
+  // picked in; see challengeFilterForRequest.
+  function parseChallengeFilter(raw) {
     if (raw === null || raw === undefined) return null;
-    return parseLevelList(raw);
+    const [tier, list] = String(raw).split(":");
+    const levels = parseLevelList(list);
+    if (!tier || !levels.length) return null;
+    return { tier: tier.toLowerCase(), levels };
   }
 
-  // trainingGrounds.js already refuses to write the attribute when the
-  // selection covers every level the native tier offers (that would filter
-  // nothing), so any non-empty list here is a real narrowing.
-  function challengeFilterActive() {
-    const levels = currentChallengeLevels();
-    return Boolean(levels && levels.length);
+  // null = nothing to do (attribute absent, unparseable, or scoped to a tier
+  // this request isn't asking for): touch nothing.
+  //
+  // Validating against the REQUEST URL rather than the content script's cached
+  // idea of the native tier is what makes stale state harmless. Boot.dev can
+  // drop its own difficulty filter without the popover ever opening — clearing
+  // the search box, a fresh search with no filters, navigating back to the
+  // catalog — and Catalyst has no way to observe those. Before this check, a
+  // selection scoped to Hard would happily filter a search that carried no
+  // `d=` at all, hiding results with no visible filter to explain it.
+  function challengeFilterForRequest(url) {
+    const filter = parseChallengeFilter(
+      document.documentElement?.getAttribute?.(CHALLENGE_LEVEL_ATTR)
+    );
+    if (!filter) return null;
+    try {
+      const requested = new URL(url, window.location.origin).searchParams.get("d");
+      if (String(requested || "").toLowerCase() !== filter.tier) return null;
+    } catch (_) {
+      return null;
+    }
+    return filter;
   }
 
   function isChallengeSearchUrl(url) {
@@ -169,7 +189,9 @@
   // (the caller falls through to the untouched response + normal relay).
   async function maybeFilterChallengeSearch(url, method, res) {
     try {
-      const levels = currentChallengeLevels() || [];
+      const filter = challengeFilterForRequest(url);
+      if (!filter) return null;
+      const levels = filter.levels;
       const text = await res.clone().text();
       const json = JSON.parse(text);
       const shape = challengeSearchRecords(json);
@@ -341,7 +363,7 @@
           res.ok &&
           String(method).toUpperCase() === "GET" &&
           isChallengeSearchUrl(url) &&
-          challengeFilterActive()
+          challengeFilterForRequest(url)
         ) {
           const replaced = await maybeFilterChallengeSearch(url, method, res);
           if (replaced) return replaced;
@@ -432,6 +454,7 @@
       countResolvedLevels,
       challengeSearchRecords,
       parseLevelList,
+      parseChallengeFilter,
       isChallengeSearchUrl,
       requiresAuth,
     };
