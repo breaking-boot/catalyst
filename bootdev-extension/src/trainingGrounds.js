@@ -581,20 +581,43 @@ function challengeRowLevel(row) {
   return null;
 }
 
+// Where the badge goes: after the icon's own tooltip wrapper, which is the
+// element that participates in the metadata flex row. Anything deeper is a
+// block container, so the badge would stack under the icon instead of beside
+// it.
+//
+// FRAGILE: class name. `tooltip-box` is Boot.dev's global tooltip wrapper
+// (unchanged across every capture from 2026-07-14 to 2026-08-01). An
+// aria-describedby hook was tried instead and is WRONG here: the whole row is
+// also a tooltip-box carrying that attribute, so when Vue reuses a row's DOM
+// and the inner wrapper's attribute is not yet assigned, closest() climbs to
+// the row wrapper — which sits outside the <a> — and the badge lands between
+// rows instead of in one. That is why the first results in a re-rendered list
+// lost their badge. The guards below make escaping the row impossible
+// regardless of which element is matched.
+function levelBadgeAnchor(row, img) {
+  const box = img.closest(".tooltip-box");
+  // A candidate containing the row's title is the row wrapper, not the icon's.
+  if (box && row.contains(box) && !box.querySelector("h3")) return box;
+  const parent = img.parentElement;
+  return parent && row.contains(parent) ? parent : img;
+}
+
 function ensureLevelBadges() {
   const rows = document.querySelectorAll('a[href^="/challenges/"]');
   if (!rows.length) return;
+  // Sweep up any badge that is no longer inside a result row — the per-row
+  // pass below can never revisit one that escaped, so without this a single
+  // bad insertion would persist until the next teardown.
+  for (const badge of document.querySelectorAll(".be-tg-level-badge")) {
+    if (!badge.closest('a[href^="/challenges/"]')) badge.remove();
+  }
   let resolved = 0;
   for (const row of rows) {
     const found = challengeRowLevel(row);
     if (!found) continue;
     resolved += 1;
-    // The icon sits in a tooltip wrapper; put the badge after that wrapper so
-    // the native hover tooltip keeps working untouched. The wrapper is found
-    // by its aria-describedby (which points at the tooltip it owns) rather
-    // than by its .tooltip-box class — an aria hook outranks a class name, and
-    // closest() stops at the icon's own wrapper rather than the row's.
-    const anchor = found.img.closest("[aria-describedby]") || found.img;
+    const anchor = levelBadgeAnchor(row, found.img);
     const existing = anchor.nextElementSibling;
     if (existing?.classList?.contains("be-tg-level-badge")) {
       if (existing.dataset.beLevel === String(found.level)) continue;
