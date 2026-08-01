@@ -309,9 +309,14 @@ function handleTrainingGroundsSubmit(event) {
 }
 
 function commitChallengeSelection() {
-  // Re-resolve rather than trust the last tick: the Search click can land
-  // before an ensure pass has seen a just-changed native tier.
-  pendingNativeTier = resolveNativeTier();
+  // Only re-resolve while the popover is still open (Enter in the search box).
+  // A Search *click* happens with the popover closed, where resolveNativeTier
+  // falls back to `d=` in the URL — which on a first search does not exist yet,
+  // and after a tier change still names the PREVIOUS tier. Re-resolving there
+  // discarded the tier read while the popover was open and wiped the selection
+  // before it could be committed, so the first search after picking a level
+  // never filtered.
+  if (findChallengeFilterPopover()) pendingNativeTier = resolveNativeTier();
   pendingChallengeLevels = normalizeChallengeLevels(pendingChallengeLevels, pendingNativeTier);
   committedNativeTier = pendingNativeTier;
   committedChallengeLevels = pendingChallengeLevels.slice();
