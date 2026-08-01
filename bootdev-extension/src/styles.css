@@ -854,14 +854,6 @@
   color: #b6c0cc; /* --gray-300 */
   min-height: 26px;
 }
-.be-tg-filter-note {
-  /* Sits under the native "Showing X-Y of Z" row, matching its type. */
-  margin-top: 0.5rem;
-  font-size: 12px;
-  line-height: 1.4;
-  text-align: center;
-  color: #919dab; /* --gray-400 */
-}
 .be-tg-level-badge {
   /* Sits right after the difficulty icon in a result row, reading as part of
      the native metadata line rather than as an add-on. */

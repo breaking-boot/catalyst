@@ -24,7 +24,7 @@ const SETTINGS_DEFAULTS = {
   personalLeaderboards: true,
   profileXp: true,
   nextLesson: true,
-  challengeDifficulty: true, // Training Grounds difficulty filter (inert until tiers are picked)
+  challengeDifficulty: true, // Training Grounds level filter (inert until levels are picked)
   cliShortcuts: true, // Alt+C / Alt+Shift+C copy the lesson's bootdev commands
   assignmentShortcuts: false, // default-OFF: claims Alt+0-9 even while typing
   submitConfirm: false, // default-OFF: never interrupt a native action uninvited
@@ -65,7 +65,7 @@ const FEATURE_TOGGLES = [
   { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
-  { key: "challengeDifficulty", label: "Training Grounds difficulty filter", desc: "Easy/Medium/Hard pills in the Challenge Catalog's filter popover." },
+  { key: "challengeDifficulty", label: "Training Grounds level filter", shortDesc: "Show each challenge's difficulty level, and filter to exact levels.", desc: "Shows each search result's difficulty level (1-10) instead of hiding it in the icon's tooltip, and adds a Level section to the Challenge Catalog's filter popover. Pick a difficulty with Boot.dev's own filter and Catalyst offers the exact levels inside it — choose Hard, then ask for only level 10." },
   { key: "cliShortcuts", label: "CLI command shortcuts", desc: "On lessons that show bootdev commands, Alt+C copies the run command and Alt+Shift+C the submit command." },
   { key: "assignmentShortcuts", label: "Assignment step shortcuts", shortDesc: "Keyboard shortcuts to tick checklist steps and jump back to your code.", desc: "On lessons and challenges, Alt+1-Alt+9 tick the matching top-level checklist step, Alt+0 ticks the next unfinished box, and Alt+` (left of the 1 key) sends you back to the code editor or answer box — all of it while you're typing in the editor, a terminal, or an answer box. Off by default: on some Mac layouts Alt+digit types characters such as #." },
   { key: "submitConfirm", label: "Confirm code submissions", shortDesc: "Ask before submitting when you click Submit on a code lesson.", desc: "Ask before submitting when you click Submit on a code lesson, so a stray click can't cost your streak. Boot.dev's Ctrl+Shift+Enter still submits immediately." },
