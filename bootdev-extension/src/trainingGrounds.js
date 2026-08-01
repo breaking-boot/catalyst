@@ -366,7 +366,15 @@ function commitChallengeSelection() {
 // Router handler for /v1/challenges/search relays.
 function handleChallengeSearch(json, catalyst) {
   if (!Array.isArray(json) || !isTrainingGroundsPage()) return;
-  if (!onTrainingGroundsRoute) ensureTrainingGroundsUiState();
+  // Adopt the route BEFORE judging the response. Browser Back produces no
+  // in-page click, so the only thing that notices the navigation is the 350ms
+  // route scan — and Vue refetches within a few ms of popstate. Without this,
+  // the response is measured against the page we just left (the catalog, which
+  // has no selection), and the URL sync below then deletes the `dl=` this route
+  // arrived with before it could ever be applied.
+  if (!onTrainingGroundsRoute || location.pathname !== lastTrainingGroundsPath) {
+    ensureTrainingGroundsUiState();
+  }
   lastChallengeSearch = {
     at: Date.now(),
     shownCount: json.length,
@@ -425,9 +433,13 @@ function syncChallengeSearchUrl() {
     const applied = lastChallengeSearch?.filtered ? lastChallengeSearch.appliedLevels : [];
     if (applied.length && applied.length < levelsForTier(committedNativeTier).length) {
       url.searchParams.set(CHALLENGE_LEVEL_URL_PARAM, applied.join(","));
-    } else {
+    } else if (!effectiveCommittedLevels().length) {
       url.searchParams.delete(CHALLENGE_LEVEL_URL_PARAM);
     }
+    // The remaining case — nothing applied yet, but a committed selection the
+    // current URL's tier still backs — is a refresh in flight. Leave `dl=`
+    // alone there: deleting it would throw away the user's selection on the
+    // strength of the very response that is about to be re-run.
     // Commas are legal in query values; undo URLSearchParams' %2C so shared
     // dl= URLs stay readable.
     const next = (url.pathname + url.search + url.hash).replace(/%2C/gi, ",");
