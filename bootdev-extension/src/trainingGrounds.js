@@ -637,8 +637,11 @@ function ensureLevelBadges() {
     if (!found) continue;
     resolved += 1;
     // The icon sits in a tooltip wrapper; put the badge after that wrapper so
-    // the native hover tooltip keeps working untouched.
-    const anchor = found.img.closest(".tooltip-box") || found.img;
+    // the native hover tooltip keeps working untouched. The wrapper is found
+    // by its aria-describedby (which points at the tooltip it owns) rather
+    // than by its .tooltip-box class — an aria hook outranks a class name, and
+    // closest() stops at the icon's own wrapper rather than the row's.
+    const anchor = found.img.closest("[aria-describedby]") || found.img;
     const existing = anchor.nextElementSibling;
     if (existing?.classList?.contains("be-tg-level-badge")) {
       if (existing.dataset.beLevel === String(found.level)) continue;
@@ -652,8 +655,11 @@ function ensureLevelBadges() {
     anchor.insertAdjacentElement("afterend", badge);
   }
   // Same class of failure as the API-side tripwire: if the alt text is renamed,
-  // badges silently stop appearing while everything else looks healthy.
-  if (!resolved) {
+  // badges silently stop appearing while everything else looks healthy. Scoped
+  // to the search route, where every /challenges/ link is a result row — the
+  // landing page can link challenges from other widgets that carry no
+  // difficulty icon, and warning about those would be noise.
+  if (!resolved && /\/search\/?$/.test(location.pathname)) {
     warnOnce(
       "tg:row-level",
       `found ${rows.length} challenge results but could not read a level from any of them — ` +
