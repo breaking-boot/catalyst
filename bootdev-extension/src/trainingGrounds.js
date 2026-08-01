@@ -257,6 +257,9 @@ function ensureTrainingGroundsUiState() {
   }
   ensureChallengeFilterDot();
   ensureLevelSection();
+  // Idempotent per-tick: the 2s scan re-badges whatever is rendered now, which
+  // covers local pagination and Vue re-renders without an observer.
+  ensureLevelBadges();
 }
 
 // ---------------------------------------------------------------------------
@@ -547,9 +550,70 @@ function ensureChallengeFilterDot() {
   btn.appendChild(dot);
 }
 
+// ---------------------------------------------------------------------------
+// Result-row level badges
+// ---------------------------------------------------------------------------
+
+// Boot.dev prints the level only in the difficulty icon's hover tooltip, so
+// finding a level-10 challenge means hovering every icon in turn. The number is
+// already in the markup as alt="Difficulty N" — on API-driven AND on
+// server-rendered loads, which is why this reads the row rather than the
+// relayed API record: one source that is always present beats an API join that
+// would need this exact fallback anyway (cold loads make no API call at all).
+// Display-only, so a missing value simply renders no badge.
+function challengeRowLevel(row) {
+  for (const img of row.querySelectorAll("img")) {
+    const match = /^\s*difficulty\s+(\d+)\s*$/i.exec(img.getAttribute("alt") || "");
+    if (!match) continue;
+    const level = Number(match[1]);
+    if (Number.isInteger(level) && level >= 1 && level <= 10) return { level, img };
+  }
+  return null;
+}
+
+function ensureLevelBadges() {
+  const rows = document.querySelectorAll('a[href^="/challenges/"]');
+  if (!rows.length) return;
+  let resolved = 0;
+  for (const row of rows) {
+    const found = challengeRowLevel(row);
+    if (!found) continue;
+    resolved += 1;
+    // The icon sits in a tooltip wrapper; put the badge after that wrapper so
+    // the native hover tooltip keeps working untouched.
+    const anchor = found.img.closest(".tooltip-box") || found.img;
+    const existing = anchor.nextElementSibling;
+    if (existing?.classList?.contains("be-tg-level-badge")) {
+      if (existing.dataset.beLevel === String(found.level)) continue;
+      existing.remove(); // row was re-rendered with a different challenge
+    }
+    const badge = document.createElement("span");
+    badge.className = "be-tg-level-badge";
+    badge.dataset.beLevel = String(found.level);
+    badge.textContent = String(found.level);
+    badge.title = `Difficulty ${found.level}`;
+    anchor.insertAdjacentElement("afterend", badge);
+  }
+  // Same class of failure as the API-side tripwire: if the alt text is renamed,
+  // badges silently stop appearing while everything else looks healthy.
+  if (!resolved) {
+    warnOnce(
+      "tg:row-level",
+      `found ${rows.length} challenge results but could not read a level from any of them — ` +
+      'Boot.dev may have changed the difficulty icon\'s alt text ("Difficulty N"). ' +
+      "See challengeRowLevel() in trainingGrounds.js."
+    );
+  }
+}
+
+function removeLevelBadges() {
+  for (const badge of document.querySelectorAll(".be-tg-level-badge")) badge.remove();
+}
+
 function removeTrainingGroundsUi() {
   document.getElementById("be-tg-level")?.remove();
   document.getElementById("be-tg-filter-dot")?.remove();
+  removeLevelBadges();
 }
 
 // ---------------------------------------------------------------------------

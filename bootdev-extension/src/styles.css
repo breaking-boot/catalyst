@@ -854,6 +854,16 @@
   color: #b6c0cc; /* --gray-300 */
   min-height: 26px;
 }
+.be-tg-level-badge {
+  /* Sits right after the difficulty icon in a result row, reading as part of
+     the native metadata line rather than as an add-on. */
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #919dab; /* --gray-400, like the row's "Interview"/"Code" label */
+  margin-left: -2px;
+  margin-right: 2px;
+}
 .be-tg-filter-dot {
   position: absolute; /* the native filter button is position:relative */
   top: -2px;
