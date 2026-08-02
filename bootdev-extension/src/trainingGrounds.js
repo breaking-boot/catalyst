@@ -48,6 +48,14 @@ const CHALLENGE_TIERS = [
 const CHALLENGE_COMMIT_VERIFY_MS = 1000;
 const CHALLENGE_ENTRY_HEAL_MS = 1500;
 
+// Per-tab memory of the last committed selection, so it survives SPA
+// navigation the way Boot.dev's own filters do — its Vue store keeps the
+// difficulty across a trip to the Dashboard and back, and a level selection
+// that vanished there would not "match the native". Deliberately NOT stored:
+// a real page load re-derives everything from the URL, exactly like the native
+// filters. Only ever re-applied to a route whose `d=` still names its tier, so
+// it cannot resurrect a filter Boot.dev has dropped.
+let rememberedChallengeSelection = null; // { tier, levels }
 let pendingNativeTier = null; // native tier the offered levels are scoped to
 let committedNativeTier = null; // the tier the committed levels belong to
 let pendingChallengeLevels = []; // popover selection, not yet applied
@@ -198,10 +206,29 @@ function syncChallengeFilterAttr() {
 // which is the right fail-open answer rather than an empty page.
 function adoptChallengeSelectionFromUrl() {
   committedNativeTier = nativeTierFromUrl();
-  committedChallengeLevels = normalizeChallengeLevels(
-    readChallengeLevelsFromUrl(),
-    committedNativeTier
-  );
+  const fromUrl = readChallengeLevelsFromUrl();
+  let levels = normalizeChallengeLevels(fromUrl, committedNativeTier);
+  // No `dl=` at all, but the route still carries the tier our last selection
+  // was made under: Boot.dev restored its own filter from its store and simply
+  // doesn't know about ours. Restore it rather than silently dropping it.
+  // A `dl=` that is present but incoherent is NOT topped up this way — the URL
+  // stays authoritative whenever it says anything.
+  if (
+    !fromUrl.length &&
+    committedNativeTier &&
+    rememberedChallengeSelection?.tier === committedNativeTier
+  ) {
+    levels = normalizeChallengeLevels(rememberedChallengeSelection.levels, committedNativeTier);
+  }
+  committedChallengeLevels = levels;
+  // A selection arriving in the URL (a shared link, a reload) becomes the one
+  // to remember, so it survives a later trip off the route too.
+  if (fromUrl.length && committedNativeTier) {
+    rememberedChallengeSelection = {
+      tier: committedNativeTier,
+      levels: committedChallengeLevels.slice(),
+    };
+  }
   pendingNativeTier = committedNativeTier;
   pendingChallengeLevels = committedChallengeLevels.slice();
   syncChallengeFilterAttr();
@@ -347,6 +374,12 @@ function commitChallengeSelection() {
   pendingChallengeLevels = normalizeChallengeLevels(pendingChallengeLevels, pendingNativeTier);
   committedNativeTier = pendingNativeTier;
   committedChallengeLevels = pendingChallengeLevels.slice();
+  // Remember what was committed — including an empty selection, so clearing
+  // the levels and searching genuinely clears them rather than leaving the
+  // previous pick to be restored on the next navigation.
+  rememberedChallengeSelection = committedNativeTier
+    ? { tier: committedNativeTier, levels: committedChallengeLevels.slice() }
+    : null;
   syncChallengeFilterAttr();
   ensureChallengeFilterDot();
 
@@ -781,6 +814,7 @@ function applyChallengeFilterSetting(before, after) {
   const now = after[CHALLENGE_FILTER_FEATURE] !== false;
   if (was === now) return;
   if (!now) {
+    rememberedChallengeSelection = null; // turning the feature off forgets it
     // Restore the unfiltered view first (the relay it produces is still
     // handled), then let the ensure pass tear the rest down.
     const needRestore = isTrainingGroundsPage() && lastChallengeSearch?.filtered;
