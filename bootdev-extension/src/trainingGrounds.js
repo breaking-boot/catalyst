@@ -59,6 +59,7 @@ const CHALLENGE_ENTRY_HEAL_MS = 1500;
 // filters. Only ever re-applied to a route whose `d=` still names its tier, so
 // it cannot resurrect a filter Boot.dev has dropped.
 let rememberedChallengeSelection = null; // { tier, levels }
+let lastAdoptedUrlKey = null; // the d=/dl= the current state was derived from
 let pendingNativeTier = null; // native tier the offered levels are scoped to
 let committedNativeTier = null; // the tier the committed levels belong to
 let pendingChallengeLevels = []; // popover selection, not yet applied
@@ -116,6 +117,18 @@ function committedChallengeActive() {
     committedChallengeLevels.length >= 1 &&
     committedChallengeLevels.length < offered.length
   );
+}
+
+// The two filter params Catalyst derives its state from. Boot.dev restores its
+// own difficulty from its Vue store *after* a route settles, so `d=` can appear
+// a beat after the navigation that Catalyst already adopted — watching this key
+// is what notices that.
+function challengeUrlKey() {
+  try {
+    const params = new URLSearchParams(location.search);
+    return `${params.get(NATIVE_DIFFICULTY_URL_PARAM) || ""}|${params.get(CHALLENGE_LEVEL_URL_PARAM) || ""}`;
+  } catch (_) {}
+  return "";
 }
 
 function readChallengeLevelsFromUrl() {
@@ -234,6 +247,7 @@ function adoptChallengeSelectionFromUrl() {
   }
   pendingNativeTier = committedNativeTier;
   pendingChallengeLevels = committedChallengeLevels.slice();
+  lastAdoptedUrlKey = challengeUrlKey();
   syncChallengeFilterAttr();
 }
 
@@ -271,6 +285,7 @@ function leaveTrainingGroundsRoute() {
   lastTrainingGroundsPath = null;
   pendingNativeTier = null;
   committedNativeTier = null;
+  lastAdoptedUrlKey = null;
   pendingChallengeLevels = [];
   committedChallengeLevels = [];
   lastChallengeSearch = null;
@@ -304,6 +319,16 @@ function ensureTrainingGroundsUiState() {
     lastChallengeRefreshSignature = null;
     adoptChallengeSelectionFromUrl();
     syncChallengeFilterUi();
+  } else if (challengeUrlKey() !== lastAdoptedUrlKey) {
+    // The filter params changed without a route change. Boot.dev's nav-bar
+    // Training -> Search link navigates with no query at all and only then
+    // restores its own difficulty from its store, so `d=` lands after Catalyst
+    // has already adopted the route — and nothing would look again, because the
+    // path stops changing. Re-adopt, then heal the results if a selection came
+    // back that the rendered page doesn't reflect.
+    adoptChallengeSelectionFromUrl();
+    syncChallengeFilterUi();
+    if (lastChallengeSearch) maybeHealChallengeResults();
   }
   ensureChallengeFilterDot();
   ensureLevelSection();
@@ -428,9 +453,14 @@ function handleChallengeSearch(json, catalyst) {
   setTrackedTimeout(syncChallengeSearchUrl, 300);
   ensureChallengeFilterDot();
 
-  // Backstop: if what rendered doesn't match the committed tiers (e.g. a
-  // fetch raced the commit), refresh once per distinct selection — the
-  // signature guard makes a loop impossible even if refreshes stop working.
+  maybeHealChallengeResults();
+}
+
+// Backstop: if what rendered doesn't match the committed levels (e.g. a fetch
+// raced the commit, or a selection was restored after the search had already
+// run), refresh once per distinct selection — the signature guard makes a loop
+// impossible even if refreshes stop working.
+function maybeHealChallengeResults() {
   if (resultsMatchCommitted()) {
     lastChallengeRefreshSignature = null;
     return;
