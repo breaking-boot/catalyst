@@ -1,8 +1,8 @@
 // trainingGrounds.js
 // Training Grounds (Challenge Catalog) difficulty LEVEL filter. Injects a
-// Catalyst "Level" section into Boot.dev's filter popover; injected.js filters
-// the challenges/search response before Vue consumes it, so the native list,
-// its "Showing X-Y of Z" line, and pagination all stay correct.
+// Catalyst "Difficulty Level" section into Boot.dev's filter popover; injected.js
+// filters the challenges/search response before Vue consumes it, so the native
+// list, its "Showing X-Y of Z" line, and pagination all stay correct.
 //
 // Boot.dev shipped its own Easy/Medium/Hard filter on 2026-08-01 (`d=hard` in
 // the query, filtered server-side), which made Catalyst's own tier pills
@@ -16,7 +16,10 @@
 // live QA): pill clicks — and "Clear filters" — are pending/visual only until
 // Boot.dev's Search button commits them; the committed state travels in the
 // page URL (`dl=8,10`, alongside Boot.dev's own `d=hard`); each tab is
-// independent and nothing is stored. Committed levels are handed to
+// independent and nothing is written to storage — the only memory is
+// `rememberedChallengeSelection` below, which lives as long as the tab does
+// and exists so SPA navigation behaves like Boot.dev's own filters. Committed
+// levels are handed to
 // injected.js through a DOM attribute (`data-be-dl` on <html>) — a synchronous
 // channel, so the fetch a Search click triggers already sees the
 // just-committed state.
@@ -136,7 +139,7 @@ function nativeTierFromUrl() {
 }
 
 // The native Difficulty section, by its header text. Catalyst's own section is
-// deliberately labelled "Level" so this can never match it.
+// deliberately labelled "Difficulty Level", which this exact match cannot hit.
 function findNativeDifficultySection(popover) {
   for (const section of popover.querySelectorAll("section")) {
     for (const span of section.querySelectorAll("span")) {
@@ -683,6 +686,27 @@ function levelBadgeAnchor(row, img) {
   return parent && row.contains(parent) ? parent : img;
 }
 
+// A refresh serves server-rendered HTML that Vue hydrates a moment later.
+// Hydration walks the existing DOM **by position**, so a badge inserted before
+// it runs sits exactly where Vue expects its own type-label <span>. Vue then
+// adopts our element: it overwrites the text with "Code"/"Interview" but keeps
+// our class, because it only patches what differs from the vnode it is
+// matching. The row ends up with no level and its type label wearing badge
+// styling — the "first few results have no number" report, since the first rows
+// are the ones still in server-rendered form.
+//
+// Hand the element back rather than removing it. Vue owns it now, and removing
+// it would delete the row's type label until the next re-render.
+function reclaimAdoptedBadge(badge) {
+  badge.classList.remove("be-tg-level-badge");
+  delete badge.dataset.beLevel;
+  badge.removeAttribute("title");
+  // The class Vue's own label carries (ui/html/result_row.html); without it the
+  // adopted span would render in the inherited color rather than gray-400.
+  badge.classList.add("text-gray-400");
+  console.debug("[catalyst] reclaimed a level badge adopted by Vue hydration");
+}
+
 function ensureLevelBadges() {
   // Also reached directly from timers, so it re-checks its own preconditions
   // rather than relying on the ensure pass that usually calls it.
@@ -699,6 +723,11 @@ function ensureLevelBadges() {
   let resolved = 0;
   for (const row of rows) {
     const found = challengeRowLevel(row);
+    // A badge whose text is no longer its own level was adopted by hydration.
+    // Give it back before deciding what this row needs.
+    for (const badge of row.querySelectorAll(".be-tg-level-badge")) {
+      if (badge.textContent !== badge.dataset.beLevel) reclaimAdoptedBadge(badge);
+    }
     const existing = row.querySelectorAll(".be-tg-level-badge");
     if (!found) {
       // No readable level: drop anything left over from a previous challenge
@@ -716,7 +745,8 @@ function ensureLevelBadges() {
     if (
       existing.length === 1 &&
       existing[0] === anchor.nextElementSibling &&
-      existing[0].dataset.beLevel === String(found.level)
+      existing[0].dataset.beLevel === String(found.level) &&
+      existing[0].textContent === String(found.level) // not adopted by Vue
     ) {
       continue;
     }
