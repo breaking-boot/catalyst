@@ -699,14 +699,28 @@ function ensureLevelBadges() {
   let resolved = 0;
   for (const row of rows) {
     const found = challengeRowLevel(row);
-    if (!found) continue;
+    const existing = row.querySelectorAll(".be-tg-level-badge");
+    if (!found) {
+      // No readable level: drop anything left over from a previous challenge
+      // rather than leaving a stale number on the row.
+      for (const badge of existing) badge.remove();
+      continue;
+    }
     resolved += 1;
     const anchor = levelBadgeAnchor(row, found.img);
-    const existing = anchor.nextElementSibling;
-    if (existing?.classList?.contains("be-tg-level-badge")) {
-      if (existing.dataset.beLevel === String(found.level)) continue;
-      existing.remove(); // row was re-rendered with a different challenge
+    // Re-derive from scratch unless the row already holds exactly one badge,
+    // in the right place, with the right level. Checking the whole row rather
+    // than just the anchor's next sibling means a badge Vue moved, duplicated,
+    // or left behind from another challenge is repaired on the next pass
+    // instead of persisting.
+    if (
+      existing.length === 1 &&
+      existing[0] === anchor.nextElementSibling &&
+      existing[0].dataset.beLevel === String(found.level)
+    ) {
+      continue;
     }
+    for (const badge of existing) badge.remove();
     const badge = document.createElement("span");
     badge.className = "be-tg-level-badge";
     badge.dataset.beLevel = String(found.level);
