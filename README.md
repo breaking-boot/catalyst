@@ -42,7 +42,7 @@ catalyst/
       boss.js              Boss-event tracker
       nextLesson.js        Next Lesson nav link and Alt+N shortcut
       updateCheck.js       Opt-in GitHub release check
-      trainingGrounds.js   Training Grounds difficulty filter
+      trainingGrounds.js   Training Grounds level filter
       submitConfirm.js     Optional confirmation before a code submission
       cliShortcuts.js      Alt+C / Alt+Shift+C copy the lesson's bootdev commands
       assignmentShortcuts.js  Alt+0-9 tick checklist steps, Alt+` returns to your code
@@ -118,7 +118,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 ### Settings
 
 - Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chromium browsers hide extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
-- The popup toggles the eleven features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds difficulty filter, the CLI command shortcuts, the checklist step shortcuts (off by default), code submission confirmation (off by default), and leaderboard comparisons (XP/karma).
+- The popup toggles the eleven features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds level filter, the CLI command shortcuts, the checklist step shortcuts (off by default), code submission confirmation (off by default), and leaderboard comparisons (XP/karma).
 - The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), and per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards).
 - Settings sync across your devices (`chrome.storage.sync`; in Brave they stay on-device) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on Boot.dev.
 
@@ -149,10 +149,13 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 ### Training Grounds
 
-- The Challenge Catalog's filter popover (`/training-grounds` → the filter icon next to Search) gains a **Difficulty** section with **Easy (1-4)**, **Medium (5-7)**, and **Hard (8-10)** pills — the tiers behind Boot.dev's own difficulty icons, which the site doesn't let you filter by natively.
-- It behaves exactly like the native Language/Type pills: picks apply when you click **Search**, "Clear filters" clears them too, and each browser tab keeps its own filter. Selecting no tiers (or all three) means "all difficulties".
+- **Every result shows its difficulty level.** Boot.dev prints the number only in the difficulty icon's hover tooltip, so finding the level 10 challenges means hovering each icon in turn. Catalyst prints it next to the icon instead.
+- **Filter to an exact level.** Boot.dev's own difficulty filter narrows to Easy, Medium, or Hard — but "Hard" is levels 8, 9 and 10, and the level 10 challenges are worth the most XP. Pick a difficulty with Boot.dev's filter and the Catalyst **Difficulty Level** section below it offers the individual levels inside it: choose Hard, then ask for only 10.
+- Levels are offered only once a difficulty is chosen — the Difficulty Level section says so until then. Without a difficulty, results are spread across all ten levels, so picking just one would return very few challenges for reasons that have nothing to do with the filter.
+- It behaves exactly like the native pills: picks apply when you click **Search**, "Clear filters" clears them too, and each browser tab keeps its own selection. Selecting every level in the difficulty is the same as not filtering at all.
+- Your level choice follows you around the site the same way Boot.dev's difficulty does — leave the search page and come back, or use the browser's Back and Forward buttons, and it's still there. It is dropped whenever Boot.dev drops its own difficulty, so the two can never disagree, and nothing about it is saved between browser sessions.
 - The filtered result list, the "Showing X-Y of Z" count, and the Prev/Next pages are all genuinely correct for the filtered set — Catalyst filters the search response before the page renders it, rather than hiding cards afterwards.
-- While a filter is applied, a small **gold dot** marks the filter icon, and the page URL carries it (`diff=easy,hard`) — copy the URL and another Catalyst user opens the same filtered search.
+- While a filter is applied, a small **gold dot** marks the filter icon, and the page URL carries it (`dl=10`) — copy the URL and another Catalyst user opens the same filtered search. Older shared links using the previous `diff=` format simply load unfiltered.
 - Challenges whose difficulty can't be read are never hidden, and if anything unexpected happens the page simply gets its normal unfiltered results.
 
 ### Leaderboards

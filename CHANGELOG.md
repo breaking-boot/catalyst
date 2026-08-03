@@ -1,4 +1,25 @@
 # Changelog
+## v0.13.0 - Filter Training Grounds challenges by exact difficulty level
+
+Boot.dev added its own Easy/Medium/Hard filter to the Challenge Catalog, making Catalyst's version redundant. Catalyst now builds on the native filter by letting you narrow the results to an exact difficulty level.
+
+### Added
+
+* **Difficulty levels are shown directly in search results.** Boot.dev normally shows the level only when you hover over the difficulty icon. Catalyst now prints it beside the icon, making specific levels easier to find.
+
+### Changed
+
+* **Difficulty pills have been replaced with level pills.** Select a difficulty using Boot.dev's native filter and Catalyst offers the individual levels inside it. For example, selecting Hard provides levels 8, 9, and 10.
+* **A native difficulty must be selected before level filtering is available.** Without one, the Difficulty Level section prompts you to select a difficulty first. This keeps the exact-level filter scoped to the server-filtered results that match the selected difficulty.
+* **Shared links now use `dl=` instead of `diff=`.** Older links containing `diff=` no longer apply a Catalyst filter and load normally.
+
+### Notes
+
+* No new permissions, API calls, storage keys, dependencies, or backup-format changes.
+* The existing `challengeDifficulty` setting is unchanged, so the current enabled or disabled state carries over.
+* The selected level is stored only in the page URL and the current tab. It is not persisted between browser sessions.
+* Catalyst drops the level selection whenever Boot.dev drops or changes the native difficulty, preventing the two filters from disagreeing.
+
 ## v0.12.2 - League comparisons, boss tracker resilience, and rename detection
 
 A follow-up to v0.12.1. That release fixed one silently broken feature; this one

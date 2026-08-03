@@ -1,42 +1,69 @@
 // trainingGrounds.js
-// Training Grounds (Challenge Catalog) difficulty filter. Injects a Catalyst
-// "Difficulty" section into Boot.dev's filter popover; injected.js filters the
-// challenges/search response before Vue consumes it, so the native list,
-// count, and pagination stay correct.
+// Training Grounds (Challenge Catalog) difficulty LEVEL filter. Injects a
+// Catalyst "Difficulty Level" section into Boot.dev's filter popover; injected.js
+// filters the challenges/search response before Vue consumes it, so the native
+// list, its "Showing X-Y of Z" line, and pagination all stay correct.
+//
+// Boot.dev shipped its own Easy/Medium/Hard filter on 2026-08-01 (`d=hard` in
+// the query, filtered server-side), which made Catalyst's own tier pills
+// redundant. Catalyst now refines that instead of duplicating it: pick a tier
+// natively and Catalyst offers the exact levels inside it (Hard -> 8/9/10), so
+// you can ask for only level 10. With no native tier selected, no levels are
+// offered at all — an unfiltered search spreads ~46 records across all ten
+// levels, so a single-level pick there would look broken while working.
 //
 // Interaction model deliberately mirrors the native filter pills (2026-07-15
 // live QA): pill clicks — and "Clear filters" — are pending/visual only until
 // Boot.dev's Search button commits them; the committed state travels in the
-// page URL (`diff=easy,hard`); each tab is independent and nothing is stored.
-// Committed tiers are handed to injected.js through a DOM attribute
-// (`data-be-diff` on <html>) — a synchronous channel, so the fetch a Search
-// click triggers already sees the just-committed state.
+// page URL (`dl=8,10`, alongside Boot.dev's own `d=hard`); each tab is
+// independent and nothing is written to storage — the only memory is
+// `rememberedChallengeSelection` below, which lives as long as the tab does
+// and exists so SPA navigation behaves like Boot.dev's own filters. Committed
+// levels are handed to
+// injected.js through a DOM attribute (`data-be-dl` on <html>) — a synchronous
+// channel, so the fetch a Search click triggers already sees the
+// just-committed state.
 //
 // Cold loads (F5 / pasted URL) server-render the results with NO API call, so
-// a diff-armed load needs one self-triggered refresh before the filter shows.
+// a dl-armed load needs one self-triggered refresh before the filter shows.
 //
 // Evidence and design decisions: reference_data/catalyst_versions/
-// v0.10.0_challenge_difficulty_filter/difficulty_filter_plan.md
+// v0.13.0_challenge_level_filter/implementation_plan.md
 
 const CHALLENGE_FILTER_FEATURE = "challengeDifficulty";
-const CHALLENGE_DIFF_URL_PARAM = "diff";
+const CHALLENGE_LEVEL_URL_PARAM = "dl";
+// Boot.dev's own tier param. Catalyst reads it and never writes it.
+const NATIVE_DIFFICULTY_URL_PARAM = "d";
 // Keep both in sync with injected.js.
-const CHALLENGE_DIFF_ATTR = "data-be-diff";
+const CHALLENGE_LEVEL_ATTR = "data-be-dl";
 const CHALLENGE_REFRESH_NONCE_PARAM = "be_r";
-// Tier ids/bounds mirror boot.dev's own difficulty icons; keep in sync with
-// DIFFICULTY_TIERS in injected.js.
+// Tier -> the exact levels inside it. Confirmed against four tier-filtered
+// captures (2026-08-01): easy 1-4, medium 5-7, hard 8-10, zero leakage in any
+// of them. This is now the ONLY copy — injected.js filters on exact levels and
+// needs no tier bounds at all.
 const CHALLENGE_TIERS = [
-  { id: "easy", label: "Easy", range: "1-4" },
-  { id: "medium", label: "Medium", range: "5-7" },
-  { id: "hard", label: "Hard", range: "8-10" },
+  { id: "easy", label: "Easy", levels: [1, 2, 3, 4] },
+  { id: "medium", label: "Medium", levels: [5, 6, 7] },
+  { id: "hard", label: "Hard", levels: [8, 9, 10] },
 ];
 // How long after a commit / route entry to wait for a search response before
 // concluding Boot.dev skipped the request and triggering our own refresh.
 const CHALLENGE_COMMIT_VERIFY_MS = 1000;
 const CHALLENGE_ENTRY_HEAL_MS = 1500;
 
-let pendingChallengeTiers = []; // popover selection, not yet applied
-let committedChallengeTiers = []; // applied by the last Search in this tab
+// Per-tab memory of the last committed selection, so it survives SPA
+// navigation the way Boot.dev's own filters do — its Vue store keeps the
+// difficulty across a trip to the Dashboard and back, and a level selection
+// that vanished there would not "match the native". Deliberately NOT stored:
+// a real page load re-derives everything from the URL, exactly like the native
+// filters. Only ever re-applied to a route whose `d=` still names its tier, so
+// it cannot resurrect a filter Boot.dev has dropped.
+let rememberedChallengeSelection = null; // { tier, levels }
+let lastAdoptedUrlKey = null; // the d=/dl= the current state was derived from
+let pendingNativeTier = null; // native tier the offered levels are scoped to
+let committedNativeTier = null; // the tier the committed levels belong to
+let pendingChallengeLevels = []; // popover selection, not yet applied
+let committedChallengeLevels = []; // applied by the last Search in this tab
 let lastChallengeSearch = null; // what the page currently renders (from relay)
 let lastChallengeRefreshSignature = null; // backstop refreshes: one per selection
 let challengeCommitVerifyTimer = null;
@@ -51,36 +78,119 @@ function isTrainingGroundsPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Tier state
+// Level state
 // ---------------------------------------------------------------------------
 
-function normalizeChallengeTiers(value) {
+function tierById(id) {
+  return CHALLENGE_TIERS.find((t) => t.id === id) || null;
+}
+
+function levelsForTier(id) {
+  return tierById(id)?.levels || [];
+}
+
+// Levels are only ever meaningful inside a tier, so normalizing intersects with
+// what that tier offers. This is also the guard against a stale selection: a
+// `dl=10` committed under Hard normalizes to [] the moment the tier becomes
+// Easy, instead of filtering an all-1-4 response down to nothing.
+function normalizeChallengeLevels(value, tierId) {
+  const allowed = new Set(levelsForTier(tierId));
   const list = Array.isArray(value) ? value : [];
-  return CHALLENGE_TIERS.map((t) => t.id).filter((id) => list.includes(id));
+  const seen = new Set();
+  for (const raw of list) {
+    const n = Number(raw);
+    if (Number.isInteger(n) && allowed.has(n)) seen.add(n);
+  }
+  return [...seen].sort((a, b) => a - b);
 }
 
-function challengeTiersEqual(a, b) {
-  return a.length === b.length && a.every((tier, i) => tier === b[i]);
+function challengeLevelsEqual(a, b) {
+  return a.length === b.length && a.every((level, i) => level === b[i]);
 }
 
-// 1-2 tiers filter; none or all three means "all difficulties" (no filtering).
+// Selecting every level the tier offers is the same as the native tier filter
+// on its own, so that counts as inactive — the same rule the tier version used
+// for "all three tiers selected".
 function committedChallengeActive() {
+  const offered = levelsForTier(committedNativeTier);
   return (
-    committedChallengeTiers.length >= 1 &&
-    committedChallengeTiers.length < CHALLENGE_TIERS.length
+    committedChallengeLevels.length >= 1 &&
+    committedChallengeLevels.length < offered.length
   );
 }
 
-function readChallengeTiersFromUrl() {
+// The two filter params Catalyst derives its state from. Boot.dev restores its
+// own difficulty from its Vue store *after* a route settles, so `d=` can appear
+// a beat after the navigation that Catalyst already adopted — watching this key
+// is what notices that.
+function challengeUrlKey() {
   try {
-    const raw = new URLSearchParams(location.search).get(CHALLENGE_DIFF_URL_PARAM);
-    if (raw !== null) return normalizeChallengeTiers(raw.split(","));
+    const params = new URLSearchParams(location.search);
+    return `${params.get(NATIVE_DIFFICULTY_URL_PARAM) || ""}|${params.get(CHALLENGE_LEVEL_URL_PARAM) || ""}`;
+  } catch (_) {}
+  return "";
+}
+
+function readChallengeLevelsFromUrl() {
+  try {
+    const raw = new URLSearchParams(location.search).get(CHALLENGE_LEVEL_URL_PARAM);
+    if (raw !== null) return raw.split(",");
   } catch (_) {}
   return [];
 }
 
-// The synchronous state channel to injected.js: attribute present = filter
-// these tiers; absent = feature off / nothing committed.
+// Boot.dev's committed tier. Always available (it drives the page's own
+// server-side filter), which is what makes route entry, cold loads, and shared
+// links work without reading any DOM.
+function nativeTierFromUrl() {
+  try {
+    const raw = new URLSearchParams(location.search).get(NATIVE_DIFFICULTY_URL_PARAM);
+    const id = String(raw || "").toLowerCase();
+    return tierById(id) ? id : null;
+  } catch (_) {}
+  return null;
+}
+
+// The native Difficulty section, by its header text. Catalyst's own section is
+// deliberately labelled "Difficulty Level", which this exact match cannot hit.
+function findNativeDifficultySection(popover) {
+  for (const section of popover.querySelectorAll("section")) {
+    for (const span of section.querySelectorAll("span")) {
+      if (normalizeText(span.textContent).toLowerCase() === "difficulty") return section;
+    }
+  }
+  return null;
+}
+
+// The PENDING native tier — the one clicked but not yet Searched. Selection is
+// not on the pills themselves: the 2026-08-01 popover diff showed it lives only
+// in Tailwind color utilities (border-gray-200 vs border-gray-600), which would
+// be a color-value dependency. What does change is the section header icon,
+// which swaps its generic <svg> for the tier's own artwork. Match the authored
+// filename stem only — the build hash in the middle is never matched.
+function nativeTierFromPopover(section) {
+  for (const img of section.querySelectorAll("img")) {
+    const match = /difficulty_(easy|medium|hard)_icon/.exec(img.getAttribute("src") || "");
+    if (match) return match[1];
+  }
+  return null;
+}
+
+// While the popover is open the section is authoritative INCLUDING its negative
+// answer: clicking a selected tier off leaves `d=` stale in the URL, and
+// falling back to it would keep offering levels the user just dismissed. When
+// the popover is closed (or its markup moved) the URL is all there is.
+function resolveNativeTier() {
+  const popover = findChallengeFilterPopover();
+  if (popover) {
+    const section = findNativeDifficultySection(popover);
+    if (section) return nativeTierFromPopover(section);
+  }
+  return nativeTierFromUrl();
+}
+
+// The synchronous state channel to injected.js: attribute present = filter to
+// these levels; absent = feature off / nothing committed.
 function syncChallengeFilterAttr() {
   try {
     const root = document.documentElement;
@@ -89,9 +199,15 @@ function syncChallengeFilterAttr() {
       isFeatureEnabled(CHALLENGE_FILTER_FEATURE) &&
       committedChallengeActive()
     ) {
-      root.setAttribute(CHALLENGE_DIFF_ATTR, committedChallengeTiers.join(","));
+      // Tier-prefixed ("hard:8,10"): injected.js only applies the filter to a
+      // request that actually carries that tier, so a selection left over from
+      // a search Boot.dev has since cleared can never filter anything.
+      root.setAttribute(
+        CHALLENGE_LEVEL_ATTR,
+        `${committedNativeTier}:${committedChallengeLevels.join(",")}`
+      );
     } else {
-      root.removeAttribute(CHALLENGE_DIFF_ATTR);
+      root.removeAttribute(CHALLENGE_LEVEL_ATTR);
     }
   } catch (_) {}
 }
@@ -100,17 +216,57 @@ function syncChallengeFilterAttr() {
 // Route entry/leave (per-tab, URL-derived — like the native filters)
 // ---------------------------------------------------------------------------
 
+// The page URL is the single authority on what is applied here: `d=` for
+// Boot.dev's tier, `dl=` for Catalyst's levels. An incoherent shared link
+// (`d=easy&dl=10`) normalizes to no levels and therefore filters nothing,
+// which is the right fail-open answer rather than an empty page.
+function adoptChallengeSelectionFromUrl() {
+  committedNativeTier = nativeTierFromUrl();
+  const fromUrl = readChallengeLevelsFromUrl();
+  let levels = normalizeChallengeLevels(fromUrl, committedNativeTier);
+  // No `dl=` at all, but the route still carries the tier our last selection
+  // was made under: Boot.dev restored its own filter from its store and simply
+  // doesn't know about ours. Restore it rather than silently dropping it.
+  // A `dl=` that is present but incoherent is NOT topped up this way — the URL
+  // stays authoritative whenever it says anything.
+  if (
+    !fromUrl.length &&
+    committedNativeTier &&
+    rememberedChallengeSelection?.tier === committedNativeTier
+  ) {
+    levels = normalizeChallengeLevels(rememberedChallengeSelection.levels, committedNativeTier);
+  }
+  committedChallengeLevels = levels;
+  // A selection arriving in the URL (a shared link, a reload) becomes the one
+  // to remember, so it survives a later trip off the route too.
+  if (fromUrl.length && committedNativeTier) {
+    rememberedChallengeSelection = {
+      tier: committedNativeTier,
+      levels: committedChallengeLevels.slice(),
+    };
+  }
+  pendingNativeTier = committedNativeTier;
+  pendingChallengeLevels = committedChallengeLevels.slice();
+  lastAdoptedUrlKey = challengeUrlKey();
+  syncChallengeFilterAttr();
+}
+
 function enterTrainingGroundsRoute() {
   onTrainingGroundsRoute = true;
   lastTrainingGroundsPath = location.pathname;
   lastChallengeSearch = null;
   lastChallengeRefreshSignature = null;
-  committedChallengeTiers = readChallengeTiersFromUrl();
-  pendingChallengeTiers = committedChallengeTiers.slice();
-  syncChallengeFilterAttr();
+  adoptChallengeSelectionFromUrl();
+
+  // A cold load arrives server-rendered and Vue hydrates it shortly after, so
+  // badges written before hydration can be discarded with the nodes they were
+  // attached to. Re-run a couple of times on the way in rather than waiting up
+  // to 2s for the next DOM scan. Idempotent, so extra passes cost nothing.
+  setTrackedTimeout(ensureLevelBadges, 300);
+  setTrackedTimeout(ensureLevelBadges, 1200);
 
   // Cold loads server-render the results without an API call; if this entry
-  // arrived diff-armed and no search response shows up, trigger one refresh
+  // arrived level-armed and no search response shows up, trigger one refresh
   // so the filter actually applies. One attempt only — a failure leaves the
   // native unfiltered content (fail-open).
   clearTrackedTimeout(challengeEntryHealTimer);
@@ -127,8 +283,11 @@ function enterTrainingGroundsRoute() {
 function leaveTrainingGroundsRoute() {
   onTrainingGroundsRoute = false;
   lastTrainingGroundsPath = null;
-  pendingChallengeTiers = [];
-  committedChallengeTiers = [];
+  pendingNativeTier = null;
+  committedNativeTier = null;
+  lastAdoptedUrlKey = null;
+  pendingChallengeLevels = [];
+  committedChallengeLevels = [];
   lastChallengeSearch = null;
   lastChallengeRefreshSignature = null;
   clearTrackedTimeout(challengeCommitVerifyTimer);
@@ -150,16 +309,32 @@ function ensureTrainingGroundsUiState() {
   if (!onTrainingGroundsRoute) {
     enterTrainingGroundsRoute();
   } else if (location.pathname !== lastTrainingGroundsPath) {
-    // Internal navigation (landing <-> search): boot.dev remembers and
-    // re-runs its own search, so the committed filter stays — but
-    // uncommitted pill picks reset to the committed state, exactly like the
-    // native pending pills do on a remount.
+    // Internal navigation (landing <-> search). Re-adopt from the URL rather
+    // than carrying the old selection across: the destination's URL is the
+    // authority on what is actually applied there, and the catalog page has no
+    // filter at all. Carrying it forward is what let a selection made on the
+    // search page reappear on a later unfiltered search.
     lastTrainingGroundsPath = location.pathname;
-    pendingChallengeTiers = committedChallengeTiers.slice();
+    lastChallengeSearch = null;
+    lastChallengeRefreshSignature = null;
+    adoptChallengeSelectionFromUrl();
     syncChallengeFilterUi();
+  } else if (challengeUrlKey() !== lastAdoptedUrlKey) {
+    // The filter params changed without a route change. Boot.dev's nav-bar
+    // Training -> Search link navigates with no query at all and only then
+    // restores its own difficulty from its store, so `d=` lands after Catalyst
+    // has already adopted the route — and nothing would look again, because the
+    // path stops changing. Re-adopt, then heal the results if a selection came
+    // back that the rendered page doesn't reflect.
+    adoptChallengeSelectionFromUrl();
+    syncChallengeFilterUi();
+    if (lastChallengeSearch) maybeHealChallengeResults();
   }
   ensureChallengeFilterDot();
-  ensureDifficultySection();
+  ensureLevelSection();
+  // Idempotent per-tick: the 2s scan re-badges whatever is rendered now, which
+  // covers local pagination and Vue re-renders without an observer.
+  ensureLevelBadges();
 }
 
 // ---------------------------------------------------------------------------
@@ -174,11 +349,19 @@ function requestChallengeSearchRefresh() {
   );
 }
 
-// Do the currently rendered results reflect the committed tiers?
+// The committed selection is scoped to one native tier, so it only applies to
+// a search that still carries that tier. Boot.dev can drop its difficulty
+// without the popover ever opening, which leaves the cached tier stale.
+function effectiveCommittedLevels() {
+  if (!committedChallengeActive()) return [];
+  return nativeTierFromUrl() === committedNativeTier ? committedChallengeLevels : [];
+}
+
+// Do the currently rendered results reflect the committed levels?
 function resultsMatchCommitted() {
-  const effective = committedChallengeActive() ? committedChallengeTiers : [];
-  const applied = lastChallengeSearch?.filtered ? lastChallengeSearch.appliedTiers : [];
-  return challengeTiersEqual(effective, applied);
+  const effective = effectiveCommittedLevels();
+  const applied = lastChallengeSearch?.filtered ? lastChallengeSearch.appliedLevels : [];
+  return challengeLevelsEqual(effective, applied);
 }
 
 // Is this the challenge-catalog search form? The /training-grounds/search page
@@ -208,7 +391,23 @@ function handleTrainingGroundsSubmit(event) {
 }
 
 function commitChallengeSelection() {
-  committedChallengeTiers = pendingChallengeTiers.slice();
+  // Only re-resolve while the popover is still open (Enter in the search box).
+  // A Search *click* happens with the popover closed, where resolveNativeTier
+  // falls back to `d=` in the URL — which on a first search does not exist yet,
+  // and after a tier change still names the PREVIOUS tier. Re-resolving there
+  // discarded the tier read while the popover was open and wiped the selection
+  // before it could be committed, so the first search after picking a level
+  // never filtered.
+  if (findChallengeFilterPopover()) pendingNativeTier = resolveNativeTier();
+  pendingChallengeLevels = normalizeChallengeLevels(pendingChallengeLevels, pendingNativeTier);
+  committedNativeTier = pendingNativeTier;
+  committedChallengeLevels = pendingChallengeLevels.slice();
+  // Remember what was committed — including an empty selection, so clearing
+  // the levels and searching genuinely clears them rather than leaving the
+  // previous pick to be restored on the next navigation.
+  rememberedChallengeSelection = committedNativeTier
+    ? { tier: committedNativeTier, levels: committedChallengeLevels.slice() }
+    : null;
   syncChallengeFilterAttr();
   ensureChallengeFilterDot();
 
@@ -228,14 +427,22 @@ function commitChallengeSelection() {
 // Router handler for /v1/challenges/search relays.
 function handleChallengeSearch(json, catalyst) {
   if (!Array.isArray(json) || !isTrainingGroundsPage()) return;
-  if (!onTrainingGroundsRoute) ensureTrainingGroundsUiState();
+  // Adopt the route BEFORE judging the response. Browser Back produces no
+  // in-page click, so the only thing that notices the navigation is the 350ms
+  // route scan — and Vue refetches within a few ms of popstate. Without this,
+  // the response is measured against the page we just left (the catalog, which
+  // has no selection), and the URL sync below then deletes the `dl=` this route
+  // arrived with before it could ever be applied.
+  if (!onTrainingGroundsRoute || location.pathname !== lastTrainingGroundsPath) {
+    ensureTrainingGroundsUiState();
+  }
   lastChallengeSearch = {
     at: Date.now(),
     shownCount: json.length,
     originalCount: Number.isFinite(catalyst?.originalCount) ? catalyst.originalCount : json.length,
     resolvedCount: Number.isFinite(catalyst?.resolvedCount) ? catalyst.resolvedCount : null,
     filtered: catalyst?.filtered === true,
-    appliedTiers: normalizeChallengeTiers(catalyst?.appliedTiers),
+    appliedLevels: normalizeChallengeLevels(catalyst?.appliedLevels, committedNativeTier),
   };
   console.debug("[catalyst] challenge search", lastChallengeSearch);
   warnIfNoDifficultiesResolved(lastChallengeSearch);
@@ -246,55 +453,61 @@ function handleChallengeSearch(json, catalyst) {
   setTrackedTimeout(syncChallengeSearchUrl, 300);
   ensureChallengeFilterDot();
 
-  // Backstop: if what rendered doesn't match the committed tiers (e.g. a
-  // fetch raced the commit), refresh once per distinct selection — the
-  // signature guard makes a loop impossible even if refreshes stop working.
+  maybeHealChallengeResults();
+}
+
+// Backstop: if what rendered doesn't match the committed levels (e.g. a fetch
+// raced the commit, or a selection was restored after the search had already
+// run), refresh once per distinct selection — the signature guard makes a loop
+// impossible even if refreshes stop working.
+function maybeHealChallengeResults() {
   if (resultsMatchCommitted()) {
     lastChallengeRefreshSignature = null;
     return;
   }
-  const signature = (committedChallengeActive() ? committedChallengeTiers : []).join(",");
+  const signature = effectiveCommittedLevels().join(",");
   if (signature === lastChallengeRefreshSignature) return;
   lastChallengeRefreshSignature = signature;
   requestChallengeSearchRefresh();
 }
 
-// The v0.12.1 tripwire. Filtering deliberately keeps any record whose tier it
+// The v0.12.1 tripwire. Filtering deliberately keeps any record whose level it
 // cannot read, so a renamed difficulty field produces a perfectly healthy-
-// looking feature that filters nothing: pills toggle, `diff=` reaches the URL,
+// looking feature that filters nothing: pills toggle, `dl=` reaches the URL,
 // and the relay still reports filtered:true. The one number that gives it away
-// is how many records were tierable — 0 out of N means the field moved again.
-// Warn once per page load so the console says it plainly instead of the
-// symptom having to be noticed by eye.
-let noDifficultyWarned = false;
+// is how many records yielded a level — 0 out of N means the field moved again.
 function warnIfNoDifficultiesResolved(search) {
-  if (noDifficultyWarned) return;
   if (!search.filtered || search.resolvedCount === null) return;
   if (search.originalCount <= 0 || search.resolvedCount > 0) return;
-  noDifficultyWarned = true;
-  console.warn(
-    `[catalyst] difficulty filter read ${search.originalCount} challenges and could not tier any of them — ` +
+  warnOnce(
+    "tg:level-field",
+    `level filter read ${search.originalCount} challenges and could not read a level from any of them — ` +
     "Boot.dev likely renamed the difficulty field again. See challengeDifficulty() in injected.js."
   );
 }
 
 // Keep the address bar honest after every search: strip the refresh nonce,
-// and add/remove `diff=` to match what is actually filtering the results
-// (native searches rebuild the URL and drop it). history.replaceState only
-// repaints the address bar — Vue's router is not involved.
+// and add/remove `dl=` to match what is actually filtering the results
+// (native searches rebuild the URL and drop it). Boot.dev's own `d=` is never
+// touched. history.replaceState only repaints the address bar — Vue's router
+// is not involved.
 function syncChallengeSearchUrl() {
   if (!isTrainingGroundsPage()) return;
   try {
     const url = new URL(location.href);
     url.searchParams.delete(CHALLENGE_REFRESH_NONCE_PARAM);
-    const applied = lastChallengeSearch?.filtered ? lastChallengeSearch.appliedTiers : [];
-    if (applied.length && applied.length < CHALLENGE_TIERS.length) {
-      url.searchParams.set(CHALLENGE_DIFF_URL_PARAM, applied.join(","));
-    } else {
-      url.searchParams.delete(CHALLENGE_DIFF_URL_PARAM);
+    const applied = lastChallengeSearch?.filtered ? lastChallengeSearch.appliedLevels : [];
+    if (applied.length && applied.length < levelsForTier(committedNativeTier).length) {
+      url.searchParams.set(CHALLENGE_LEVEL_URL_PARAM, applied.join(","));
+    } else if (!effectiveCommittedLevels().length) {
+      url.searchParams.delete(CHALLENGE_LEVEL_URL_PARAM);
     }
+    // The remaining case — nothing applied yet, but a committed selection the
+    // current URL's tier still backs — is a refresh in flight. Leave `dl=`
+    // alone there: deleting it would throw away the user's selection on the
+    // strength of the very response that is about to be re-run.
     // Commas are legal in query values; undo URLSearchParams' %2C so shared
-    // diff= URLs stay readable.
+    // dl= URLs stay readable.
     const next = (url.pathname + url.search + url.hash).replace(/%2C/gi, ",");
     const current = location.pathname + location.search + location.hash;
     if (next !== current) history.replaceState(history.state, "", next);
@@ -320,15 +533,16 @@ function findChallengeFilterPopover() {
   return normalizeText(popover.textContent).toLowerCase().includes("filters") ? popover : null;
 }
 
-function ensureDifficultySection() {
+function ensureLevelSection() {
   const popover = findChallengeFilterPopover();
   if (!popover) return;
-  let section = popover.querySelector("#be-tg-difficulty");
+  let section = popover.querySelector("#be-tg-level");
   if (!section) {
-    section = buildDifficultySection();
-    // Native sections (Language/Type) share a container; append after them.
-    // In the "Select a language first" state no <section> exists — append to
-    // the popover itself, after its header row.
+    section = buildLevelSection();
+    // Native sections (Language/Type/Difficulty) share a container; append
+    // after them so Level reads as a refinement of Difficulty. In the "Select
+    // a language first" state no <section> exists — append to the popover
+    // itself, after its header row.
     const nativeSection = popover.querySelector("section");
     if (nativeSection && nativeSection.parentElement) {
       nativeSection.parentElement.appendChild(section);
@@ -336,12 +550,12 @@ function ensureDifficultySection() {
       popover.appendChild(section);
     }
   }
-  syncDifficultyPills(section);
+  syncLevelSection(section);
 }
 
-function buildDifficultySection() {
+function buildLevelSection() {
   const section = document.createElement("section");
-  section.id = "be-tg-difficulty";
+  section.id = "be-tg-level";
   section.className = "be-tg-section";
 
   const label = document.createElement("div");
@@ -351,52 +565,93 @@ function buildDifficultySection() {
     '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"' +
     ' fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"' +
     ' stroke-linejoin="round" aria-hidden="true"><path d="m10 4-5 16"></path>' +
-    '<path d="m19 4-5 16"></path></svg><span>Difficulty</span>';
+    // "Level" alone is ambiguous once a tier is picked and the empty-state
+    // hint disappears. Naming both makes the relationship to the native
+    // Difficulty section above it read on its own. findNativeDifficultySection
+    // matches the header span's text EXACTLY, so this longer label cannot be
+    // mistaken for the native section.
+    '<path d="m19 4-5 16"></path></svg><span>Difficulty Level</span>';
 
   const pills = document.createElement("div");
   pills.className = "be-tg-pills";
-  for (const tier of CHALLENGE_TIERS) {
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "be-tg-pill";
-    btn.dataset.beTier = tier.id;
-    btn.textContent = tier.label;
-    btn.title = `Difficulty ${tier.range}`;
-    btn.setAttribute("aria-pressed", "false");
-    btn.addEventListener("click", () => toggleChallengeTier(tier.id));
-    pills.appendChild(btn);
-  }
 
-  section.append(label, pills);
+  // Mirrors the native Type section's "Select a language first" state — the
+  // section stays visible and says why it is empty rather than vanishing.
+  const empty = document.createElement("div");
+  empty.className = "be-tg-empty";
+  empty.textContent = "Select a difficulty first";
+
+  section.append(label, pills, empty);
   return section;
 }
 
-function syncDifficultyPills(section) {
+// Rebuilds the pill row whenever the offered levels change, then reflects the
+// pending selection. Also the point where a native tier change drops levels
+// that no longer belong to it.
+function syncLevelSection(section) {
+  const tier = resolveNativeTier();
+  if (tier !== pendingNativeTier) {
+    pendingNativeTier = tier;
+    pendingChallengeLevels = normalizeChallengeLevels(pendingChallengeLevels, tier);
+  }
+
+  const pills = section.querySelector(".be-tg-pills");
+  const empty = section.querySelector(".be-tg-empty");
+  const offered = levelsForTier(tier);
+
+  if (section.dataset.beTier !== (tier || "")) {
+    section.dataset.beTier = tier || "";
+    pills.textContent = "";
+    for (const level of offered) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "be-tg-pill";
+      btn.dataset.beLevel = String(level);
+      btn.textContent = String(level);
+      btn.title = `Difficulty ${level}`;
+      btn.setAttribute("aria-pressed", "false");
+      btn.addEventListener("click", () => toggleChallengeLevel(level));
+      pills.appendChild(btn);
+    }
+  }
+
+  pills.hidden = !offered.length;
+  empty.hidden = Boolean(offered.length);
+  syncLevelPills(section);
+}
+
+function syncLevelPills(section) {
   for (const btn of section.querySelectorAll(".be-tg-pill")) {
-    const on = pendingChallengeTiers.includes(btn.dataset.beTier);
+    const on = pendingChallengeLevels.includes(Number(btn.dataset.beLevel));
     btn.setAttribute("aria-pressed", on ? "true" : "false");
   }
 }
 
 function syncChallengeFilterUi() {
-  const section = document.getElementById("be-tg-difficulty");
-  if (section) syncDifficultyPills(section);
+  const section = document.getElementById("be-tg-level");
+  if (section) syncLevelSection(section);
   ensureChallengeFilterDot();
 }
 
 // Pending only — nothing applies until Boot.dev's Search commits it, exactly
 // like the native pills.
-function toggleChallengeTier(id) {
-  pendingChallengeTiers = pendingChallengeTiers.includes(id)
-    ? pendingChallengeTiers.filter((tier) => tier !== id)
-    : normalizeChallengeTiers([...pendingChallengeTiers, id]);
+function toggleChallengeLevel(level) {
+  pendingChallengeLevels = pendingChallengeLevels.includes(level)
+    ? pendingChallengeLevels.filter((n) => n !== level)
+    : normalizeChallengeLevels([...pendingChallengeLevels, level], pendingNativeTier);
   syncChallengeFilterUi();
 }
 
-// Small gold dot on the filter button while a committed selection is actually
-// filtering results — visible with the popover closed, without duplicating
-// any counts. Pending (uncommitted) picks don't show it, matching how native
-// pending pills have no indicator either.
+// Small gold dot on the filter button while a level selection is actually
+// filtering the results on screen — visible with the popover closed, without
+// duplicating any counts. Pending (uncommitted) picks don't show it, matching
+// how native pending pills have no indicator either.
+//
+// Driven by what the last relayed search ACTUALLY filtered, not by the
+// committed state: Boot.dev can drop its difficulty tier without Catalyst
+// seeing it, and the dot must never advertise a filter that isn't in effect —
+// which is what left it lit on the catalog page after navigating away from a
+// filtered search.
 function ensureChallengeFilterDot() {
   const btn = findChallengeFilterButton();
   const existing = document.getElementById("be-tg-filter-dot");
@@ -404,7 +659,8 @@ function ensureChallengeFilterDot() {
     Boolean(btn) &&
     isTrainingGroundsPage() &&
     isFeatureEnabled(CHALLENGE_FILTER_FEATURE) &&
-    committedChallengeActive();
+    Boolean(lastChallengeSearch?.filtered) &&
+    lastChallengeSearch.appliedLevels.length > 0;
   if (!want) {
     existing?.remove();
     return;
@@ -417,9 +673,144 @@ function ensureChallengeFilterDot() {
   btn.appendChild(dot);
 }
 
+// ---------------------------------------------------------------------------
+// Result-row level badges
+// ---------------------------------------------------------------------------
+
+// Boot.dev prints the level only in the difficulty icon's hover tooltip, so
+// finding a level-10 challenge means hovering every icon in turn. The number is
+// already in the markup as alt="Difficulty N" — on API-driven AND on
+// server-rendered loads, which is why this reads the row rather than the
+// relayed API record: one source that is always present beats an API join that
+// would need this exact fallback anyway (cold loads make no API call at all).
+// Display-only, so a missing value simply renders no badge.
+function challengeRowLevel(row) {
+  for (const img of row.querySelectorAll("img")) {
+    const match = /^\s*difficulty\s+(\d+)\s*$/i.exec(img.getAttribute("alt") || "");
+    if (!match) continue;
+    const level = Number(match[1]);
+    if (Number.isInteger(level) && level >= 1 && level <= 10) return { level, img };
+  }
+  return null;
+}
+
+// Where the badge goes: after the icon's own tooltip wrapper, which is the
+// element that participates in the metadata flex row. Anything deeper is a
+// block container, so the badge would stack under the icon instead of beside
+// it.
+//
+// FRAGILE: class name. `tooltip-box` is Boot.dev's global tooltip wrapper
+// (unchanged across every capture from 2026-07-14 to 2026-08-01). An
+// aria-describedby hook was tried instead and is WRONG here: the whole row is
+// also a tooltip-box carrying that attribute, so when Vue reuses a row's DOM
+// and the inner wrapper's attribute is not yet assigned, closest() climbs to
+// the row wrapper — which sits outside the <a> — and the badge lands between
+// rows instead of in one. That is why the first results in a re-rendered list
+// lost their badge. The guards below make escaping the row impossible
+// regardless of which element is matched.
+function levelBadgeAnchor(row, img) {
+  const box = img.closest(".tooltip-box");
+  // A candidate containing the row's title is the row wrapper, not the icon's.
+  if (box && row.contains(box) && !box.querySelector("h3")) return box;
+  const parent = img.parentElement;
+  return parent && row.contains(parent) ? parent : img;
+}
+
+// A refresh serves server-rendered HTML that Vue hydrates a moment later.
+// Hydration walks the existing DOM **by position**, so a badge inserted before
+// it runs sits exactly where Vue expects its own type-label <span>. Vue then
+// adopts our element: it overwrites the text with "Code"/"Interview" but keeps
+// our class, because it only patches what differs from the vnode it is
+// matching. The row ends up with no level and its type label wearing badge
+// styling — the "first few results have no number" report, since the first rows
+// are the ones still in server-rendered form.
+//
+// Hand the element back rather than removing it. Vue owns it now, and removing
+// it would delete the row's type label until the next re-render.
+function reclaimAdoptedBadge(badge) {
+  badge.classList.remove("be-tg-level-badge");
+  delete badge.dataset.beLevel;
+  badge.removeAttribute("title");
+  // The class Vue's own label carries (ui/html/result_row.html); without it the
+  // adopted span would render in the inherited color rather than gray-400.
+  badge.classList.add("text-gray-400");
+  console.debug("[catalyst] reclaimed a level badge adopted by Vue hydration");
+}
+
+function ensureLevelBadges() {
+  // Also reached directly from timers, so it re-checks its own preconditions
+  // rather than relying on the ensure pass that usually calls it.
+  if (enhancerStopped || !isTrainingGroundsPage()) return;
+  if (!isFeatureEnabled(CHALLENGE_FILTER_FEATURE)) return;
+  const rows = document.querySelectorAll('a[href^="/challenges/"]');
+  if (!rows.length) return;
+  // Sweep up any badge that is no longer inside a result row — the per-row
+  // pass below can never revisit one that escaped, so without this a single
+  // bad insertion would persist until the next teardown.
+  for (const badge of document.querySelectorAll(".be-tg-level-badge")) {
+    if (!badge.closest('a[href^="/challenges/"]')) badge.remove();
+  }
+  let resolved = 0;
+  for (const row of rows) {
+    const found = challengeRowLevel(row);
+    // A badge whose text is no longer its own level was adopted by hydration.
+    // Give it back before deciding what this row needs.
+    for (const badge of row.querySelectorAll(".be-tg-level-badge")) {
+      if (badge.textContent !== badge.dataset.beLevel) reclaimAdoptedBadge(badge);
+    }
+    const existing = row.querySelectorAll(".be-tg-level-badge");
+    if (!found) {
+      // No readable level: drop anything left over from a previous challenge
+      // rather than leaving a stale number on the row.
+      for (const badge of existing) badge.remove();
+      continue;
+    }
+    resolved += 1;
+    const anchor = levelBadgeAnchor(row, found.img);
+    // Re-derive from scratch unless the row already holds exactly one badge,
+    // in the right place, with the right level. Checking the whole row rather
+    // than just the anchor's next sibling means a badge Vue moved, duplicated,
+    // or left behind from another challenge is repaired on the next pass
+    // instead of persisting.
+    if (
+      existing.length === 1 &&
+      existing[0] === anchor.nextElementSibling &&
+      existing[0].dataset.beLevel === String(found.level) &&
+      existing[0].textContent === String(found.level) // not adopted by Vue
+    ) {
+      continue;
+    }
+    for (const badge of existing) badge.remove();
+    const badge = document.createElement("span");
+    badge.className = "be-tg-level-badge";
+    badge.dataset.beLevel = String(found.level);
+    badge.textContent = String(found.level);
+    badge.title = `Difficulty ${found.level}`;
+    anchor.insertAdjacentElement("afterend", badge);
+  }
+  // Same class of failure as the API-side tripwire: if the alt text is renamed,
+  // badges silently stop appearing while everything else looks healthy. Scoped
+  // to the search route, where every /challenges/ link is a result row — the
+  // landing page can link challenges from other widgets that carry no
+  // difficulty icon, and warning about those would be noise.
+  if (!resolved && /\/search\/?$/.test(location.pathname)) {
+    warnOnce(
+      "tg:row-level",
+      `found ${rows.length} challenge results but could not read a level from any of them — ` +
+      'Boot.dev may have changed the difficulty icon\'s alt text ("Difficulty N"). ' +
+      "See challengeRowLevel() in trainingGrounds.js."
+    );
+  }
+}
+
+function removeLevelBadges() {
+  for (const badge of document.querySelectorAll(".be-tg-level-badge")) badge.remove();
+}
+
 function removeTrainingGroundsUi() {
-  document.getElementById("be-tg-difficulty")?.remove();
+  document.getElementById("be-tg-level")?.remove();
   document.getElementById("be-tg-filter-dot")?.remove();
+  removeLevelBadges();
 }
 
 // ---------------------------------------------------------------------------
@@ -438,13 +829,12 @@ function handleTrainingGroundsClick(event) {
   const popover = findChallengeFilterPopover();
   if (popover && popover.contains(target)) {
     const btn = target.closest("button");
-    if (
-      btn &&
-      !btn.closest("#be-tg-difficulty") &&
-      normalizeText(btn.textContent).toLowerCase() === "clear filters"
-    ) {
-      pendingChallengeTiers = [];
-      syncChallengeFilterUi();
+    if (btn && !btn.closest("#be-tg-level")) {
+      if (normalizeText(btn.textContent).toLowerCase() === "clear filters") {
+        pendingChallengeLevels = [];
+        syncChallengeFilterUi();
+      }
+      watchNativeTierClick(btn, popover);
     }
   }
 
@@ -452,6 +842,33 @@ function handleTrainingGroundsClick(event) {
   // case, once later for slow renders. Both are idempotent.
   setTrackedTimeout(ensureTrainingGroundsUiState, 50);
   setTrackedTimeout(ensureTrainingGroundsUiState, 400);
+}
+
+// Tripwire for the one anchor outside the documented priority list: the tier
+// is read from the section header icon's filename, so if Boot.dev stops
+// swapping that icon the level pills quietly stop following the native
+// selection while everything still looks fine. Checking on every tick would
+// false-positive constantly (no icon is the correct answer most of the time),
+// so this only fires on the unambiguous case: the user just clicked a tier
+// that was NOT already selected, and shortly after the icon still doesn't
+// report it. Deselecting a tier is excluded, since no icon is then correct.
+function watchNativeTierClick(btn, popover) {
+  const section = findNativeDifficultySection(popover);
+  if (!section || !section.contains(btn)) return;
+  const label = normalizeText(btn.textContent).toLowerCase();
+  const tier = CHALLENGE_TIERS.find((t) => t.label.toLowerCase() === label);
+  if (!tier || tier.id === nativeTierFromPopover(section)) return;
+  setTrackedTimeout(() => {
+    const current = findChallengeFilterPopover();
+    const now = current ? findNativeDifficultySection(current) : null;
+    if (!now || nativeTierFromPopover(now) === tier.id) return;
+    warnOnce(
+      "tg:tier-icon",
+      `selecting the native ${tier.label} difficulty did not update the filter popover's ` +
+      "difficulty icon — Boot.dev may have changed it, so Catalyst's level pills will " +
+      "only follow the tier after a search. See nativeTierFromPopover() in trainingGrounds.js."
+    );
+  }, 400);
 }
 
 function bindTrainingGroundsEvents() {
@@ -471,11 +888,12 @@ function applyChallengeFilterSetting(before, after) {
   const now = after[CHALLENGE_FILTER_FEATURE] !== false;
   if (was === now) return;
   if (!now) {
+    rememberedChallengeSelection = null; // turning the feature off forgets it
     // Restore the unfiltered view first (the relay it produces is still
     // handled), then let the ensure pass tear the rest down.
     const needRestore = isTrainingGroundsPage() && lastChallengeSearch?.filtered;
     try {
-      document.documentElement.removeAttribute(CHALLENGE_DIFF_ATTR);
+      document.documentElement.removeAttribute(CHALLENGE_LEVEL_ATTR);
     } catch (_) {}
     removeTrainingGroundsUi();
     if (needRestore) {

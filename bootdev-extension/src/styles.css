@@ -793,7 +793,7 @@
 }
 
 /* ---------------------------------------------------------------------------
-   Training Grounds difficulty filter (trainingGrounds.js)
+   Training Grounds difficulty level filter (trainingGrounds.js)
    Colors mirror the native popover pills (bootdev_palette.css tokens):
    gray-600 #4e5564 / gray-400 #919dab unselected, gray-200 #d7dee6 selected,
    yellow-400 #e5ae3c accents.
@@ -831,6 +831,11 @@
   padding: 4px 10px;
   cursor: pointer;
   transition: color 0.15s ease, border-color 0.15s ease;
+  /* Every pill is sized for the widest label ("10") so the row doesn't
+     reflow when switching tiers changes 8/9/10 to 1/2/3/4. */
+  min-width: 2.5rem;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 .be-tg-pill:hover,
 .be-tg-pill[aria-pressed="true"] {
@@ -844,6 +849,25 @@
   outline-offset: 0;
   border-color: #e8ecf1;
   color: #d7dee6;
+}
+.be-tg-empty {
+  /* Matches the native Type section's "Select a language first" state:
+     italic gray-300, same min-height so the popover doesn't jump. */
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.4;
+  color: #b6c0cc; /* --gray-300 */
+  min-height: 26px;
+}
+.be-tg-level-badge {
+  /* Sits right after the difficulty icon in a result row, reading as part of
+     the native metadata line rather than as an add-on. */
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  color: #919dab; /* --gray-400, like the row's "Interview"/"Code" label */
+  margin-left: -2px;
+  margin-right: 2px;
 }
 .be-tg-filter-dot {
   position: absolute; /* the native filter button is position:relative */
