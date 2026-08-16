@@ -1,4 +1,27 @@
 # Changelog
+## v0.13.1 - Stale data correctness fixes
+
+Boot.dev changed several things at once, and Catalyst failed too quietly when some of its assumptions stopped being valid. This release fixes the affected cases where Catalyst was showing stale, incomplete, or misleading information instead of admitting that the underlying data was no longer available, and adds detection that should make similar failures easier to catch.
+
+### Fixed
+
+* **Next Lesson is reading live data again.** Boot.dev renamed the fields in its dashboard response, so Catalyst could no longer find your next lesson and had been quietly falling back to a link scraped from the page — which is why the shortcut lagged a lesson behind. Catalyst now reads both formats.
+* **Leaderboard avatars and rank frames now appear as soon as they load.** On a new installation, or right after restoring a backup, rows were drawn before the profile data arrived and never updated, leaving a page of blank silhouettes until you refreshed.
+* **The Top All-Time Learners panel no longer shows an out-of-date ranking.** Boot.dev removed the `alltime` timeframe from the leaderboard endpoint Catalyst used, so Catalyst could no longer refresh the board and kept redrawing a days-old copy — with the wrong totals and, worse, the wrong order. The panel stays hidden until Catalyst can rebuild it from a source that still exists, and Catalyst no longer asks for the removed data. Your saved copy is kept, not deleted, and your All-Time XP comparisons are now measured against live figures.
+* **The boss tracker no longer measures a goal that no longer exists.** Boot.dev replaced the community boss with individual and guild progress, which left the damage, chest and progress readouts showing meaningless numbers — "To defeat boss" read 0 and "Boss defeat" read 100%. Those are hidden, with a short note in the panel, until the rebuilt tracker arrives. The aura readouts are unaffected and your recorded highs are untouched.
+* **The boss panel's background image loads again.** It was being requested from Boot.dev instead of from the extension, and had been silently missing.
+
+### Added
+
+* **Endpoint failure detection.** Catalyst's rename detection covered renamed fields but not endpoints that stop answering, which is why the frozen leaderboard went unnoticed for days. A Boot.dev endpoint that repeatedly fails now leaves a single console warning naming it. Failures that are normal — a request waiting on sign-in, or a username that does not exist — are ignored.
+* **Automated checks** for the dashboard field casing (`scripts/check_next_lesson.mjs`), avatar refreshing (`scripts/check_leaderboard_avatar.mjs`), and the new endpoint detection (`scripts/check_endpoint_tripwire.mjs`).
+
+### Notes
+
+* No new permissions, settings, storage keys, dependencies, or backup-format changes.
+* The "Top All-Time Learners" setting remains in place but has nothing to show until the board is rebuilt in a future release.
+* The previous `alltime` timeframe now returns `400 Invalid timeframe`, and no replacement timeframe was found.
+
 ## v0.13.0 - Filter Training Grounds challenges by exact difficulty level
 
 Boot.dev added its own Easy/Medium/Hard filter to the Challenge Catalog, making Catalyst's version redundant. Catalyst now builds on the native filter by letting you narrow the results to an exact difficulty level.

@@ -114,7 +114,13 @@ const FRAME_DISPLAY_SCALE = [2.08, 2.01, 1.73, 1.68, 1.67, 1.54, 1.57, 1.37, 1.3
 const FRAME_INNER_PCT = [96, 92, 80, 77, 77, 69, 70, 64, 59, 57];
 const DEFAULT_INNER_PCT = 62.5; // legacy fixed size, for an unrecognized frame
 
+// Live boards only: each of these holds a response received in this session.
+// cachedAllTimeEntries in particular is NOT seeded from storage — see
+// loadCachedAllTimeLeaderboard for why that distinction is load-bearing.
 let cachedAllTimeEntries = [];
+// The restored be_alltime_leaderboard_cache. Retained (in memory and in
+// storage) as the v0.15.0 seed; nothing renders or compares against it.
+let storedAllTimeCache = [];
 let cachedDailyEntries = [];
 let cachedKarmaEntries = [];
 let cachedLeagueDailyEntries = [];
@@ -483,10 +489,25 @@ function learnCurrentUserHandleFromDom() {
 // ---------------------------------------------------------------------------
 // All-time leaderboard cache
 // ---------------------------------------------------------------------------
+// Restore be_alltime_leaderboard_cache WITHOUT feeding cachedAllTimeEntries.
+//
+// /v1/leaderboard_xp/alltime has returned 400 "Invalid timeframe" since
+// 2026-08-14 (23 period names tested; only day/week/month survive), and
+// content.js drops every non-2xx before routing — so a restored cache could
+// never be refreshed. Rendering it showed a frozen board that was wrong in
+// value AND in order, and getMyValue("xp") read it first, so every All-Time
+// comparison was computed against a stale "me" as well.
+//
+// Keeping the restore here, pointed at a variable nothing renders from, is the
+// whole fix: cachedAllTimeEntries can now only hold a 200 received in THIS
+// session, so the panel, the ensure pass, the comparisons and the snapshot
+// harvest all become honest without being touched — and the panel comes back by
+// itself if Boot.dev ever restores the timeframe. The key is deliberately never
+// deleted: it is the seed candidate for the v0.15.0 board rebuild.
 async function loadCachedAllTimeLeaderboard() {
   const stored = (await chromeGet(LEADERBOARD_CACHE_KEY)) || {};
   if (enhancerStopped) return;
-  cachedAllTimeEntries = Array.isArray(stored.entries) ? stored.entries : [];
+  storedAllTimeCache = Array.isArray(stored.entries) ? stored.entries : [];
 }
 
 // ===========================================================================
@@ -521,6 +542,12 @@ function getMyValue(kind) {
   if (kind === "xp") {
     // TotalXP has never appeared on a leaderboard entry (full key list checked
     // against live responses 2026-07-31), so it is not carried as a fallback.
+    //
+    // cachedAllTimeEntries stays first: it can only hold a board received this
+    // session (see loadCachedAllTimeLeaderboard), so it is both live and the
+    // exact numbers the All-Time panel is displaying — which is the point of
+    // preferring it. While the alltime timeframe stays gone it is empty, and
+    // these comparisons fall through to the live league boards.
     value = fromEntries(cachedAllTimeEntries, "XP")
       ?? fromEntries(cachedLeagueEntries, "XP")
       ?? fromEntries(cachedLeagueDailyEntries, "XP");
@@ -724,6 +751,7 @@ function patchAllTimeCard(el, it, myXP) {
   const link = el.querySelector(".be-leader-link");
   if (link && link.getAttribute("href") !== it.href) link.setAttribute("href", it.href);
   setTextIfChanged(el.querySelector(".be-leader-rank"), String(it.rank));
+  patchLeaderAvatar(el, it.entry, it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-name"), it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-xp"), `${fmtNum(it.xp)} xp`);
   patchComparisonEl(el.querySelector("[data-be-comparison]"), myXP, it.xp, "xp", it.isCurrentUser || !isComparisonEnabled("comparisonsAllTime"));
@@ -801,6 +829,35 @@ const DEFAULT_AVATAR_MARKUP =
   '<circle cx="12" cy="24.3" r="10"/>' +
   '</svg></span>';
 
+// A cheap fingerprint of everything renderLeaderAvatar draws, stamped onto the
+// element it describes. The in-place patchers (patchPersonalRow /
+// patchAllTimeCard) update rank, name, value and comparison but never touched
+// the avatar subtree, so a row first drawn before its profile arrived — a fresh
+// install, or straight after a backup import, since the backup carries handles
+// and snapshots but not profiles — kept its silhouette and its missing frame
+// until the page was reloaded. Comparing signatures lets the patchers rebuild
+// only that subtree, only when it actually changed.
+//
+// displayName is part of the signature because the avatar's alt text is the one
+// thing inside the subtree no other patch statement covers.
+function leaderAvatarSignature(entry, displayName) {
+  const name = displayName || getDisplayName(entry, getHandle(entry));
+  return [getAvatarUrl(entry), getRoleFrameUrl(entry), getRoleFrameIndex(entry), name].join("|");
+}
+
+// Rebuild the avatar subtree in place when its signature changed. Deliberately
+// scoped to the avatar span: replacing the row itself would re-mount the node
+// carrying the current-user glow, which is exactly what the in-place patching
+// exists to avoid.
+function patchLeaderAvatar(rowEl, entry, displayName) {
+  const existing = rowEl.querySelector(".be-leader-avatar");
+  if (!existing) return; // fail open: both row builders always emit one
+  const signature = leaderAvatarSignature(entry, displayName);
+  if (existing.getAttribute("data-be-avatar-sig") === signature) return;
+  const replacement = elementFromHTML(renderLeaderAvatar(entry, displayName));
+  if (replacement) existing.replaceWith(replacement);
+}
+
 function renderLeaderAvatar(entry, displayName) {
   const avatar = getAvatarUrl(entry);
   const frameUrl = getRoleFrameUrl(entry);
@@ -831,7 +888,7 @@ function renderLeaderAvatar(entry, displayName) {
     ? `<img src="${escapeHtml(frameUrl)}" alt="" class="be-leader-frame"${frameStyle} aria-hidden="true">`
     : "";
 
-  return `<span class="${avatarClass}">
+  return `<span class="${avatarClass}" data-be-avatar-sig="${escapeHtml(leaderAvatarSignature(entry, name))}">
     <span class="be-leader-avatar-inner"${innerStyle}>${avatarMarkup}</span>
     ${frameMarkup}
   </span>`;
@@ -1380,7 +1437,18 @@ function requestPersonalLeaderboardData() {
 
 // The extension's own All-Time board. Boot.dev has no native all-time board, so
 // only we ever fetch this; the freshness gate collapses rapid route re-entries.
+//
+// Disabled in v0.13.1: /v1/leaderboard_xp/alltime returns 400 "Invalid
+// timeframe" (23 period names probed 2026-08-14 — a removal, not a rename, and
+// Boot.dev's own /leaderboard has never shown an all-time board), so the request
+// could only ever put a red 400 in every user's console. handleAllTimeLeaderboard
+// and the render path are left intact: v0.15.0 rebuilds this board from
+// /v1/users/public/{handle}/stats -> LeaderboardXPRankAlltime, seeded from
+// be_alltime_leaderboard_cache. Deleting the early return is all it takes to
+// probe the timeframe again.
+const ALLTIME_TIMEFRAME_AVAILABLE = false;
 function requestAllTimeLeaderboardData() {
+  if (!ALLTIME_TIMEFRAME_AVAILABLE) return;
   if (!isLeaderboardPage() || !isFeatureEnabled("allTimeLeaderboard")) return;
   if (boardFresh("alltime")) return;
   requestApiJson(ALL_TIME_LEADERBOARD_URL);
@@ -1576,6 +1644,7 @@ function patchPersonalRow(el, it) {
   const href = `/u/${encodeURIComponent(row.handle)}`;
   if (el.getAttribute("href") !== href) el.setAttribute("href", href);
   setTextIfChanged(el.querySelector(".be-personal-rank"), String(rank));
+  patchLeaderAvatar(el, row, row.name);
   setTextIfChanged(el.querySelector(".be-personal-name"), row.name);
   setTextIfChanged(el.querySelector(".be-personal-handle"), `@${row.displayHandle}`);
   setTextIfChanged(el.querySelector(".be-personal-value"), valueText);
@@ -2211,4 +2280,16 @@ function savePersonalCache() {
 function removePersonalLeaderboards() {
   document.getElementById("be-personal-leaderboards")?.remove();
   document.getElementById("be-personal-divider")?.remove();
+}
+
+// Test hook: scripts/check_leaderboard_avatar.mjs predefines this global before
+// evaluating the file. Never defined on the real page.
+if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
+  window.__BOOTDEV_ENHANCER_TEST__.leaderboard = {
+    leaderAvatarSignature,
+    renderLeaderAvatar,
+    getRoleFrameIndex,
+    getRoleFrameUrl,
+    getAvatarUrl,
+  };
 }

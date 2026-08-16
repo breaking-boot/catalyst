@@ -19,6 +19,7 @@ import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
 const BOSS = new URL("../bootdev-extension/src/boss.js", import.meta.url);
+const UTILS = new URL("../bootdev-extension/src/utils.js", import.meta.url);
 const CAPTURES = new URL("../reference_data/http_responses_from_api_endpoints/", import.meta.url);
 const AUDIT_BODIES = new URL(
   "../reference_data/catalyst_versions/v0.12.2_api_casing_audit/api/responses/api_bodies_v3_2026-07-31.json",
@@ -27,12 +28,24 @@ const AUDIT_BODIES = new URL(
 
 // --- evaluate boss.js in a sandbox ------------------------------------------
 
+// pickField lives in utils.js as of v0.13.1 (nextLesson.js is its second
+// consumer). Evaluate the REAL utils.js in its own context and lift the
+// function across, so these checks still exercise shipped code rather than a
+// stand-in. utils.js touches chrome.* only inside function bodies, so it loads
+// cleanly here.
+const utilsSandbox = { console, window: {}, document: {}, chrome: {} };
+vm.createContext(utilsSandbox);
+vm.runInContext(readFileSync(UTILS, "utf8"), utilsSandbox, { filename: fileURLToPath(UTILS) });
+
 const testHook = {};
 const sandbox = {
   window: { __BOOTDEV_ENHANCER_TEST__: testHook },
   document: { addEventListener() {}, removeEventListener() {}, getElementById: () => null },
   location: { pathname: "/" },
   console,
+  // boss.js resolves the panel texture at load (BOSS_TEXTURE_URL).
+  chrome: { runtime: { getURL: (path) => `chrome-extension://catalyst-test/${path}` } },
+  pickField: utilsSandbox.pickField,
   setInterval: () => 0,
   clearInterval() {},
   setTimeout: () => 0,

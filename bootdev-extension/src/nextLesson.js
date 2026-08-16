@@ -160,25 +160,40 @@ function findLessonNextHref() {
   return nextLink?.getAttribute("href") || null;
 }
 
+// Every field is read in both casings via pickField (utils.js). /v1/dashboard_content
+// was PascalCase when this was written and is entirely camelCase as of the
+// 2026-08-15 capture, which silently broke all three tiers below: the feature
+// looked healthy only because captureNextLessonFromDom() kept the stored href
+// alive, one navigation behind. Boot.dev migrates per DTO and has flipped in
+// both directions, so committing to camelCase alone would just re-arm the same
+// failure.
 function getDashboardLessonHref(json) {
   const data = json?.data ?? json;
-  const explicit = normalizeLessonHref(data?.CurrentLessonUUID);
+  const explicit = normalizeLessonHref(pickField(data, "CurrentLessonUUID", "currentLessonUUID"));
   if (explicit) return explicit;
 
-  const incomplete = findFirstIncompleteLesson(data?.CurrentCourseProgress);
-  if (incomplete?.UUID) return normalizeLessonHref(incomplete.UUID);
+  const incomplete = findFirstIncompleteLesson(pickField(data, "CurrentCourseProgress", "currentCourseProgress"));
+  if (incomplete) return normalizeLessonHref(pickField(incomplete, "UUID", "uuid"));
 
-  const courseLesson = findFirstIncompleteLesson(data?.CurrentCourse);
-  if (courseLesson?.UUID) return normalizeLessonHref(courseLesson.UUID);
+  const courseLesson = findFirstIncompleteLesson(pickField(data, "CurrentCourse", "currentCourse"));
+  if (courseLesson) return normalizeLessonHref(pickField(courseLesson, "UUID", "uuid"));
 
   return null;
 }
 
+// The comparisons stay strict on purpose. An absent field must mean "unknown",
+// not "incomplete" — a loose test would send the user back to lesson 1 of the
+// course the next time one of these names changes.
 function findFirstIncompleteLesson(progress) {
-  const chapters = Array.isArray(progress?.Chapters) ? progress.Chapters : [];
+  const chapters = pickField(progress, "Chapters", "chapters");
+  if (!Array.isArray(chapters)) return null;
   for (const chapter of chapters) {
-    const lessons = Array.isArray(chapter?.Lessons) ? chapter.Lessons : [];
-    const lesson = lessons.find((l) => l?.IsRequired !== false && l?.IsComplete === false && l?.IsReset !== true);
+    const lessons = pickField(chapter, "Lessons", "lessons");
+    if (!Array.isArray(lessons)) continue;
+    const lesson = lessons.find((l) =>
+      pickField(l, "IsRequired", "isRequired") !== false &&
+      pickField(l, "IsComplete", "isComplete") === false &&
+      pickField(l, "IsReset", "isReset") !== true);
     if (lesson) return lesson;
   }
   return null;
@@ -225,4 +240,14 @@ function findTopNavInsertionPoint() {
 
   const mobileMenu = document.getElementById("mobile-menu");
   return mobileMenu?.querySelector('a[href="/training-grounds"], a[href="/training"], a[href="/courses"], a[href="/dashboard"]') || null;
+}
+
+// Test hook: scripts/check_next_lesson.mjs predefines this global before
+// evaluating the file. Never defined on the real page.
+if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
+  window.__BOOTDEV_ENHANCER_TEST__.nextLesson = {
+    getDashboardLessonHref,
+    findFirstIncompleteLesson,
+    normalizeLessonHref,
+  };
 }

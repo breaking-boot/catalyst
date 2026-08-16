@@ -75,7 +75,15 @@ async function routeResponse({ url, status, json, catalyst }) {
       handleUnauthorizedApi(path);
       return;
     }
-    if (status < 200 || status >= 300) return;
+    // Everything reaching here is a path some feature consumes: injected.js
+    // relays only RELAY_PATH_PATTERNS plus responses to our own requests. So a
+    // repeated failure is always worth one line, and the drop that used to be
+    // silent (see reportEndpointFailure) now leaves a breadcrumb.
+    if (status < 200 || status >= 300) {
+      reportEndpointFailure(path, status);
+      return;
+    }
+    noteEndpointSuccess(path);
 
     if (path === "/v1/leaderboard_xp/alltime") {
       handleAllTimeLeaderboard(json);
@@ -266,8 +274,10 @@ function applyFeatureSettings(before, after) {
   // Fetch only when a feature just turned on AND its data isn't already cached.
   if (!before || !after || !isLeaderboardPage()) return;
   const turnedOn = (key) => before[key] === false && after[key] !== false;
+  // Routed through the same helper as the route-scoped fetch so the disabled
+  // alltime timeframe is honored here too (see requestAllTimeLeaderboardData).
   if (turnedOn("allTimeLeaderboard") && !cachedAllTimeEntries.length) {
-    requestApiJson(ALL_TIME_LEADERBOARD_URL);
+    requestAllTimeLeaderboardData();
   }
   if ((turnedOn("personalLeaderboards") || PERSONAL_BOARDS.some((b) => turnedOn(b.settingKey))) &&
       personalDataMissing()) {
