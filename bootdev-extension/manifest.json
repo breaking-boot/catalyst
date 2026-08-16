@@ -55,7 +55,7 @@
       "use_dynamic_url": true
     },
     {
-      "resources": ["assets/frames/*.png"],
+      "resources": ["assets/frames/*.png", "assets/maptexture2.webp"],
       "matches": ["https://www.boot.dev/*"],
       "use_dynamic_url": true
     }

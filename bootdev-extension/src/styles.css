@@ -511,11 +511,14 @@
   padding: 12px 14px;
   border-radius: 8px;
   border: 1px solid rgba(229, 174, 60, 0.35);
-  /* Bundled locally (assets/maptexture2.webp), resolved relative to this CSS file
-     in the extension, so there is no remote dependency and nothing to 404 on a
-     Boot.dev redeploy. Content-script CSS assets need no web_accessible_resources. */
+  /* Bundled locally (assets/maptexture2.webp). The URL is set by boss.js via
+     chrome.runtime.getURL, NOT written here: a relative url() in this
+     content-script stylesheet resolved against the document
+     (https://www.boot.dev/assets/maptexture2.webp — measured 2026-08-14, 404),
+     so the panel rendered with no texture. An unset variable falls back to
+     `none`, leaving the gradient. */
   background:
-    url("../assets/maptexture2.webp") 50% / cover no-repeat,
+    var(--be-boss-texture, none) 50% / cover no-repeat,
     linear-gradient(180deg, rgba(18, 22, 32, 0.97), rgba(24, 27, 38, 0.95));
   background-blend-mode: overlay;
   color: #e8ecf1;

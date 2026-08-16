@@ -17,6 +17,13 @@ const BOSS_REMINDER_REPEAT_MS = 24 * 60 * 60 * 1000; // re-remind at most daily
 const BOSS_REMINDER_TOAST_MS = 20_000; // action toast needs longer than the default 6s
 const BOSS_INACTIVE_NOTICE_KEY = "be_boss_inactive_notice";
 const BOSS_INACTIVE_REPEAT_MS = 24 * 60 * 60 * 1000; // "no active event" toast at most daily
+// Boot.dev visual asset used with permission (see ATTRIBUTION.md). Resolved
+// through the extension rather than referenced relatively from styles.css: a
+// relative url() in the content-script stylesheet resolved against the DOCUMENT
+// (measured 2026-08-14: background-image was
+// https://www.boot.dev/assets/maptexture2.webp, which 404s), so the panel had
+// been rendering with no texture at all. Same pattern as ROLE_FRAME_URLS.
+const BOSS_TEXTURE_URL = chrome.runtime.getURL("assets/maptexture2.webp");
 // Interim explanation for the tiles hidden in v0.13.1. Boot.dev replaced the
 // community boss goal with individual + guild progress on 2026-08-14, which
 // left every damage/chest figure measuring a target that no longer exists.
@@ -448,6 +455,9 @@ async function renderBossPanel(s) {
     panel.className = `be-boss-panel${bossUiState.minimized ? " be-boss-minimized" : ""}${
       hasSavedBossPosition() ? " be-positioned" : ""
     }`;
+    // styles.css reads this as var(--be-boss-texture), falling back to the
+    // gradient alone if it is ever unset.
+    panel.style.setProperty("--be-boss-texture", `url("${BOSS_TEXTURE_URL}")`);
     applyBossPanelPosition(panel);
 
     if (bossUiState.minimized) {
