@@ -114,7 +114,13 @@ const FRAME_DISPLAY_SCALE = [2.08, 2.01, 1.73, 1.68, 1.67, 1.54, 1.57, 1.37, 1.3
 const FRAME_INNER_PCT = [96, 92, 80, 77, 77, 69, 70, 64, 59, 57];
 const DEFAULT_INNER_PCT = 62.5; // legacy fixed size, for an unrecognized frame
 
+// Live boards only: each of these holds a response received in this session.
+// cachedAllTimeEntries in particular is NOT seeded from storage — see
+// loadCachedAllTimeLeaderboard for why that distinction is load-bearing.
 let cachedAllTimeEntries = [];
+// The restored be_alltime_leaderboard_cache. Retained (in memory and in
+// storage) as the v0.15.0 seed; nothing renders or compares against it.
+let storedAllTimeCache = [];
 let cachedDailyEntries = [];
 let cachedKarmaEntries = [];
 let cachedLeagueDailyEntries = [];
@@ -483,10 +489,25 @@ function learnCurrentUserHandleFromDom() {
 // ---------------------------------------------------------------------------
 // All-time leaderboard cache
 // ---------------------------------------------------------------------------
+// Restore be_alltime_leaderboard_cache WITHOUT feeding cachedAllTimeEntries.
+//
+// /v1/leaderboard_xp/alltime has returned 400 "Invalid timeframe" since
+// 2026-08-14 (23 period names tested; only day/week/month survive), and
+// content.js drops every non-2xx before routing — so a restored cache could
+// never be refreshed. Rendering it showed a frozen board that was wrong in
+// value AND in order, and getMyValue("xp") read it first, so every All-Time
+// comparison was computed against a stale "me" as well.
+//
+// Keeping the restore here, pointed at a variable nothing renders from, is the
+// whole fix: cachedAllTimeEntries can now only hold a 200 received in THIS
+// session, so the panel, the ensure pass, the comparisons and the snapshot
+// harvest all become honest without being touched — and the panel comes back by
+// itself if Boot.dev ever restores the timeframe. The key is deliberately never
+// deleted: it is the seed candidate for the v0.15.0 board rebuild.
 async function loadCachedAllTimeLeaderboard() {
   const stored = (await chromeGet(LEADERBOARD_CACHE_KEY)) || {};
   if (enhancerStopped) return;
-  cachedAllTimeEntries = Array.isArray(stored.entries) ? stored.entries : [];
+  storedAllTimeCache = Array.isArray(stored.entries) ? stored.entries : [];
 }
 
 // ===========================================================================
@@ -521,6 +542,12 @@ function getMyValue(kind) {
   if (kind === "xp") {
     // TotalXP has never appeared on a leaderboard entry (full key list checked
     // against live responses 2026-07-31), so it is not carried as a fallback.
+    //
+    // cachedAllTimeEntries stays first: it can only hold a board received this
+    // session (see loadCachedAllTimeLeaderboard), so it is both live and the
+    // exact numbers the All-Time panel is displaying — which is the point of
+    // preferring it. While the alltime timeframe stays gone it is empty, and
+    // these comparisons fall through to the live league boards.
     value = fromEntries(cachedAllTimeEntries, "XP")
       ?? fromEntries(cachedLeagueEntries, "XP")
       ?? fromEntries(cachedLeagueDailyEntries, "XP");
@@ -1410,7 +1437,18 @@ function requestPersonalLeaderboardData() {
 
 // The extension's own All-Time board. Boot.dev has no native all-time board, so
 // only we ever fetch this; the freshness gate collapses rapid route re-entries.
+//
+// Disabled in v0.13.1: /v1/leaderboard_xp/alltime returns 400 "Invalid
+// timeframe" (23 period names probed 2026-08-14 — a removal, not a rename, and
+// Boot.dev's own /leaderboard has never shown an all-time board), so the request
+// could only ever put a red 400 in every user's console. handleAllTimeLeaderboard
+// and the render path are left intact: v0.15.0 rebuilds this board from
+// /v1/users/public/{handle}/stats -> LeaderboardXPRankAlltime, seeded from
+// be_alltime_leaderboard_cache. Deleting the early return is all it takes to
+// probe the timeframe again.
+const ALLTIME_TIMEFRAME_AVAILABLE = false;
 function requestAllTimeLeaderboardData() {
+  if (!ALLTIME_TIMEFRAME_AVAILABLE) return;
   if (!isLeaderboardPage() || !isFeatureEnabled("allTimeLeaderboard")) return;
   if (boardFresh("alltime")) return;
   requestApiJson(ALL_TIME_LEADERBOARD_URL);

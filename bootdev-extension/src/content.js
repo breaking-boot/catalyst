@@ -266,8 +266,10 @@ function applyFeatureSettings(before, after) {
   // Fetch only when a feature just turned on AND its data isn't already cached.
   if (!before || !after || !isLeaderboardPage()) return;
   const turnedOn = (key) => before[key] === false && after[key] !== false;
+  // Routed through the same helper as the route-scoped fetch so the disabled
+  // alltime timeframe is honored here too (see requestAllTimeLeaderboardData).
   if (turnedOn("allTimeLeaderboard") && !cachedAllTimeEntries.length) {
-    requestApiJson(ALL_TIME_LEADERBOARD_URL);
+    requestAllTimeLeaderboardData();
   }
   if ((turnedOn("personalLeaderboards") || PERSONAL_BOARDS.some((b) => turnedOn(b.settingKey))) &&
       personalDataMissing()) {
