@@ -17,6 +17,14 @@ const BOSS_REMINDER_REPEAT_MS = 24 * 60 * 60 * 1000; // re-remind at most daily
 const BOSS_REMINDER_TOAST_MS = 20_000; // action toast needs longer than the default 6s
 const BOSS_INACTIVE_NOTICE_KEY = "be_boss_inactive_notice";
 const BOSS_INACTIVE_REPEAT_MS = 24 * 60 * 60 * 1000; // "no active event" toast at most daily
+// Interim explanation for the tiles hidden in v0.13.1. Boot.dev replaced the
+// community boss goal with individual + guild progress on 2026-08-14, which
+// left every damage/chest figure measuring a target that no longer exists.
+// Removed when v0.14.0 rebuilds the panel around xpUser and userXPThreshold.
+const BOSS_MODEL_NOTE =
+  "Boot.dev recently replaced the boss event's community goals with individual and " +
+  "guild goals. Catalyst is being updated to reflect the new event format, so the " +
+  "damage and chest readouts are hidden for now.";
 
 let bossRefreshTimer = null;
 let bossUiState = { minimized: false, settingsOpen: false, x: null, y: null };
@@ -459,12 +467,6 @@ async function renderBossPanel(s) {
 
     const belowEventHigh =
       s.eventHigh > 0 ? Math.max(0, s.eventHigh - s.current).toFixed(0) : "0";
-    const toNextChest =
-      s.nextChestAt > 0 ? Math.max(0, s.nextChestAt - s.damage) : "?";
-    const toDefeat =
-      s.bossMaxHp > 0 ? Math.max(0, s.bossMaxHp - s.damage) : "?";
-    const nextChestProgress = getProgressPct(s.damage, s.nextChestAt);
-    const bossProgress = getProgressPct(s.damage, s.bossMaxHp);
     const lastUpdated = s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "unknown";
     const metaText = s.eventActive === false
       ? (s.expiresAt
@@ -491,6 +493,15 @@ async function renderBossPanel(s) {
         </div>`
       : "";
 
+    // Aura tiles only. Boss damage, To next chest, To defeat boss, Chest tier
+    // and both progress bars were removed in v0.13.1: they measured the
+    // community goal Boot.dev retired on 2026-08-14. event.healthPoints now
+    // carries the personal 10000 XP target while xpTotal is still a
+    // community-wide figure, so "To defeat boss" rendered 0 and "Boss defeat"
+    // rendered 100%; the chest tiles mixed a personal threshold with community
+    // damage and read isUnlocked/isUnlockedByUser, which the 2026-08-14 capture
+    // cannot tell apart. handleBossProgress still tracks all of it in
+    // be_boss_state, so v0.14.0 inherits the history rather than starting cold.
     panel.innerHTML = `
       <div class="be-boss-head be-boss-drag-handle">
         <span>Boss Event</span>
@@ -505,15 +516,8 @@ async function renderBossPanel(s) {
         <div><b>${fmtPct(s.eventHigh)}</b><span>Event high</span></div>
         <div><b>${fmtPct(s.allTimeHigh)}</b><span>All-time high</span></div>
         <div><b>${belowEventHigh}%</b><span>Below event high</span></div>
-        <div><b>${fmtNum(s.damage)}</b><span>Boss damage</span></div>
-        <div><b>${fmtNum(toNextChest)}</b><span>To next chest</span></div>
-        <div><b>${fmtNum(toDefeat)}</b><span>To defeat boss</span></div>
-        <div><b>${escapeHtml(s.lastChestTier ?? "Start")} &rarr; ${escapeHtml(s.nextChestTier ?? "Complete")}</b><span>Chest tier</span></div>
       </div>
-      <div class="be-boss-progress-list">
-        ${renderBossProgress("Next chest", nextChestProgress)}
-        ${renderBossProgress("Boss defeat", bossProgress)}
-      </div>
+      <div class="be-boss-note">${escapeHtml(BOSS_MODEL_NOTE)}</div>
       <div class="be-boss-meta">${escapeHtml(metaText)}</div>
       ${settingsMarkup}`;
 
@@ -596,6 +600,9 @@ function bindBossPanelControls(panel, state) {
   }
 }
 
+// Idle since v0.13.1 — the two progress bars they drew measured the retired
+// community goal. Kept because v0.14.0 rebuilds the panel around the personal
+// chest ladder (xpUser vs userXPThreshold), which needs exactly this.
 function getProgressPct(value, total) {
   const current = num(value);
   const max = num(total);

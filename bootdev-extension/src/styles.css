@@ -647,6 +647,16 @@
   border-radius: inherit;
   background: linear-gradient(90deg, #dca336, #f4c76a);
 }
+/* Interim note explaining the tiles hidden in v0.13.1; removed with v0.14.0's
+   panel rebuild. Quieter than the tiles, a shade brighter than the meta line. */
+.be-boss-note {
+  margin-top: 10px;
+  padding-top: 9px;
+  border-top: 1px solid rgba(229, 174, 60, 0.18);
+  color: #a3b3c7;
+  font-size: 11px;
+  line-height: 1.45;
+}
 .be-boss-meta {
   margin-top: 8px;
   color: #8fa0b7;
