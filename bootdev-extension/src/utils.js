@@ -144,6 +144,59 @@ function reportUsableFields(label, entries, field, read) {
   return usable;
 }
 
+// --- endpoint failure detection ---------------------------------------------
+// reportUsableFields catches a renamed FIELD. An endpoint that stops answering
+// produces no signal at all: content.js drops every non-2xx before routing, so
+// the feature reading it simply renders its last known value forever. That is
+// how /v1/leaderboard_xp/alltime went from 200 to 400 (2026-08-14) while the
+// All-Time panel kept redrawing a days-old cache — wrong totals AND wrong
+// order — for days without a single console line.
+//
+// Counting is per NORMALIZED path so the personal-leaderboard handles (ten
+// separate URLs hitting one endpoint) aggregate into one signal instead of ten
+// counters that each stay below the threshold.
+const ENDPOINT_FAILURE_THRESHOLD = 2; // consecutive failures, per session
+const endpointFailureCounts = new Map();
+
+function normalizeEndpointKey(path) {
+  return String(path || "")
+    .replace(/^\/v1\/users\/public\/[^/]+/, "/v1/users/public/{handle}")
+    .replace(/^\/v1\/users\/lessons\/[^/]+$/, "/v1/users/lessons/{uuid}")
+    .replace(/^\/v1\/course_progress_by_lesson\/[^/]+$/, "/v1/course_progress_by_lesson/{uuid}");
+}
+
+// A 2xx clears the path's history: only CONSECUTIVE failures are interesting,
+// since a one-off 500 says nothing about the contract.
+function noteEndpointSuccess(path) {
+  endpointFailureCounts.delete(normalizeEndpointKey(path));
+}
+
+function reportEndpointFailure(path, status) {
+  const code = num(status);
+  // Status 0 is relay-level (timeout, no auth header yet, extension stopped)
+  // and 3xx is not a failure. Neither says anything about the endpoint.
+  if (code == null || code < 400) return;
+  // 401/403 are queued and retried elsewhere (AUTH_REQUIRED_PATHS in
+  // injected.js, fetchApiJsonWithAuthRetry in content.js) and already leave
+  // their own breadcrumb.
+  if (code === 401 || code === 403) return;
+
+  const key = normalizeEndpointKey(path);
+  // "No such user" is a normal answer here, reachable any time someone mistypes
+  // a handle into the Personal Leaderboards form.
+  if (code === 404 && key.startsWith("/v1/users/public/{handle}")) return;
+
+  const count = (endpointFailureCounts.get(key) || 0) + 1;
+  endpointFailureCounts.set(key, count);
+  if (count < ENDPOINT_FAILURE_THRESHOLD) return;
+
+  warnOnce(
+    `endpoint:${key}`,
+    `${key} has failed ${count} times this session (last status ${code}) — ` +
+    "whatever reads it is showing nothing. Boot.dev may have changed or removed it."
+  );
+}
+
 function localDateKey() {
   return new Date().toLocaleDateString("en-CA");
 }

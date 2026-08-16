@@ -75,7 +75,15 @@ async function routeResponse({ url, status, json, catalyst }) {
       handleUnauthorizedApi(path);
       return;
     }
-    if (status < 200 || status >= 300) return;
+    // Everything reaching here is a path some feature consumes: injected.js
+    // relays only RELAY_PATH_PATTERNS plus responses to our own requests. So a
+    // repeated failure is always worth one line, and the drop that used to be
+    // silent (see reportEndpointFailure) now leaves a breadcrumb.
+    if (status < 200 || status >= 300) {
+      reportEndpointFailure(path, status);
+      return;
+    }
+    noteEndpointSuccess(path);
 
     if (path === "/v1/leaderboard_xp/alltime") {
       handleAllTimeLeaderboard(json);
