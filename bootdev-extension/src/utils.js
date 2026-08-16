@@ -100,6 +100,19 @@ function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+// Read one field in either casing. Boot.dev migrates PascalCase -> camelCase
+// per DTO, not globally, and has been observed flipping in both directions, so
+// every read of a migrating response goes through this. Reads are per FIELD,
+// never gated on the shape of the whole response: a mixed response (some fields
+// flipped, some not) is the case that slips past a whole-object gate and freezes
+// a value while everything still looks healthy. PascalCase wins when both are
+// present. Used by boss.js (boss_events_progress) and nextLesson.js
+// (dashboard_content); check_boss_normalizer.mjs pins the behavior.
+function pickField(obj, pascal, camel) {
+  if (!isPlainObject(obj)) return undefined;
+  return obj[pascal] !== undefined ? obj[pascal] : obj[camel];
+}
+
 // --- rename detection -------------------------------------------------------
 // Catalyst's features are all built to degrade gracefully when a value is
 // missing, which is exactly what makes a renamed API field invisible: the UI

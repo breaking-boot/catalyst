@@ -115,21 +115,13 @@ async function restoreBossPanel() {
 // This endpoint is mid-migration and the normalizer is load-bearing TODAY:
 // the live-event capture (2026-06-26) is PascalCase, and between-events
 // captures on 2026-07-16 AND 2026-07-31 are entirely camelCase (event.uuid,
-// xpBonus, …). See boss_events_progress_between_events.json in reference_data
-// and the v0.12.2 audit bundle.
+// xpBonus, …), as is the live capture of the new event model (2026-08-14).
+// See boss_events_progress_between_events.json in reference_data and the
+// v0.12.2 audit bundle.
 //
-// Reads are per-FIELD, not gated on the shape of the whole response. The
-// earlier version bailed out whenever `Event` was present, which meant a mixed
-// response — a live event restoring `Event` while leaving `xpBonus` camel —
-// slipped past untouched. That failure is silent in the worst way: `XPBonus`
-// reads undefined, the `cur.bonusPct != null` guard skips the write, and the
-// panel keeps rendering its previous aura % under a freshly-updated
-// "Last updated" time. PascalCase wins when both spellings are present.
-function pickField(obj, pascal, camel) {
-  if (!isPlainObject(obj)) return undefined;
-  return obj[pascal] !== undefined ? obj[pascal] : obj[camel];
-}
-
+// Reads go through pickField (utils.js) per FIELD, never gated on the shape of
+// the whole response — see the comment there for why a mixed response is the
+// case that matters.
 function normalizeBossProgressJson(json) {
   if (!isPlainObject(json)) return json;
   const event = pickField(json, "Event", "event");
