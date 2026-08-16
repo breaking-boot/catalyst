@@ -724,6 +724,7 @@ function patchAllTimeCard(el, it, myXP) {
   const link = el.querySelector(".be-leader-link");
   if (link && link.getAttribute("href") !== it.href) link.setAttribute("href", it.href);
   setTextIfChanged(el.querySelector(".be-leader-rank"), String(it.rank));
+  patchLeaderAvatar(el, it.entry, it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-name"), it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-xp"), `${fmtNum(it.xp)} xp`);
   patchComparisonEl(el.querySelector("[data-be-comparison]"), myXP, it.xp, "xp", it.isCurrentUser || !isComparisonEnabled("comparisonsAllTime"));
@@ -801,6 +802,35 @@ const DEFAULT_AVATAR_MARKUP =
   '<circle cx="12" cy="24.3" r="10"/>' +
   '</svg></span>';
 
+// A cheap fingerprint of everything renderLeaderAvatar draws, stamped onto the
+// element it describes. The in-place patchers (patchPersonalRow /
+// patchAllTimeCard) update rank, name, value and comparison but never touched
+// the avatar subtree, so a row first drawn before its profile arrived — a fresh
+// install, or straight after a backup import, since the backup carries handles
+// and snapshots but not profiles — kept its silhouette and its missing frame
+// until the page was reloaded. Comparing signatures lets the patchers rebuild
+// only that subtree, only when it actually changed.
+//
+// displayName is part of the signature because the avatar's alt text is the one
+// thing inside the subtree no other patch statement covers.
+function leaderAvatarSignature(entry, displayName) {
+  const name = displayName || getDisplayName(entry, getHandle(entry));
+  return [getAvatarUrl(entry), getRoleFrameUrl(entry), getRoleFrameIndex(entry), name].join("|");
+}
+
+// Rebuild the avatar subtree in place when its signature changed. Deliberately
+// scoped to the avatar span: replacing the row itself would re-mount the node
+// carrying the current-user glow, which is exactly what the in-place patching
+// exists to avoid.
+function patchLeaderAvatar(rowEl, entry, displayName) {
+  const existing = rowEl.querySelector(".be-leader-avatar");
+  if (!existing) return; // fail open: both row builders always emit one
+  const signature = leaderAvatarSignature(entry, displayName);
+  if (existing.getAttribute("data-be-avatar-sig") === signature) return;
+  const replacement = elementFromHTML(renderLeaderAvatar(entry, displayName));
+  if (replacement) existing.replaceWith(replacement);
+}
+
 function renderLeaderAvatar(entry, displayName) {
   const avatar = getAvatarUrl(entry);
   const frameUrl = getRoleFrameUrl(entry);
@@ -831,7 +861,7 @@ function renderLeaderAvatar(entry, displayName) {
     ? `<img src="${escapeHtml(frameUrl)}" alt="" class="be-leader-frame"${frameStyle} aria-hidden="true">`
     : "";
 
-  return `<span class="${avatarClass}">
+  return `<span class="${avatarClass}" data-be-avatar-sig="${escapeHtml(leaderAvatarSignature(entry, name))}">
     <span class="be-leader-avatar-inner"${innerStyle}>${avatarMarkup}</span>
     ${frameMarkup}
   </span>`;
@@ -1576,6 +1606,7 @@ function patchPersonalRow(el, it) {
   const href = `/u/${encodeURIComponent(row.handle)}`;
   if (el.getAttribute("href") !== href) el.setAttribute("href", href);
   setTextIfChanged(el.querySelector(".be-personal-rank"), String(rank));
+  patchLeaderAvatar(el, row, row.name);
   setTextIfChanged(el.querySelector(".be-personal-name"), row.name);
   setTextIfChanged(el.querySelector(".be-personal-handle"), `@${row.displayHandle}`);
   setTextIfChanged(el.querySelector(".be-personal-value"), valueText);
@@ -2211,4 +2242,16 @@ function savePersonalCache() {
 function removePersonalLeaderboards() {
   document.getElementById("be-personal-leaderboards")?.remove();
   document.getElementById("be-personal-divider")?.remove();
+}
+
+// Test hook: scripts/check_leaderboard_avatar.mjs predefines this global before
+// evaluating the file. Never defined on the real page.
+if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
+  window.__BOOTDEV_ENHANCER_TEST__.leaderboard = {
+    leaderAvatarSignature,
+    renderLeaderAvatar,
+    getRoleFrameIndex,
+    getRoleFrameUrl,
+    getAvatarUrl,
+  };
 }
