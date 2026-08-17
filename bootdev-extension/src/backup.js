@@ -448,19 +448,31 @@ async function mergeBossState(imported, now) {
 
   if (!local) {
     if (!eventId && !allTimeHigh) return { message: "Boss stats: nothing to restore.", wrote: false };
-    // Mirrors the shape of newEventState in boss.js — keep in sync.
+    // Mirrors the shape of newEventState in boss.js — keep in sync. Only the
+    // aura history is restorable; the live fields refill from the next
+    // boss_events_progress response, and observedSince stays null because an
+    // imported high has no local observation window.
     const fresh = {
       eventId: eventId || "unknown-event",
+      bossName: null,
+      observedSince: null,
       current: 0,
       eventHigh,
       eventHighAt,
       allTimeHigh,
-      damage: 0,
-      nextChestAt: 0,
-      bossMaxHp: 0,
-      lastChestTier: null,
-      nextChestTier: null,
-      notifiedHigh: 0,
+      xpUser: null,
+      personalTarget: null,
+      chestsEarned: null,
+      chestTotal: null,
+      nextThreshold: null,
+      nextTier: null,
+      lessonsHourly: null,
+      guild: null,
+      guildRewardGranted: null,
+      pinnedGuildId: null,
+      aura: { observedMs: 0, weightedSum: 0, lastSampleAt: null, lastPct: null, changes: [] },
+      alerts: null,
+      lastAlert: null,
       updatedAt: now,
     };
     const ok = await backupStorageSet("local", BACKUP_BOSS_KEY, { state: fresh });

@@ -659,6 +659,24 @@
   font-size: 13px;
   font-weight: 600;
 }
+/* The most recent aura alert, kept on screen after its toast has gone. A toast
+   is missable; the panel is not. */
+.be-boss-alert {
+  margin-top: 9px;
+  padding: 5px 8px;
+  border: 1px solid rgba(229, 174, 60, 0.4);
+  border-radius: 6px;
+  background: rgba(229, 174, 60, 0.1);
+  color: #fde9b0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.be-boss-alert-record {
+  border-color: #e5ae3c;
+  background: rgba(229, 174, 60, 0.2);
+  color: #fef4d1;
+  font-weight: 600;
+}
 /* Banner for an event that has ended: its numbers are final results, not live
    progress, and the panel says so rather than hiding them. */
 .be-boss-final {
@@ -723,6 +741,10 @@
   grid-column: 1 / -1;
   gap: 8px;
 }
+.be-boss-settings-note {
+  grid-column: 1 / -1;
+  margin-top: -2px;
+}
 .be-boss-manual button {
   min-height: 31px;
   border: 1px solid rgba(229, 174, 60, 0.45);
@@ -771,8 +793,9 @@
   pointer-events: none;
 }
 .be-toast {
+  position: relative;
   width: 100%;
-  padding: 12px 18px;
+  padding: 12px 34px 12px 18px; /* room for the dismiss control */
   border-radius: 10px;
   background: #2b6cb0;
   color: #fff;
@@ -821,6 +844,54 @@
 }
 .be-toast-btn-primary:hover {
   background: rgba(255, 255, 255, 0.88);
+}
+.be-toast-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.be-toast-close:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.be-toast-close:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+/* Severity. `info` keeps the long-standing blue; the two boss-aura variants
+   borrow the panel's gold so a rare alert reads as one, and `record` (a new
+   all-time high) is sticky, so it also gets the strongest treatment. */
+.be-toast-high,
+.be-toast-record {
+  background: linear-gradient(180deg, #2c2412, #1c1710);
+  border: 1px solid #e5ae3c;
+  color: #fef4d1;
+}
+.be-toast-high .be-toast-btn,
+.be-toast-record .be-toast-btn {
+  border-color: rgba(229, 174, 60, 0.6);
+  color: #fde9b0;
+}
+.be-toast-high .be-toast-btn-primary,
+.be-toast-record .be-toast-btn-primary {
+  background: #e5ae3c;
+  border-color: #e5ae3c;
+  color: #1c1710;
+}
+.be-toast-record {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45), 0 0 22px rgba(229, 174, 60, 0.45);
+  font-weight: 600;
 }
 
 /* ---------------------------------------------------------------------------

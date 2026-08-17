@@ -118,6 +118,9 @@ const {
   migrateBossState,
   renderPersonalFight,
   renderGuildFight,
+  updateAuraStats,
+  auraMean,
+  chooseAuraAlert,
 } = boss;
 
 // Builds the same state handleBossProgress would write, so the render checks
@@ -394,6 +397,104 @@ check("migrate: it keeps personal progress", [current.xpUser, current.chestsEarn
 check("migrate: it keeps the guild pin", current.pinnedGuildId, "a838d70b");
 check("migrate: it keeps the selected guild", current.guild.name, "Byte Club");
 check("migrate: it keeps the reward flag", current.guildRewardGranted, true);
+
+// --- aura statistics ---------------------------------------------------------
+// A TIME-weighted mean over OBSERVED time. Both halves matter: the aura is a
+// step function held for unequal durations, and Catalyst does not watch
+// continuously.
+
+const MIN = 60_000;
+// Production cadence: BOSS_REFRESH_MS is 2 minutes, comfortably under the
+// 5-minute per-interval cap, so a watched stretch accumulates in full.
+function feedEvery(gapMin, values) {
+  let stats = null;
+  let t = 0;
+  for (const value of values) {
+    stats = updateAuraStats(stats, value, t);
+    t += gapMin * MIN;
+  }
+  return stats;
+}
+const repeat = (value, n) => Array.from({ length: n }, () => value);
+
+// Each interval is attributed to the value that was LIVE across it.
+const twoSamples = updateAuraStats(updateAuraStats(null, 30, 0), 90, 2 * MIN);
+check("aura: the interval is credited to the value that was live", twoSamples.weightedSum, 30 * 2 * MIN);
+check("aura: observed time is the interval", twoSamples.observedMs, 2 * MIN);
+
+// Half an hour at 30% then half an hour at 60% averages ~45%, where a plain
+// average of samples would depend on how often we happened to poll.
+const weighted = feedEvery(2, [...repeat(30, 16), ...repeat(60, 15)]);
+const weightedMean = auraMean(weighted);
+check("aura: the mean is time-weighted", weightedMean > 43 && weightedMean < 46, true);
+
+// Under the minimum observed window there is no honest average to show.
+check("aura: no mean before 30 minutes observed", auraMean(feedEvery(2, repeat(30, 5))), null);
+check("aura: no mean from nothing", auraMean(null), null);
+
+// A three-day gap (browser closed, laptop asleep) must contribute a bounded
+// slice, not three days at one value.
+const gapped = updateAuraStats(updateAuraStats(null, 32, 0), 80, 3 * 24 * 60 * MIN);
+check("aura: a long gap contributes at most the cap", gapped.observedMs, 5 * MIN);
+
+// The changes list records steps only, and its cap cannot distort the mean.
+const stepped = feedEvery(2, [30, 30.2, 45, 45]);
+check("aura: sub-1-point moves are not logged", stepped.changes.length, 2);
+check("aura: a logged change carries its value", stepped.changes[1][1], 45);
+let capped = null;
+for (let i = 0; i < 600; i++) capped = updateAuraStats(capped, i % 2 ? 30 : 60, i * 2 * MIN);
+check("aura: the changes list is capped", capped.changes.length, 500);
+const cappedMean = auraMean(capped);
+check("aura: the mean survives the cap", cappedMean > 43 && cappedMean < 47, true);
+
+// --- alert tiers -------------------------------------------------------------
+
+const NOW = 1_000_000_000;
+const alertAt = (over = {}) =>
+  chooseAuraAlert({ current: 60, prevEventHigh: 50, prevAllTimeHigh: 80, mean: 30, floor: 50, alerts: null, now: NOW, ...over });
+
+check("alert: a new event high fires", alertAt().tier, "high");
+check("alert: a record outranks an event high", alertAt({ current: 90 }).tier, "record");
+check("alert: a record is sticky", alertAt({ current: 90 }).durationMs, 0);
+check("alert: near the event high", alertAt({ current: 51, prevEventHigh: 60 }).tier, "near");
+check("alert: above the average", alertAt({ current: 55, prevEventHigh: 90, mean: 30 }).tier, "above");
+check("alert: nothing below the floor", alertAt({ current: 40, prevEventHigh: 90, mean: 10 }), null);
+check("alert: nothing without a change", alertAt({ alerts: { lastPct: 60 } }), null);
+check("alert: no current value, no alert", alertAt({ current: null }), null);
+
+// A fresh install has an all-time high of 0 and a brand-new event has an event
+// high of 0 — without these guards every early sample would be a "record".
+check("alert: no record against a zero all-time high", alertAt({ current: 90, prevAllTimeHigh: 0 }).tier, "high");
+check("alert: no event high against a zero event high", alertAt({ current: 20, prevEventHigh: 0, prevAllTimeHigh: 0, mean: null }), null);
+
+// The increment guard: an opening surge climbing a fraction at a time must not
+// announce each step as a new high. (It may still be "near the high" — that is
+// a different, and quieter, tier with an hour's cooldown.)
+check("alert: a fractional rise is not announced as a new high", alertAt({ current: 50.4 }).tier, "near");
+check(
+  "alert: and nothing at all when it is also below the floor",
+  alertAt({ current: 40.4, prevEventHigh: 40, prevAllTimeHigh: 80, mean: null }),
+  null
+);
+
+// Cooldowns, and the lower-tier suppression after a bigger one.
+const justFired = { tierLastAt: { high: NOW - 60_000 }, lastTier: "high", lastAt: NOW - 60_000, lastPct: 55 };
+check("alert: a tier respects its cooldown", alertAt({ alerts: justFired }), null);
+check(
+  "alert: it fires again after the cooldown",
+  alertAt({ alerts: { ...justFired, tierLastAt: { high: NOW - 11 * 60_000 }, lastAt: NOW - 11 * 60_000 } }).tier,
+  "high"
+);
+check(
+  "alert: a lower tier stays quiet right after a higher one",
+  alertAt({ current: 55, prevEventHigh: 90, mean: 30, alerts: { lastTier: "record", lastAt: NOW - 60_000, tierLastAt: {} } }),
+  null
+);
+check(
+  "alert: the floor is configurable",
+  alertAt({ current: 45, prevEventHigh: 90, mean: 20, floor: 40 }).tier,
+  "above"
+);
 
 // --- shapes that carry no event ---------------------------------------------
 

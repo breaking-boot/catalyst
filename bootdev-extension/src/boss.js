@@ -13,7 +13,31 @@ const BOSS_REMINDER_DEBUG_KEY = "be_boss_reminder_debug";
 const BOSS_DEBUG_RESPONSE_KEY = "be_boss_debug_response";
 const BOSS_PROGRESS_URL = "https://api.boot.dev/v1/boss_events_progress";
 const BOSS_REFRESH_MS = 120_000; // boss data changes slowly; poll every 2 min
-const NEAR_HIGH_THRESHOLD = 0.95; // notify when current >= 95% of event high
+// --- aura statistics and alert tiers ---------------------------------------
+// The old single alert fired at 95% of the event high, which is unreachable
+// once that high is 100% — exactly what happened to the 2026-08 event, whose
+// opening surge hit 100% and then sat near 32% for a week. These four tiers
+// replace it, and they need to know what is NORMAL for the event, which is
+// what the statistics below measure.
+const AURA_SAMPLE_CAP_MS = 5 * 60_000; // one interval contributes at most this much observed time
+const AURA_MEAN_MIN_MS = 30 * 60_000; // below this, an average is noise
+const AURA_CHANGES_MAX = 500; // ~7 days of 30-min steps; the mean is unaffected by this cap
+const AURA_CHANGE_MIN_DELTA = 1; // points; the aura is a step function, so only steps are logged
+
+const AURA_ALERT_MIN_DELTA = 1; // points above the previous high before it counts as a new one
+const AURA_ALERT_NEAR_RATIO = 0.8; // "near the event high" starts here
+const AURA_ALERT_FLOOR_DEFAULT = 50; // below this, a bonus is not worth interrupting for
+const AURA_ALERT_ABOVE_AVG_DELTA = 10; // points above this event's average
+const AURA_ALERT_COOLDOWN_MS = {
+  record: 10 * 60_000,
+  high: 10 * 60_000,
+  near: 60 * 60_000,
+  above: 120 * 60_000,
+};
+// After a higher tier fires, stay quiet on the lower ones for a while: a climb
+// should not produce a record toast chased by a near-high toast.
+const AURA_ALERT_LOWER_SUPPRESS_MS = 15 * 60_000;
+const AURA_ALERT_RANK = { record: 4, high: 3, near: 2, above: 1 };
 const BOSS_REMINDER_REPEAT_MS = 24 * 60 * 60 * 1000; // re-remind at most daily
 const BOSS_REMINDER_TOAST_MS = 20_000; // action toast needs longer than the default 6s
 const BOSS_INACTIVE_NOTICE_KEY = "be_boss_inactive_notice";
@@ -253,6 +277,12 @@ async function handleBossProgress(json) {
     state.allTimeHigh = allTimeHigh; // all-time high persists across events
   }
 
+  // Captured BEFORE the update: the alert tiers compare the new value against
+  // the highs as they stood, otherwise every new high has already been absorbed
+  // by the time it would be announced.
+  const prevHighs = { eventHigh: state.eventHigh || 0, allTimeHigh: state.allTimeHigh || 0 };
+  const auraChanged = bonusPct != null && bonusPct !== state.current;
+
   // Update rolling event stats.
   if (bonusPct != null) {
     state.current = bonusPct;
@@ -261,6 +291,7 @@ async function handleBossProgress(json) {
       state.eventHighAt = now; // when the high was observed; backup export/merge metadata
     }
     state.allTimeHigh = Math.max(state.allTimeHigh || 0, bonusPct);
+    state.aura = updateAuraStats(state.aura, bonusPct, now);
   }
 
   const bossName = json?.Event?.Boss?.Name;
@@ -305,11 +336,14 @@ async function handleBossProgress(json) {
     }
   }
 
+  // Before the write, so the alert bookkeeping and the panel's alert line are
+  // persisted with everything else rather than in a second round-trip.
+  if (visible && active && auraChanged) maybeNotifyAura(state, prevHighs, now);
+
   bossState = state;
   await chromeSet(BOSS_KEY, { state });
   if (enhancerStopped || !visible) return;
   renderBossPanel(state);
-  if (active) maybeNotifyNearHigh(state);
 }
 
 // Boundary checks for the fields this feature depends on. Every block here
@@ -532,7 +566,10 @@ function newEventState(eventId) {
     guild: null,
     guildRewardGranted: null,
     pinnedGuildId: null,
-    notifiedHigh: 0, // event-high value we last notified about (dedupe)
+    // Aura statistics for THIS event, and the alert bookkeeping that reads them.
+    aura: newAuraStats(),
+    alerts: null, // { tierLastAt, lastPct, lastTier, lastAt }
+    lastAlert: null, // { tier, note, at } — the line the panel keeps on screen
     updatedAt: Date.now(),
   };
 }
@@ -557,8 +594,20 @@ function migrateBossState(stored) {
   state.eventHigh = Math.max(0, num(stored.eventHigh) ?? 0);
   state.eventHighAt = num(stored.eventHighAt);
   state.allTimeHigh = Math.max(0, num(stored.allTimeHigh) ?? 0, state.eventHigh);
-  state.notifiedHigh = Math.max(0, num(stored.notifiedHigh) ?? 0);
   state.updatedAt = num(stored.updatedAt) ?? Date.now();
+  // notifiedHigh (the old single 95%-of-high dedupe) is dropped: the tiered
+  // alerts keep their own per-tier bookkeeping.
+  if (isPlainObject(stored.aura)) {
+    state.aura = {
+      observedMs: Math.max(0, num(stored.aura.observedMs) ?? 0),
+      weightedSum: Math.max(0, num(stored.aura.weightedSum) ?? 0),
+      lastSampleAt: num(stored.aura.lastSampleAt),
+      lastPct: num(stored.aura.lastPct),
+      changes: Array.isArray(stored.aura.changes) ? stored.aura.changes.slice(-AURA_CHANGES_MAX) : [],
+    };
+  }
+  if (isPlainObject(stored.alerts)) state.alerts = stored.alerts;
+  if (isPlainObject(stored.lastAlert)) state.lastAlert = stored.lastAlert;
   if (typeof stored.bossName === "string") state.bossName = stored.bossName;
   if (typeof stored.eventActive === "boolean") state.eventActive = stored.eventActive;
   if (num(stored.expiresAt) != null) state.expiresAt = num(stored.expiresAt);
@@ -631,6 +680,15 @@ async function renderBossPanel(s) {
           s.expiresAt ? `Final — event ended ${fmtBossDate(s.expiresAt)}` : "Final — no active event"
         )}</div>`
       : "";
+    const mean = auraMean(s.aura);
+    // The alert also lands here, not only as a toast: a toast can be missed
+    // while you are in the editor or another tab, and this is still on screen
+    // when you look up. Cleared when the event rolls over.
+    const alertMarkup = isPlainObject(s.lastAlert) && s.lastAlert.note
+      ? `<div class="be-boss-alert be-boss-alert-${escapeHtml(s.lastAlert.tier || "info")}">${escapeHtml(
+          `⚑ ${s.lastAlert.note}${s.lastAlert.at ? ` · ${new Date(s.lastAlert.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`
+        )}</div>`
+      : "";
     const settingsMarkup = bossUiState.settingsOpen
       ? `<div class="be-boss-settings-panel">
           <div class="be-boss-manual">
@@ -642,6 +700,11 @@ async function renderBossPanel(s) {
               <span>All-time high %</span>
               <input id="be-boss-alltime-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.allTimeHigh || 0))}">
             </label>
+            <label title="Applies to the two 'good time to submit' alerts — near this event's high, and well above its average. A new event high or all-time high always alerts, whatever this is set to.">
+              <span>"Good aura" from %</span>
+              <input id="be-boss-alert-floor" type="number" min="0" max="100" step="1" inputmode="numeric" value="${escapeHtml(Math.round(getAuraAlertFloor()))}">
+            </label>
+            <div class="be-boss-caption be-boss-settings-note">Below this, a merely-good bonus stays quiet. New event and all-time highs always alert.</div>
             <div class="be-boss-manual-actions">
               <button id="be-boss-save-highs" type="button">Save highs</button>
               <button id="be-boss-refresh" type="button">Refresh</button>
@@ -669,8 +732,11 @@ async function renderBossPanel(s) {
         <div><b>${fmtPct(s.current)}</b><span>Current aura</span></div>
         <div><b>${fmtPct(s.eventHigh)}</b><span>Event high</span></div>
         <div><b>${fmtPct(s.allTimeHigh)}</b><span>All-time high</span></div>
+        <div><b>${mean == null ? "–" : fmtPct(mean)}</b><span>Event average</span></div>
+        <div><b>${fmtPct(Math.max(0, (s.eventHigh || 0) - (s.current || 0)))}</b><span>Below event high</span></div>
         <div><b>${fmtNum(s.lessonsHourly ?? "?")}</b><span>Lessons this hour</span></div>
       </div>
+      ${alertMarkup}
       ${renderPersonalFight(s)}
       ${renderGuildFight(s)}
       <div class="be-boss-meta">${escapeHtml(metaText)}</div>
@@ -745,7 +811,11 @@ function bindBossPanelControls(panel, state) {
       if ((next.eventHigh || 0) > (next.allTimeHigh || 0)) {
         next.allTimeHigh = next.eventHigh;
       }
-      next.notifiedHigh = 0;
+      const alertFloor = num(panel.querySelector("#be-boss-alert-floor")?.value);
+      if (alertFloor != null) await saveBossUiState({ alertFloor: clamp(alertFloor, 0, 100) });
+      // Editing the highs re-arms the alerts: the numbers they compare against
+      // just changed, so a value already announced deserves another look.
+      next.alerts = null;
       next.updatedAt = Date.now();
 
       bossState = next;
@@ -892,16 +962,154 @@ function bindBossDrag(panel) {
   };
 }
 
-function maybeNotifyNearHigh(s) {
-  if (!s.eventHigh) return;
-  const ratio = s.current / s.eventHigh;
-  // Only fire when we're near the high AND haven't already notified for
-  // this particular high value (avoid spamming on every poll).
-  if (ratio >= NEAR_HIGH_THRESHOLD && s.notifiedHigh !== s.eventHigh) {
-    toast(`Boots Aura at ${fmtPct(s.current)}: near event high (${fmtPct(s.eventHigh)}). Good time to submit.`);
-    s.notifiedHigh = s.eventHigh;
-    chromeSet(BOSS_KEY, { state: s });
+// ---------------------------------------------------------------------------
+// Aura statistics
+// ---------------------------------------------------------------------------
+// A TIME-WEIGHTED mean over observed time, kept as a running aggregate. The
+// aura is a step function held for unequal durations and Catalyst does not
+// observe continuously (the tab hides, the browser closes), so averaging raw
+// samples would over-weight whichever value happened to be live while the tab
+// was busiest. Each response contributes the elapsed time since the last one,
+// capped, at the value that was live across it.
+function newAuraStats() {
+  return { observedMs: 0, weightedSum: 0, lastSampleAt: null, lastPct: null, changes: [] };
+}
+
+function updateAuraStats(stats, pctValue, now) {
+  const s = isPlainObject(stats)
+    ? { ...stats, changes: Array.isArray(stats.changes) ? stats.changes.slice() : [] }
+    : newAuraStats();
+  if (pctValue == null) return s;
+
+  if (s.lastSampleAt != null && s.lastPct != null) {
+    // The cap is what keeps a closed browser from weighting one value by three
+    // days. What is left is an honest mean over the time actually watched,
+    // which is what the panel's "Observed since" line claims.
+    const elapsed = Math.max(0, Math.min(now - s.lastSampleAt, AURA_SAMPLE_CAP_MS));
+    s.observedMs += elapsed;
+    s.weightedSum += s.lastPct * elapsed;
   }
+  if (s.lastPct == null || Math.abs(pctValue - s.lastPct) >= AURA_CHANGE_MIN_DELTA) {
+    s.changes.push([now, pctValue]);
+    // Dropping the oldest entries never distorts the mean: that is an O(1)
+    // aggregate, and this list exists to retune the thresholds next event.
+    if (s.changes.length > AURA_CHANGES_MAX) s.changes = s.changes.slice(-AURA_CHANGES_MAX);
+  }
+  s.lastPct = pctValue;
+  s.lastSampleAt = now;
+  return s;
+}
+
+function auraMean(stats) {
+  if (!isPlainObject(stats)) return null;
+  const observedMs = num(stats.observedMs);
+  const weightedSum = num(stats.weightedSum);
+  if (observedMs == null || weightedSum == null) return null;
+  if (observedMs < AURA_MEAN_MIN_MS) return null; // too little watched to mean anything
+  return weightedSum / observedMs;
+}
+
+// ---------------------------------------------------------------------------
+// Alert tiers (pure: scripts/check_boss_normalizer.mjs drives this directly)
+// ---------------------------------------------------------------------------
+// Highest matching tier only, one alert per aura change, each with its own
+// cooldown. The `prev... > 0` guards matter: on a fresh install the all-time
+// high starts at 0, so without them every early sample would be a "record".
+function chooseAuraAlert({ current, prevEventHigh = 0, prevAllTimeHigh = 0, mean = null, floor, alerts, now }) {
+  if (current == null) return null;
+  const a = isPlainObject(alerts) ? alerts : {};
+  if (a.lastPct === current) return null; // this exact value already alerted
+
+  const minFloor = num(floor) ?? AURA_ALERT_FLOOR_DEFAULT;
+  const tierLastAt = isPlainObject(a.tierLastAt) ? a.tierLastAt : {};
+  const cooled = (tier) => {
+    const last = num(tierLastAt[tier]);
+    if (last != null && now - last < AURA_ALERT_COOLDOWN_MS[tier]) return false;
+    const lastAt = num(a.lastAt);
+    if (
+      lastAt != null &&
+      a.lastTier &&
+      (AURA_ALERT_RANK[a.lastTier] ?? 0) > AURA_ALERT_RANK[tier] &&
+      now - lastAt < AURA_ALERT_LOWER_SUPPRESS_MS
+    ) {
+      return false;
+    }
+    return true;
+  };
+
+  if (prevAllTimeHigh > 0 && current >= prevAllTimeHigh + AURA_ALERT_MIN_DELTA && cooled("record")) {
+    return {
+      tier: "record",
+      variant: "record",
+      durationMs: 0, // sticky: a new all-time high should still be there when you look up
+      message: `New all-time high — Boots Aura ${fmtPct(current)}. The best Catalyst has seen.`,
+      note: `New all-time high ${fmtPct(current)}`,
+    };
+  }
+  if (prevEventHigh > 0 && current >= prevEventHigh + AURA_ALERT_MIN_DELTA && cooled("high")) {
+    return {
+      tier: "high",
+      variant: "high",
+      durationMs: 14_000,
+      message: `New event high — Boots Aura ${fmtPct(current)} (was ${fmtPct(prevEventHigh)}).`,
+      note: `New event high ${fmtPct(current)}`,
+    };
+  }
+  if (prevEventHigh > 0 && current >= AURA_ALERT_NEAR_RATIO * prevEventHigh && current >= minFloor && cooled("near")) {
+    return {
+      tier: "near",
+      variant: "info",
+      durationMs: 10_000,
+      message: `Boots Aura ${fmtPct(current)} — near this event's high of ${fmtPct(prevEventHigh)}. Good time to submit.`,
+      note: `Near the event high · ${fmtPct(current)}`,
+    };
+  }
+  if (mean != null && current >= minFloor && current >= mean + AURA_ALERT_ABOVE_AVG_DELTA && cooled("above")) {
+    return {
+      tier: "above",
+      variant: "info",
+      durationMs: 10_000,
+      message: `Boots Aura ${fmtPct(current)} — well above this event's ${fmtPct(mean)} average. Good time to submit.`,
+      note: `Above average · ${fmtPct(current)}`,
+    };
+  }
+  return null;
+}
+
+// The alert is delivered twice on purpose: a toast interrupts, and a line in
+// the panel persists. A toast can be missed while you are in the editor or
+// another tab; the panel is on screen whenever the tracker is.
+function maybeNotifyAura(state, prev, now) {
+  if (!isFeatureEnabled("bossAuraAlerts")) return;
+  // A toast on a hidden tab is gone before it is seen. The value is still
+  // recorded, and returning to the tab forces a fresh response, so the
+  // "near"/"above" tiers get another chance at the current value.
+  if (document.hidden) return;
+
+  const alert = chooseAuraAlert({
+    current: state.current,
+    prevEventHigh: prev.eventHigh,
+    prevAllTimeHigh: prev.allTimeHigh,
+    mean: auraMean(state.aura),
+    floor: getAuraAlertFloor(),
+    alerts: state.alerts,
+    now,
+  });
+  if (!alert) return;
+
+  state.alerts = {
+    tierLastAt: { ...(isPlainObject(state.alerts?.tierLastAt) ? state.alerts.tierLastAt : {}), [alert.tier]: now },
+    lastPct: state.current,
+    lastTier: alert.tier,
+    lastAt: now,
+  };
+  state.lastAlert = { tier: alert.tier, note: alert.note, at: now };
+  toast(alert.message, { variant: alert.variant, durationMs: alert.durationMs });
+}
+
+function getAuraAlertFloor() {
+  const stored = num(bossUiState.alertFloor);
+  return stored != null && stored >= 0 ? stored : AURA_ALERT_FLOOR_DEFAULT;
 }
 
 async function loadBossUiState() {
@@ -913,6 +1121,8 @@ async function loadBossUiState() {
     settingsOpen: Boolean(stored.settingsOpen),
     x: Number.isFinite(Number(stored.x)) ? Number(stored.x) : null,
     y: Number.isFinite(Number(stored.y)) ? Number(stored.y) : null,
+    // Per-device, like the rest of this record: the bonus worth interrupting for.
+    alertFloor: Number.isFinite(Number(stored.alertFloor)) ? Number(stored.alertFloor) : null,
   };
   bossUiLoaded = true;
 }
@@ -1076,5 +1286,8 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     newEventState,
     renderPersonalFight,
     renderGuildFight,
+    updateAuraStats,
+    auraMean,
+    chooseAuraAlert,
   };
 }
