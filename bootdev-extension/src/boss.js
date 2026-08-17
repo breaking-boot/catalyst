@@ -291,15 +291,22 @@ async function handleBossProgress(json) {
   const prevHighs = { eventHigh: state.eventHigh || 0, allTimeHigh: state.allTimeHigh || 0 };
   const auraChanged = bonusPct != null && bonusPct !== state.current;
 
-  // Update rolling event stats.
+  // Update rolling event stats — but only while the event is running. Measured
+  // at 2026-08-17T17:00Z: the instant expiresAt passes, xpBonus and
+  // numLessonsCompletedHourly drop to 0 while the event, xpUser and the guilds
+  // all stay. Feeding those zeros into the statistics would drag the event's
+  // average toward 0 for as long as the user kept browsing Boot.dev afterwards,
+  // and that average is what gets archived into previousEvent.
   if (bonusPct != null) {
     state.current = bonusPct;
-    if (bonusPct > (state.eventHigh || 0)) {
-      state.eventHigh = bonusPct;
-      state.eventHighAt = now; // when the high was observed; backup export/merge metadata
+    if (active) {
+      if (bonusPct > (state.eventHigh || 0)) {
+        state.eventHigh = bonusPct;
+        state.eventHighAt = now; // when the high was observed; backup export/merge metadata
+      }
+      state.allTimeHigh = Math.max(state.allTimeHigh || 0, bonusPct);
+      state.aura = updateAuraStats(state.aura, bonusPct, now);
     }
-    state.allTimeHigh = Math.max(state.allTimeHigh || 0, bonusPct);
-    state.aura = updateAuraStats(state.aura, bonusPct, now);
   }
 
   const bossName = json?.Event?.Boss?.Name;
@@ -710,10 +717,17 @@ async function renderBossPanel(s) {
     panel.style.setProperty("--be-boss-texture", `url("${BOSS_TEXTURE_URL}")`);
     applyBossPanelPosition(panel);
 
+    // Once the event is over these three describe a bonus that no longer
+    // exists — Boot.dev serves 0 for both of them past expiresAt — so they read
+    // as unavailable rather than as a real zero. The high, the all-time high
+    // and the average stay: those are the event's result.
+    const finished = s.eventActive === false;
+    const currentText = finished ? "–" : fmtPct(s.current);
+
     if (bossUiState.minimized) {
       panel.innerHTML = `
         <div class="be-boss-head be-boss-drag-handle">
-          <span class="be-boss-title">Boss Event · Current Aura: ${fmtPct(s.current)}</span>
+          <span class="be-boss-title">Boss Event · Current Aura: ${currentText}</span>
           <div class="be-boss-actions">
             <button id="be-boss-settings-toggle" type="button" title="Open boss settings" aria-label="Open boss settings" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}">&#9881;</button>
             <button id="be-boss-toggle" type="button" title="Expand boss event" aria-label="Expand boss event">+</button>
@@ -799,12 +813,12 @@ async function renderBossPanel(s) {
       </div>
       ${finalMarkup}
       <div class="be-boss-grid">
-        <div><b>${fmtPct(s.current)}</b><span>Current aura</span></div>
+        <div><b>${currentText}</b><span>Current aura</span></div>
         <div><b>${fmtPct(s.eventHigh)}</b><span>Event high</span></div>
         <div><b>${fmtPct(s.allTimeHigh)}</b><span>All-time high</span></div>
         <div><b>${mean == null ? "–" : fmtPct(mean)}</b><span>Event average</span></div>
-        <div><b>${fmtPct(Math.max(0, (s.eventHigh || 0) - (s.current || 0)))}</b><span>Below event high</span></div>
-        <div><b>${fmtNum(s.lessonsHourly ?? "?")}</b><span>Lessons this hour</span></div>
+        <div><b>${finished ? "–" : fmtPct(Math.max(0, (s.eventHigh || 0) - (s.current || 0)))}</b><span>Below event high</span></div>
+        <div><b>${finished ? "–" : fmtNum(s.lessonsHourly ?? "?")}</b><span>Lessons this hour</span></div>
       </div>
       ${alertMarkup}
       ${renderPersonalFight(s)}
