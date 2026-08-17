@@ -25,15 +25,6 @@ const BOSS_INACTIVE_REPEAT_MS = 24 * 60 * 60 * 1000; // "no active event" toast 
 // https://www.boot.dev/assets/maptexture2.webp, which 404s), so the panel had
 // been rendering with no texture at all. Same pattern as ROLE_FRAME_URLS.
 const BOSS_TEXTURE_URL = chrome.runtime.getURL("assets/maptexture2.webp");
-// Interim explanation for the tiles hidden in v0.13.1. Boot.dev replaced the
-// community boss goal with individual + guild progress on 2026-08-14, which
-// left every damage/chest figure measuring a target that no longer exists.
-// Removed when v0.14.0 rebuilds the panel around xpUser and userXPThreshold.
-const BOSS_MODEL_NOTE =
-  "Boot.dev recently replaced the boss event's community goals with individual and " +
-  "guild goals. Catalyst is being updated to reflect the new event format, so the " +
-  "damage and chest readouts are hidden for now.";
-
 let bossRefreshTimer = null;
 let bossUiState = { minimized: false, settingsOpen: false, x: null, y: null };
 let bossUiLoaded = false;
@@ -624,14 +615,22 @@ async function renderBossPanel(s) {
       return;
     }
 
-    const belowEventHigh =
-      s.eventHigh > 0 ? Math.max(0, s.eventHigh - s.current).toFixed(0) : "0";
     const lastUpdated = s.updatedAt ? new Date(s.updatedAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "unknown";
-    const metaText = s.eventActive === false
-      ? (s.expiresAt
-          ? `No active event — ended ${new Date(s.expiresAt).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}`
-          : "No active event")
-      : `Last updated ${lastUpdated}`;
+    // "Event high" has always meant the highest aura CATALYST HAPPENED TO SEE,
+    // which is not the event's peak when the tracker was off for part of it —
+    // an event that reached 100% was recorded as 66%. Say which window the
+    // recorded highs came from rather than renaming the (already tight) tiles.
+    const observed = s.observedSince
+      ? `Observed since ${fmtBossDate(s.observedSince)}`
+      : "observation window unknown";
+    const metaText = `Last updated ${lastUpdated} · ${observed}`;
+    // A finished event's numbers are final results, not live progress. They stay
+    // on screen — they are the last thing that happened — with a banner saying so.
+    const finalMarkup = s.eventActive === false
+      ? `<div class="be-boss-final">${escapeHtml(
+          s.expiresAt ? `Final — event ended ${fmtBossDate(s.expiresAt)}` : "Final — no active event"
+        )}</div>`
+      : "";
     const settingsMarkup = bossUiState.settingsOpen
       ? `<div class="be-boss-settings-panel">
           <div class="be-boss-manual">
@@ -652,31 +651,28 @@ async function renderBossPanel(s) {
         </div>`
       : "";
 
-    // Aura tiles only. Boss damage, To next chest, To defeat boss, Chest tier
-    // and both progress bars were removed in v0.13.1: they measured the
-    // community goal Boot.dev retired on 2026-08-14. event.healthPoints now
-    // carries the personal 10000 XP target while xpTotal is still a
-    // community-wide figure, so "To defeat boss" rendered 0 and "Boss defeat"
-    // rendered 100%; the chest tiles mixed a personal threshold with community
-    // damage and read isUnlocked/isUnlockedByUser, which the 2026-08-14 capture
-    // cannot tell apart. handleBossProgress still tracks all of it in
-    // be_boss_state, so v0.14.0 inherits the history rather than starting cold.
+    // Three blocks, matching what the event actually is since 2026-08-14: the
+    // aura (community-wide, and the reason to keep the panel open), your own
+    // chest ladder, and one guild. Nothing here is derived from xpTotal or from
+    // healthPoints-as-community-HP.
     panel.innerHTML = `
       <div class="be-boss-head be-boss-drag-handle">
-        <span>Boss Event</span>
+        <span>${escapeHtml(s.bossName ? `Boss Event · ${s.bossName}` : "Boss Event")}</span>
         <div class="be-boss-actions">
           <button id="be-boss-settings-toggle" type="button" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}" title="Boss high settings" aria-label="Boss high settings">&#9881;</button>
           <button id="be-boss-toggle" type="button" title="Minimize boss event" aria-label="Minimize boss event">-</button>
           <button id="be-boss-close" type="button" title="Close and turn off the boss tracker" aria-label="Close and turn off the boss tracker">&times;</button>
         </div>
       </div>
+      ${finalMarkup}
       <div class="be-boss-grid">
         <div><b>${fmtPct(s.current)}</b><span>Current aura</span></div>
         <div><b>${fmtPct(s.eventHigh)}</b><span>Event high</span></div>
         <div><b>${fmtPct(s.allTimeHigh)}</b><span>All-time high</span></div>
-        <div><b>${belowEventHigh}%</b><span>Below event high</span></div>
+        <div><b>${fmtNum(s.lessonsHourly ?? "?")}</b><span>Lessons this hour</span></div>
       </div>
-      <div class="be-boss-note">${escapeHtml(BOSS_MODEL_NOTE)}</div>
+      ${renderPersonalFight(s)}
+      ${renderGuildFight(s)}
       <div class="be-boss-meta">${escapeHtml(metaText)}</div>
       ${settingsMarkup}`;
 
@@ -759,9 +755,6 @@ function bindBossPanelControls(panel, state) {
   }
 }
 
-// Idle since v0.13.1 — the two progress bars they drew measured the retired
-// community goal. Kept because v0.14.0 rebuilds the panel around the personal
-// chest ladder (xpUser vs userXPThreshold), which needs exactly this.
 function getProgressPct(value, total) {
   const current = num(value);
   const max = num(total);
@@ -769,15 +762,95 @@ function getProgressPct(value, total) {
   return clamp((current / max) * 100, 0, 100);
 }
 
-function renderBossProgress(label, pctValue) {
-  const pctText = pctValue == null ? "?" : `${Math.round(pctValue)}%`;
-  const width = pctValue == null ? 0 : pctValue;
-  return `<div class="be-boss-progress">
-    <div class="be-boss-progress-label"><span>${escapeHtml(label)}</span><b>${escapeHtml(pctText)}</b></div>
-    <div class="be-boss-progress-track" role="progressbar" aria-label="${escapeHtml(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(pctValue == null ? 0 : Math.round(pctValue))}">
-      <span style="width: ${escapeHtml(width)}%"></span>
-    </div>
+function fmtBossDate(ms) {
+  return new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+}
+
+function renderBossSection(title, right, body) {
+  if (!body) return "";
+  return `<div class="be-boss-section">
+    <div class="be-boss-section-head"><span>${escapeHtml(title)}</span>${right ? `<b>${escapeHtml(right)}</b>` : ""}</div>
+    ${body}
   </div>`;
+}
+
+function renderBossTrack(label, pctValue) {
+  const width = pctValue == null ? 0 : clamp(pctValue, 0, 100);
+  return `<div class="be-boss-progress-track" role="progressbar" aria-label="${escapeHtml(label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${escapeHtml(Math.round(width))}">
+    <span style="width: ${escapeHtml(width)}%"></span>
+  </div>`;
+}
+
+function renderBossCaption(text) {
+  return text ? `<div class="be-boss-caption">${escapeHtml(text)}</div>` : "";
+}
+
+// Your own fight: xpUser against the userXPThreshold ladder. Rendered as one
+// bar across the whole ladder, matching Boot.dev's own single track with four
+// chest markers. Once every chest is earned the bar is replaced by a status
+// line — a permanently-full bar says nothing, and Boot.dev calls the final
+// milestone "defeating the boss personally".
+function renderPersonalFight(s) {
+  if (s.xpUser == null) return "";
+
+  const earned = num(s.chestsEarned) ?? 0;
+  const total = num(s.chestTotal) ?? 0;
+  const target = num(s.personalTarget);
+  const chestCount = total > 0 ? `${earned} of ${total} chests` : "";
+
+  if (total > 0 && earned >= total) {
+    return renderBossSection(
+      "Your fight",
+      chestCount,
+      `<div class="be-boss-status">Boss defeated · ${escapeHtml(chestTier(total - 1))} chest earned</div>` +
+        renderBossCaption(`Your event XP ${fmtNum(s.xpUser)}`)
+    );
+  }
+
+  const next = num(s.nextThreshold);
+  const caption = target
+    ? `${fmtNum(s.xpUser)} / ${fmtNum(target)} XP` +
+      (next != null
+        ? ` · Next: ${s.nextTier || "next"} Chest at ${fmtNum(next)} (${fmtNum(Math.max(0, next - s.xpUser))} to go)`
+        : "")
+    : `Your event XP ${fmtNum(s.xpUser)}`;
+
+  // No readable target means no honest bar — show the XP alone rather than a
+  // bar measuring nothing.
+  const body = target
+    ? renderBossTrack("Your fight", getProgressPct(s.xpUser, target)) + renderBossCaption(caption)
+    : renderBossCaption(caption);
+  return renderBossSection("Your fight", chestCount, body);
+}
+
+// One guild, chosen by selectBossGuild. Renders exactly what the API serves —
+// the same numbers Boot.dev's own modal shows — plus the one thing the modal
+// leaves unexplained: a guild below two qualified members reports 0 XP however
+// much its members have earned.
+function renderGuildFight(s) {
+  const g = s.guild;
+  if (!isPlainObject(g) || !g.name) return "";
+
+  const chip = g.isCompleted ? "Reward earned" : g.eligible ? "" : "Ineligible";
+  const qualified =
+    g.contributorCount != null && g.memberCount != null
+      ? `${fmtNum(g.contributorCount)} of ${fmtNum(g.memberCount)} members qualified`
+      : "";
+
+  if (!g.eligible) {
+    return renderBossSection(g.name, chip, renderBossCaption("Guilds need at least 2 members"));
+  }
+
+  const xp = num(g.xp);
+  const threshold = num(g.xpThreshold);
+  const body =
+    renderBossCaption(qualified) +
+    (g.xpPending ? renderBossCaption("Guild XP counts once 2 members qualify") : "") +
+    (xp != null && threshold
+      ? renderBossTrack(`${g.name} guild progress`, getProgressPct(xp, threshold)) +
+        renderBossCaption(`${fmtNum(xp)} / ${fmtNum(threshold)} XP`)
+      : "");
+  return renderBossSection(g.name, chip, body);
 }
 
 function bindBossDrag(panel) {
@@ -1001,5 +1074,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     selectBossGuild,
     migrateBossState,
     newEventState,
+    renderPersonalFight,
+    renderGuildFight,
   };
 }

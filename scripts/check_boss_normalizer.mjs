@@ -64,7 +64,16 @@ const sandbox = {
   console,
   // boss.js resolves the panel texture at load (BOSS_TEXTURE_URL).
   chrome: { runtime: { getURL: (path) => `chrome-extension://catalyst-test/${path}` } },
+  // Lifted from the REAL utils.js, not stubbed: the render checks assert on
+  // formatted output ("2,689 / 10,000 XP") and on escaping, and an identity
+  // stub for escapeHtml would have made the XSS check pass vacuously.
   pickField: utilsSandbox.pickField,
+  escapeHtml: utilsSandbox.escapeHtml,
+  fmtNum: utilsSandbox.fmtNum,
+  fmtPct: utilsSandbox.fmtPct,
+  num: utilsSandbox.num,
+  pct: utilsSandbox.pct,
+  clamp: utilsSandbox.clamp,
   setInterval: () => 0,
   clearInterval() {},
   setTimeout: () => 0,
@@ -75,12 +84,6 @@ const sandbox = {
 vm.createContext(sandbox);
 vm.runInContext(
   `function isPlainObject(v){return Boolean(v)&&typeof v==="object"&&!Array.isArray(v);}
-   function num(v){const n=Number(v);return Number.isFinite(n)?n:null;}
-   function pct(v){const n=num(v);if(n==null)return null;return n>0&&n<=1?n*100:n;}
-   function clamp(v,a,b){return Math.min(b,Math.max(a,Number(v)));}
-   function fmtPct(v){return v==null?"-":Math.round(v)+"%";}
-   function fmtNum(v){return v==="?"||v==null?"?":Number(v).toLocaleString();}
-   function escapeHtml(s){return String(s);}
    function waitFor(){return Promise.resolve(null);}
    function toast(){}
    function chromeGet(){return Promise.resolve(undefined);}
@@ -113,7 +116,29 @@ const {
   getPersonalChestState,
   selectBossGuild,
   migrateBossState,
+  renderPersonalFight,
+  renderGuildFight,
 } = boss;
+
+// Builds the same state handleBossProgress would write, so the render checks
+// run against real captures rather than hand-made state.
+function stateFromCapture(body, pinnedGuildId = null) {
+  const n = normalizeBossProgressJson(body);
+  const chests = getPersonalChestState(n);
+  const picked = selectBossGuild(n.Guilds, pinnedGuildId);
+  return {
+    xpUser: chests?.xpUser ?? null,
+    personalTarget: chests?.target ?? null,
+    chestsEarned: chests?.earned ?? null,
+    chestTotal: chests?.total ?? null,
+    nextThreshold: chests?.nextThreshold ?? null,
+    nextTier: chests?.nextTier ?? null,
+    guild: picked.guild,
+    guildRewardGranted: n.GuildRewardGranted ?? null,
+    pinnedGuildId: picked.pinnedGuildId,
+  };
+}
+const has = (html, text) => String(html).includes(text);
 
 // --- tiny assert ------------------------------------------------------------
 
@@ -524,6 +549,73 @@ if (twoGuilds) {
     "Byte Club"
   );
 }
+
+// --- what the panel actually renders from those captures ---------------------
+// The blocks degrade to "show less" on a missing value, which is what makes a
+// rename invisible; these assert the opposite direction — that a healthy
+// capture produces the numbers, and that a missing one produces nothing rather
+// than a confident zero or a NaN.
+
+if (oneChest) {
+  const s = stateFromCapture(oneChest);
+  const personal = renderPersonalFight(s);
+  check("render one_chest: chest count", has(personal, "1 of 4 chests"), true);
+  check("render one_chest: XP against the personal target", has(personal, "2,689 / 10,000 XP"), true);
+  check("render one_chest: names the next chest and the gap", has(personal, "Next: Uncommon Chest at 5,000 (2,311 to go)"), true);
+  check("render one_chest: not claiming a defeat", has(personal, "Boss defeated"), false);
+  check("render one_chest: no NaN", /NaN/.test(personal), false);
+
+  const guild = renderGuildFight(s);
+  check("render one_chest: guild XP is explained, not just 0", has(guild, "Guild XP counts once 2 members qualify"), true);
+  check("render one_chest: qualified count uses Boot.dev's wording", has(guild, "members qualified"), true);
+}
+
+if (midGuild) {
+  const s = stateFromCapture(midGuild);
+  const guild = renderGuildFight(s);
+  check("render mid_guild: guild name", has(guild, "DumbAndDumber"), true);
+  check("render mid_guild: 2 of 2 qualified", has(guild, "2 of 2 members qualified"), true);
+  check("render mid_guild: XP against the guild goal", has(guild, "6,149 / 20,000 XP"), true);
+  check("render mid_guild: the pending note is gone at 2 qualified", has(guild, "counts once"), false);
+  check("render mid_guild: not claiming the reward", has(guild, "Reward earned"), false);
+}
+
+if (twoGuilds) {
+  const s = stateFromCapture(twoGuilds);
+  const guild = renderGuildFight(s);
+  check("render two_guilds: the completed guild is the one drawn", has(guild, "Byte Club"), true);
+  check("render two_guilds: reward chip", has(guild, "Reward earned"), true);
+  check("render two_guilds: its XP", has(guild, "263,032 / 20,000 XP"), true);
+}
+
+// The live 2026-08-14 capture is the all-chests-earned case.
+if (existsSync(new URL("boss_events_progress_live_2026-08-14.json", CAPTURES))) {
+  const s = stateFromCapture(JSON.parse(readFileSync(new URL("boss_events_progress_live_2026-08-14.json", CAPTURES), "utf8")));
+  const personal = renderPersonalFight(s);
+  check("render complete: says the boss is defeated", has(personal, "Boss defeated · Mythic chest earned"), true);
+  check("render complete: no permanently-full bar", has(personal, "progressbar"), false);
+  check("render complete: still shows the XP", has(personal, "Your event XP 253,180"), true);
+}
+
+// Degradation: nothing readable renders nothing at all.
+check("render: no xpUser renders no personal block", renderPersonalFight({ xpUser: null }), "");
+check("render: no guild renders no guild block", renderGuildFight({ guild: null }), "");
+check(
+  "render: an ineligible guild gets no bar",
+  has(renderGuildFight({ guild: { name: "Solo", memberCount: 1, eligible: false } }), "progressbar"),
+  false
+);
+check(
+  "render: an ineligible guild explains itself",
+  has(renderGuildFight({ guild: { name: "Solo", memberCount: 1, eligible: false } }), "Guilds need at least 2 members"),
+  true
+);
+// A guild name is Boot.dev-supplied text and must never be interpolated raw.
+check(
+  "render: guild names are escaped",
+  has(renderGuildFight({ guild: { name: "<img src=x>", memberCount: 2, eligible: true, contributorCount: 2, xp: 1, xpThreshold: 2 } }), "<img src=x>"),
+  false
+);
 
 if (!fixturesRun) {
   console.log("note: reference_data fixtures not present; skipped capture checks");
