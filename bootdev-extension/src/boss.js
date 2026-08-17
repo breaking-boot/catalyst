@@ -814,8 +814,12 @@ function bindBossPanelControls(panel, state) {
       const alertFloor = num(panel.querySelector("#be-boss-alert-floor")?.value);
       if (alertFloor != null) await saveBossUiState({ alertFloor: clamp(alertFloor, 0, 100) });
       // Editing the highs re-arms the alerts: the numbers they compare against
-      // just changed, so a value already announced deserves another look.
+      // just changed, so a value already announced deserves another look. The
+      // panel's alert line goes too — it refers to a comparison that no longer
+      // holds. (This is also the quickest way to re-test the tiers by hand,
+      // without waiting out a cooldown.)
       next.alerts = null;
+      next.lastAlert = null;
       next.updatedAt = Date.now();
 
       bossState = next;
