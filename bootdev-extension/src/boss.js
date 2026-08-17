@@ -274,11 +274,15 @@ async function handleBossProgress(json) {
 
   let state = bossState || newEventState(eventId);
 
-  // Auto-detect a new event. Event stats reset, all-time high persists.
+  // Auto-detect a new event. Event stats reset, all-time high persists, and the
+  // outgoing event is archived first — otherwise the moment a new event starts,
+  // everything about the one just finished disappears.
   if (state.eventId !== eventId) {
+    const archived = archivePreviousEvent(state);
     const allTimeHigh = Math.max(state.allTimeHigh || 0, bonusPct || 0);
     state = newEventState(eventId);
     state.allTimeHigh = allTimeHigh; // all-time high persists across events
+    state.previousEvent = archived;
   }
 
   // Captured BEFORE the update: the alert tiers compare the new value against
@@ -574,8 +578,60 @@ function newEventState(eventId) {
     aura: newAuraStats(),
     alerts: null, // { tierLastAt, lastPct, lastTier, lastAt }
     lastAlert: null, // { tier, note, at } — the line the panel keeps on screen
+    previousEvent: null, // summary of the event this one replaced (archivePreviousEvent)
     updatedAt: Date.now(),
   };
+}
+
+// A one-object summary of the event that just ended, written as the next one
+// resets the record. Boss events are 4-8 weeks apart, so without this the
+// question "how did I do last time?" becomes unanswerable the instant a new
+// event begins. Only the parts that stay true are kept — a final result, an
+// observed high and an observed average — never the live figures.
+function archivePreviousEvent(state) {
+  if (!isPlainObject(state) || !state.eventId) return null;
+  const hasSomethingToSay = state.eventHigh > 0 || state.xpUser != null || isPlainObject(state.guild);
+  if (!hasSomethingToSay) return null;
+
+  const g = isPlainObject(state.guild) ? state.guild : null;
+  return {
+    eventId: state.eventId,
+    bossName: state.bossName ?? null,
+    endedAt: num(state.expiresAt) ?? num(state.updatedAt) ?? Date.now(),
+    observedSince: num(state.observedSince),
+    observedMs: num(state.aura?.observedMs) ?? 0,
+    eventHigh: num(state.eventHigh) ?? 0,
+    eventHighAt: num(state.eventHighAt),
+    auraMean: auraMean(state.aura),
+    xpUser: num(state.xpUser),
+    chestsEarned: num(state.chestsEarned),
+    chestTotal: num(state.chestTotal),
+    defeated: num(state.chestTotal) > 0 && num(state.chestsEarned) >= num(state.chestTotal),
+    guildRewardGranted: typeof state.guildRewardGranted === "boolean" ? state.guildRewardGranted : null,
+    guild: g
+      ? {
+          name: g.name ?? "",
+          xp: num(g.xp),
+          xpThreshold: num(g.xpThreshold),
+          isCompleted: g.isCompleted === true,
+          contributorCount: num(g.contributorCount),
+          memberCount: num(g.memberCount),
+        }
+      : null,
+  };
+}
+
+// One line for the settings panel: the whole point of the archive is that it
+// stays reachable once a new event is live and owns the rest of the panel.
+function describePreviousEvent(previous) {
+  if (!isPlainObject(previous)) return "";
+  const bits = [];
+  if (num(previous.chestTotal)) bits.push(`${num(previous.chestsEarned) ?? 0} of ${previous.chestTotal} chests`);
+  if (previous.guildRewardGranted) bits.push("guild reward earned");
+  if (num(previous.eventHigh)) bits.push(`high ${fmtPct(previous.eventHigh)}`);
+  if (previous.auraMean != null) bits.push(`avg ${fmtPct(previous.auraMean)}`);
+  if (!bits.length) return "";
+  return `Last event${previous.bossName ? ` (${previous.bossName})` : ""}: ${bits.join(" · ")}`;
 }
 
 // Bring a stored record up to the v0.14.0 shape. The aura history carries
@@ -612,6 +668,7 @@ function migrateBossState(stored) {
   }
   if (isPlainObject(stored.alerts)) state.alerts = stored.alerts;
   if (isPlainObject(stored.lastAlert)) state.lastAlert = stored.lastAlert;
+  if (isPlainObject(stored.previousEvent)) state.previousEvent = stored.previousEvent;
   if (typeof stored.bossName === "string") state.bossName = stored.bossName;
   if (typeof stored.eventActive === "boolean") state.eventActive = stored.eventActive;
   if (num(stored.expiresAt) != null) state.expiresAt = num(stored.expiresAt);
@@ -715,6 +772,9 @@ async function renderBossPanel(s) {
               <input id="be-boss-alert-floor" type="number" min="0" max="100" step="1" inputmode="numeric" value="${escapeHtml(Math.round(getAuraAlertFloor()))}">
             </label>
             <div class="be-boss-caption be-boss-settings-note">Below this, a merely-good bonus stays quiet. New event and all-time highs always alert.</div>
+            ${describePreviousEvent(s.previousEvent)
+              ? `<div class="be-boss-caption be-boss-settings-note">${escapeHtml(describePreviousEvent(s.previousEvent))}</div>`
+              : ""}
             <div class="be-boss-manual-actions">
               <button id="be-boss-save-highs" type="button">Save highs</button>
               <button id="be-boss-refresh" type="button">Refresh</button>
@@ -1327,6 +1387,8 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     newEventState,
     renderPersonalFight,
     renderGuildFight,
+    archivePreviousEvent,
+    describePreviousEvent,
     updateAuraStats,
     auraMean,
     chooseAuraAlert,

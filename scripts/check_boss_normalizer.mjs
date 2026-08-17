@@ -118,6 +118,8 @@ const {
   migrateBossState,
   renderPersonalFight,
   renderGuildFight,
+  archivePreviousEvent,
+  describePreviousEvent,
   updateAuraStats,
   auraMean,
   chooseAuraAlert,
@@ -495,6 +497,44 @@ check(
   alertAt({ current: 45, prevEventHigh: 90, mean: 20, floor: 40 }).tier,
   "above"
 );
+
+// --- archiving the event that just ended -------------------------------------
+// Events are 4-8 weeks apart, so without an archive "how did I do last time?"
+// becomes unanswerable the moment the next one starts.
+
+const finished = {
+  eventId: "aug-event",
+  bossName: "Lucretia",
+  expiresAt: 1755450000000,
+  updatedAt: 1755450000000,
+  observedSince: 1755300000000,
+  eventHigh: 71,
+  eventHighAt: 1755310000000,
+  allTimeHigh: 100,
+  xpUser: 10000,
+  chestsEarned: 4,
+  chestTotal: 4,
+  aura: { observedMs: 40 * 60_000, weightedSum: 38 * 40 * 60_000, lastSampleAt: 1, lastPct: 38, changes: [] },
+  guild: { name: "Byte Club", xp: 263032, xpThreshold: 20000, isCompleted: true, contributorCount: 2, memberCount: 2 },
+  guildRewardGranted: true,
+};
+const archived = archivePreviousEvent(finished);
+check("archive: keeps the boss", archived.bossName, "Lucretia");
+check("archive: keeps the final chest count", [archived.chestsEarned, archived.chestTotal], [4, 4]);
+check("archive: knows it was defeated", archived.defeated, true);
+check("archive: keeps the observed high", archived.eventHigh, 71);
+check("archive: keeps the observed average", Math.round(archived.auraMean), 38);
+check("archive: keeps the guild result", [archived.guild.name, archived.guild.isCompleted], ["Byte Club", true]);
+check("archive: keeps the guild reward", archived.guildRewardGranted, true);
+check("archive: nothing worth keeping yields nothing", archivePreviousEvent({ eventId: "e", eventHigh: 0 }), null);
+check("archive: no state yields nothing", archivePreviousEvent(null), null);
+
+check(
+  "archive: reads as one line",
+  describePreviousEvent(archived),
+  "Last event (Lucretia): 4 of 4 chests · guild reward earned · high 71% · avg 38%"
+);
+check("archive: an empty summary renders nothing", describePreviousEvent(null), "");
 
 // --- shapes that carry no event ---------------------------------------------
 
