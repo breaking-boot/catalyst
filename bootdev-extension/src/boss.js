@@ -26,7 +26,7 @@ const AURA_CHANGE_MIN_DELTA = 1; // points; the aura is a step function, so only
 
 const AURA_ALERT_MIN_DELTA = 1; // points above the previous high before it counts as a new one
 const AURA_ALERT_NEAR_RATIO = 0.8; // "near the event high" starts here
-const AURA_ALERT_FLOOR_DEFAULT = 50; // below this, a bonus is not worth interrupting for
+const AURA_ALERT_FLOOR_DEFAULT = 40; // below this, a bonus is not worth interrupting for
 const AURA_ALERT_ABOVE_AVG_DELTA = 10; // points above this event's average
 const AURA_ALERT_COOLDOWN_MS = {
   record: 10 * 60_000,
@@ -905,7 +905,8 @@ function bindBossPanelControls(panel, state) {
       if ((next.eventHigh || 0) > (next.allTimeHigh || 0)) {
         next.allTimeHigh = next.eventHigh;
       }
-      const alertFloor = num(panel.querySelector("#be-boss-alert-floor")?.value);
+      const floorRaw = String(panel.querySelector("#be-boss-alert-floor")?.value ?? "").trim();
+      const alertFloor = floorRaw === "" ? null : num(floorRaw);
       if (alertFloor != null) await saveBossUiState({ alertFloor: clamp(alertFloor, 0, 100) });
       // Editing the highs re-arms the alerts: the numbers they compare against
       // just changed, so a value already announced deserves another look. The
@@ -1205,9 +1206,16 @@ function maybeNotifyAura(state, prev, now) {
   toast(alert.message, { variant: alert.variant, durationMs: alert.durationMs });
 }
 
+// num() coerces like Number(), so num(null) is 0 — the same trap backup.js
+// documents on backupOptionalMs. Reading the stored floor through it meant an
+// unset floor resolved to 0 rather than the default, so the settings panel
+// showed 0 and the two "good time to submit" tiers ran with no floor at all.
+// Absent must stay absent.
 function getAuraAlertFloor() {
+  if (bossUiState.alertFloor == null) return AURA_ALERT_FLOOR_DEFAULT;
   const stored = num(bossUiState.alertFloor);
-  return stored != null && stored >= 0 ? stored : AURA_ALERT_FLOOR_DEFAULT;
+  if (stored == null || stored < 0) return AURA_ALERT_FLOOR_DEFAULT;
+  return clamp(stored, 0, 100);
 }
 
 async function loadBossUiState() {
