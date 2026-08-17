@@ -400,7 +400,11 @@ function handleUnauthorizedApi(path) {
   if (path === "/v1/dashboard_content") {
     dashboardAuthUnavailableUntil = Date.now() + AUTH_RETRY_MS;
   } else if (path === "/v1/boss_events_progress") {
-    markBossAuthUnavailable(AUTH_RETRY_MS, false);
+    // Retry, unlike before: markBossAuthUnavailable(…, false) cleared the poll
+    // timer and scheduled nothing to restart it, so a single 401 could stop the
+    // tracker for the rest of the session unless a route change happened to
+    // revive it. Costs at most one request per AUTH_RETRY_MS while it persists.
+    markBossAuthUnavailable(AUTH_RETRY_MS, true);
   } else {
     // Anything else lands here and is dropped — the feature that asked for it
     // simply renders nothing. That silence is what hid the league-board 401s
