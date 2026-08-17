@@ -752,7 +752,7 @@ async function renderBossPanel(s) {
     // on screen — they are the last thing that happened — with a banner saying so.
     const finalMarkup = s.eventActive === false
       ? `<div class="be-boss-final">${escapeHtml(
-          s.expiresAt ? `Final — event ended ${fmtBossDate(s.expiresAt)}` : "Final — no active event"
+          s.expiresAt ? `Final · event ended ${fmtBossDate(s.expiresAt)}` : "Final · no active event"
         )}</div>`
       : "";
     const mean = auraMean(s.aura);
@@ -781,18 +781,17 @@ async function renderBossPanel(s) {
               <span>All-time high %</span>
               <input id="be-boss-alltime-high" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(Math.round(s.allTimeHigh || 0))}">
             </label>
-            <label title="Applies to the two 'good time to submit' alerts — near this event's high, and well above its average. A new event high or all-time high always alerts, whatever this is set to.">
-              <span>"Good aura" from %</span>
+            <label title="The lowest aura worth interrupting you for. Catalyst can tell you when the aura is close to this event's high, or well above its average, but it stays quiet unless the aura is also at least this high. A new event high or all-time high always alerts, whatever this is set to.">
+              <span>Min aura to alert %&nbsp;${BOSS_INFO_ICON}</span>
               <input id="be-boss-alert-floor" type="number" min="0" max="100" step="1" inputmode="numeric" value="${escapeHtml(Math.round(getAuraAlertFloor()))}">
             </label>
-            <div class="be-boss-caption be-boss-settings-note">Below this, a merely-good bonus stays quiet. New event and all-time highs always alert.</div>
             ${describePreviousEvent(s.previousEvent)
               ? `<div class="be-boss-caption be-boss-settings-note">${escapeHtml(describePreviousEvent(s.previousEvent))}</div>`
               : ""}
             <div class="be-boss-manual-actions">
-              <button id="be-boss-save-highs" type="button">Save highs</button>
-              <button id="be-boss-refresh" type="button">Refresh</button>
-              <button id="be-boss-reset" class="be-boss-reset-button" type="button" title="Reset stats for this event">Reset</button>
+              <button id="be-boss-save-highs" type="button" title="Save every value above: both highs and the minimum aura for alerts. Editing a high also re-arms the alerts, so a level already announced can announce again.">Apply changes&nbsp;${BOSS_INFO_ICON}</button>
+              <button id="be-boss-refresh" type="button" title="Fetch the latest boss data now instead of waiting for the next automatic check, which runs every couple of minutes.">Refresh&nbsp;${BOSS_INFO_ICON}</button>
+              <button id="be-boss-reset" class="be-boss-reset-button" type="button" title="Clear everything recorded for this event and start watching it fresh, including the average and the observed window. Your all-time high is kept.">Reset&nbsp;${BOSS_INFO_ICON}</button>
             </div>
           </div>
         </div>`
@@ -813,12 +812,12 @@ async function renderBossPanel(s) {
       </div>
       ${finalMarkup}
       <div class="be-boss-grid">
-        <div><b>${currentText}</b><span>Current aura</span></div>
-        <div><b>${fmtPct(s.eventHigh)}</b><span>Event high</span></div>
-        <div><b>${fmtPct(s.allTimeHigh)}</b><span>All-time high</span></div>
-        <div><b>${mean == null ? "–" : fmtPct(mean)}</b><span>Event average</span></div>
-        <div><b>${finished ? "–" : fmtPct(Math.max(0, (s.eventHigh || 0) - (s.current || 0)))}</b><span>Below event high</span></div>
-        <div><b>${finished ? "–" : fmtNum(s.lessonsHourly ?? "?")}</b><span>Lessons this hour</span></div>
+        ${renderAuraTile(currentText, "Current aura")}
+        ${renderAuraTile(fmtPct(s.eventHigh), "Event high", "The highest aura Catalyst has seen during this event. If the tracker was off or the browser was closed for part of it, the event's real peak may have been higher.")}
+        ${renderAuraTile(fmtPct(s.allTimeHigh), "All-time high", "The highest aura Catalyst has ever seen, across every event it has tracked. It carries over when a new event starts.")}
+        ${renderAuraTile(mean == null ? "–" : fmtPct(mean), "Event average", "The average aura since Catalyst started watching this event, weighted by how long each value lasted. Only the time Catalyst was actually watching counts, and it needs 30 minutes of watching before it shows a figure.")}
+        ${renderAuraTile(finished ? "–" : fmtPct(Math.max(0, (s.eventHigh || 0) - (s.current || 0))), "Below event high")}
+        ${renderAuraTile(finished ? "–" : fmtNum(s.lessonsHourly ?? "?"), "Lessons this hour", "Lessons completed across all of Boot.dev in the past hour, not just yours. The aura bonus is derived from this, so a rising number is the earliest sign the bonus is about to rise.")}
       </div>
       ${alertMarkup}
       ${renderPersonalFight(s)}
@@ -935,6 +934,25 @@ function fmtBossDate(ms) {
   return new Date(ms).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
 }
 
+// Vector, not the Unicode circled-i: that glyph is a font character, so it is
+// hinted for body text and renders ragged at label size no matter how it is
+// weighted. This scales with its container and inherits the text colour.
+const BOSS_INFO_ICON =
+  '<svg class="be-boss-info" viewBox="0 0 16 16" aria-hidden="true" focusable="false">' +
+  '<circle cx="8" cy="8" r="6.75" fill="none" stroke="currentColor" stroke-width="1.4"/>' +
+  '<circle cx="8" cy="4.9" r="0.95" fill="currentColor"/>' +
+  '<path d="M8 7.4v4.1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>' +
+  '</svg>';
+
+// Tiles carrying a tooltip are marked, because an invisible tooltip is the same
+// as no tooltip. Only the values whose meaning is genuinely not obvious from the
+// label get one; the rest would just be noise.
+function renderAuraTile(valueHtml, label, tip) {
+  const marker = tip ? `&nbsp;${BOSS_INFO_ICON}` : "";
+  const attr = tip ? ` title="${escapeHtml(tip)}"` : "";
+  return `<div${attr}><b>${valueHtml}</b><span>${escapeHtml(label)}${marker}</span></div>`;
+}
+
 function renderBossSection(title, right, body) {
   if (!body) return "";
   return `<div class="be-boss-section">
@@ -950,8 +968,11 @@ function renderBossTrack(label, pctValue) {
   </div>`;
 }
 
-function renderBossCaption(text) {
-  return text ? `<div class="be-boss-caption">${escapeHtml(text)}</div>` : "";
+function renderBossCaption(text, tip) {
+  if (!text) return "";
+  const marker = tip ? `&nbsp;${BOSS_INFO_ICON}` : "";
+  const attr = tip ? ` title="${escapeHtml(tip)}"` : "";
+  return `<div class="be-boss-caption"${attr}>${escapeHtml(text)}${marker}</div>`;
 }
 
 // Your own fight: xpUser against the userXPThreshold ladder. Rendered as one
@@ -1013,7 +1034,7 @@ function renderGuildFight(s) {
   const xp = num(g.xp);
   const threshold = num(g.xpThreshold);
   const body =
-    renderBossCaption(qualified) +
+    renderBossCaption(qualified, "A member qualifies by earning 30% of the personal XP target during the event. Only qualified members' XP counts toward the guild goal.") +
     (g.xpPending ? renderBossCaption("Guild XP counts once 2 members qualify") : "") +
     (xp != null && threshold
       ? renderBossTrack(`${g.name} guild progress`, getProgressPct(xp, threshold)) +
@@ -1141,7 +1162,7 @@ function chooseAuraAlert({ current, prevEventHigh = 0, prevAllTimeHigh = 0, mean
       tier: "record",
       variant: "record",
       durationMs: 0, // sticky: a new all-time high should still be there when you look up
-      message: `New all-time high — Boots Aura ${fmtPct(current)}. The best Catalyst has seen.`,
+      message: `New all-time high! Boots Aura is ${fmtPct(current)}, the highest Catalyst has recorded.`,
       note: `New all-time high ${fmtPct(current)}`,
     };
   }
@@ -1150,7 +1171,7 @@ function chooseAuraAlert({ current, prevEventHigh = 0, prevAllTimeHigh = 0, mean
       tier: "high",
       variant: "high",
       durationMs: 14_000,
-      message: `New event high — Boots Aura ${fmtPct(current)} (was ${fmtPct(prevEventHigh)}).`,
+      message: `New event high! Boots Aura is ${fmtPct(current)}, up from ${fmtPct(prevEventHigh)}.`,
       note: `New event high ${fmtPct(current)}`,
     };
   }
@@ -1159,7 +1180,7 @@ function chooseAuraAlert({ current, prevEventHigh = 0, prevAllTimeHigh = 0, mean
       tier: "near",
       variant: "info",
       durationMs: 10_000,
-      message: `Boots Aura ${fmtPct(current)} — near this event's high of ${fmtPct(prevEventHigh)}. Good time to submit.`,
+      message: `Boots Aura is ${fmtPct(current)}, close to this event's high of ${fmtPct(prevEventHigh)}. Good time to submit.`,
       note: `Near the event high · ${fmtPct(current)}`,
     };
   }
@@ -1168,7 +1189,7 @@ function chooseAuraAlert({ current, prevEventHigh = 0, prevAllTimeHigh = 0, mean
       tier: "above",
       variant: "info",
       durationMs: 10_000,
-      message: `Boots Aura ${fmtPct(current)} — well above this event's ${fmtPct(mean)} average. Good time to submit.`,
+      message: `Boots Aura is ${fmtPct(current)}, well above this event's ${fmtPct(mean)} average. Good time to submit.`,
       note: `Above average · ${fmtPct(current)}`,
     };
   }

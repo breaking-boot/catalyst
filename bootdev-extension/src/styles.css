@@ -618,6 +618,29 @@
   font-size: 12px;
   color: #a3b3c7;
 }
+/* Marks a value whose meaning is not obvious from its label. Anything carrying
+   one has a tooltip; anything without one needs no explaining. It takes the
+   colour of the text it follows and stays slightly smaller and lighter: enough
+   to read as "there is more here", not enough to compete with the number. */
+.be-boss-info {
+  /* Boot.dev's CSS reset makes every svg display:block (Tailwind Preflight
+     does exactly this), which put the marker on a line of its own and broke
+     out of a nowrap button. An injected stylesheet inherits the page's resets,
+     so anything injected has to state its own display rather than assume the
+     element default. */
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.12em;
+  color: inherit; /* the SVG strokes are currentColor */
+  opacity: 0.7;
+  cursor: help;
+}
+.be-boss-grid > div[title],
+.be-boss-caption[title],
+.be-boss-manual label[title] {
+  cursor: help;
+}
 /* Your fight / guild fight. One section per block, each a head row plus a gold
    bar and captions. */
 .be-boss-section {
@@ -792,8 +815,13 @@
   border-color: #e5ae3c;
   background: rgba(229, 174, 60, 0.22);
 }
+/* Refresh and Reset share a width; Apply changes takes more, because equal
+   thirds squeezed its longer label against the info marker. */
 .be-boss-manual-actions button {
   flex: 1 1 0;
+}
+.be-boss-manual-actions #be-boss-save-highs {
+  flex: 1.5 1 0;
 }
 .be-boss-manual .be-boss-reset-button {
   border-color: rgba(248, 113, 113, 0.42);
