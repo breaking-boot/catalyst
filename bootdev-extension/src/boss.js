@@ -641,9 +641,9 @@ async function renderBossPanel(s) {
       panel.id = "be-boss-panel";
       document.body.appendChild(panel);
     }
-    panel.className = `be-boss-panel${bossUiState.minimized ? " be-boss-minimized" : ""}${
-      hasSavedBossPosition() ? " be-positioned" : ""
-    }`;
+    // Always positioned: applyBossPanelPosition drives left/top in every state
+    // (see bossAnchorPoint), so the CSS corner offsets must be released.
+    panel.className = `be-boss-panel be-positioned${bossUiState.minimized ? " be-boss-minimized" : ""}`;
     // styles.css reads this as var(--be-boss-texture), falling back to the
     // gradient alone if it is ever unset.
     panel.style.setProperty("--be-boss-texture", `url("${BOSS_TEXTURE_URL}")`);
@@ -1132,22 +1132,39 @@ async function saveBossUiState(patch) {
   await chromeSet(BOSS_UI_KEY, bossUiState);
 }
 
-function applyBossPanelPosition(panel) {
-  if (hasSavedBossPosition()) {
-    const panelWidth = panel.offsetWidth || 320;
-    const panelHeight = panel.offsetHeight || 120;
-    const x = clamp(bossUiState.x, 8, window.innerWidth - panelWidth - 8);
-    const y = clamp(bossUiState.y, 8, window.innerHeight - panelHeight - 8);
-    panel.style.left = `${x}px`;
-    panel.style.top = `${y}px`;
-    panel.style.right = "auto";
-    panel.style.bottom = "auto";
-  } else {
-    panel.style.left = "";
-    panel.style.top = "";
-    panel.style.right = "";
-    panel.style.bottom = "";
+// Where the panel sits when it has never been dragged. Computed once per page
+// from the default bottom-right corner and then held, because the panel is
+// anchored by its TOP-LEFT: with bottom/right anchoring the bottom edge is what
+// stays put, so collapsing the body walked the title and buttons down the
+// screen every time the panel was minimized.
+let bossDefaultAnchor = null;
+
+function bossAnchorPoint(panel) {
+  if (hasSavedBossPosition()) return { x: bossUiState.x, y: bossUiState.y };
+  const width = panel.offsetWidth || 380;
+  const height = panel.offsetHeight;
+  // Called once before innerHTML is set, when the panel has no height yet —
+  // place it provisionally then, and only cache once there is a real box to
+  // measure, or the anchor would be the height-zero corner forever.
+  if (!height) return { x: window.innerWidth - width - 16, y: window.innerHeight - 236 };
+  if (!bossDefaultAnchor) {
+    bossDefaultAnchor = { x: window.innerWidth - width - 16, y: window.innerHeight - height - 16 };
   }
+  return bossDefaultAnchor;
+}
+
+function applyBossPanelPosition(panel) {
+  const anchor = bossAnchorPoint(panel);
+  const panelWidth = panel.offsetWidth || 320;
+  const panelHeight = panel.offsetHeight || 120;
+  // Clamped so a tall panel or a small window can still never push it off
+  // screen — the one case where the header legitimately has to move.
+  const x = clamp(anchor.x, 8, Math.max(8, window.innerWidth - panelWidth - 8));
+  const y = clamp(anchor.y, 8, Math.max(8, window.innerHeight - panelHeight - 8));
+  panel.style.left = `${x}px`;
+  panel.style.top = `${y}px`;
+  panel.style.right = "auto";
+  panel.style.bottom = "auto";
 }
 
 function hasSavedBossPosition() {
