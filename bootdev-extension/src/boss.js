@@ -10,6 +10,7 @@ const BOSS_KEY = "be_boss_state";
 const BOSS_UI_KEY = "be_boss_ui_state";
 const BOSS_REMINDER_KEY = "be_boss_reminder_state";
 const BOSS_REMINDER_DEBUG_KEY = "be_boss_reminder_debug";
+const BOSS_DEBUG_RESPONSE_KEY = "be_boss_debug_response";
 const BOSS_PROGRESS_URL = "https://api.boot.dev/v1/boss_events_progress";
 const BOSS_REFRESH_MS = 120_000; // boss data changes slowly; poll every 2 min
 const NEAR_HIGH_THRESHOLD = 0.95; // notify when current >= 95% of event high
@@ -49,6 +50,7 @@ let bossInactiveNotified = false;
 // write-through cache; reading from memory avoids the read-modify-write race
 // between the refresh interval, the manual Refresh button, and near-high notify.
 let bossState = null;
+let bossStateLoaded = false;
 // Reminder bookkeeping ({ eventId, lastShownAt, dismissed }), one record for the
 // most-recently-seen event; a different eventId starts fresh. In-memory copy of
 // be_boss_reminder_state, same write-through pattern as bossState.
@@ -113,14 +115,26 @@ function requestBossProgress(force = false) {
   requestApiJson(BOSS_PROGRESS_URL);
 }
 
+// Loaded REGARDLESS of whether the tracker is enabled, and memoized. This is
+// load-bearing: quiet mode writes be_boss_state (see handleBossProgress), and a
+// write from a null in-memory copy would create a fresh record and destroy
+// allTimeHigh. Pass force after an import, which changes storage behind us.
+async function loadBossState({ force = false } = {}) {
+  if (bossStateLoaded && !force) return bossState;
+  const stored = (await chromeGet(BOSS_KEY)) || {};
+  if (enhancerStopped) return bossState;
+  bossState = migrateBossState(stored.state);
+  bossStateLoaded = true;
+  return bossState;
+}
+
 async function restoreBossPanel() {
+  await loadBossState();
   if (!isFeatureEnabled("bossTracker")) {
     removeBossPanel();
     return;
   }
-  const stored = (await chromeGet(BOSS_KEY)) || {};
   if (enhancerStopped) return;
-  bossState = stored.state || null;
   if (bossState) renderBossPanel(bossState);
 }
 
@@ -198,14 +212,19 @@ function normalizeBossProgressJson(json) {
 
 async function handleBossProgress(json) {
   json = normalizeBossProgressJson(json);
-  if (!isFeatureEnabled("bossTracker")) {
-    // Quiet mode: never touch be_boss_state (previous-event stats stay intact
-    // for whenever the tracker is re-enabled); at most offer the tracker via
-    // the reminder toast. Detection here is passive-only — these responses come
-    // from Boot.dev's own fetches relayed by injected.js.
-    await maybeShowBossReminder(json);
-    return;
-  }
+  // QUIET MODE (tracker off) still RECORDS, and shows nothing. Catalyst issues
+  // zero boss requests while the tracker is off — requestBossProgress refuses —
+  // so everything handled here came from Boot.dev's own traffic, relayed by
+  // injected.js. Recording it is what makes switching the tracker on mid-event
+  // show the history Catalyst could have had. (Before v0.14.0 quiet mode wrote
+  // nothing at all, which is why an event that peaked at 100% was recorded as
+  // 66%.) Only the UI is suppressed: no render, no toast, no timers.
+  const visible = isFeatureEnabled("bossTracker");
+  if (!visible) await maybeShowBossReminder(json);
+
+  await loadBossState();
+  if (enhancerStopped) return;
+
   const active = isBossEventActive(json);
   bossEventActive = active;
 
@@ -214,71 +233,112 @@ async function handleBossProgress(json) {
   // a synthetic "unknown-event". Mark things inactive and keep the last
   // event's stats for whenever the next one starts.
   if (!hasBossEventIdentity(json)) {
-    clearBossRefreshTimer();
-    await notifyBossInactiveOnce();
+    if (visible) {
+      clearBossRefreshTimer();
+      await notifyBossInactiveOnce();
+    }
     if (enhancerStopped || !bossState) return;
     bossState.eventActive = false;
     bossState.updatedAt = Date.now();
     await chromeSet(BOSS_KEY, { state: bossState });
-    if (enhancerStopped) return;
+    if (enhancerStopped || !visible) return;
     renderBossPanel(bossState);
     return;
   }
 
-  const rewards = getBossRewards(json);
-  const cur = {
-    eventId: json?.Event?.UUID ?? json?.Event?.StartsAt ?? "unknown-event",
-    bonusPct: pct(json?.XPBonus),
-    damage: num(json?.XPTotal),
-    nextChestAt: getNextChestAt(rewards),
-    bossMaxHp: num(json?.Event?.HealthPoints),
-    lastChestTier: getLastChestTier(rewards),
-    nextChestTier: getNextChestTier(rewards),
-    expiresAt: getEventExpiry(json),
-  };
+  reportBossFieldGaps(json);
 
-  let state = bossState || newEventState(cur.eventId);
+  const now = Date.now();
+  const eventId = json?.Event?.UUID ?? json?.Event?.StartsAt ?? "unknown-event";
+  const bonusPct = pct(json?.XPBonus);
+  const chests = getPersonalChestState(json);
+
+  let state = bossState || newEventState(eventId);
 
   // Auto-detect a new event. Event stats reset, all-time high persists.
-  if (state.eventId !== cur.eventId) {
-    const allTimeHigh = Math.max(state.allTimeHigh || 0, cur.bonusPct || 0);
-    state = newEventState(cur.eventId);
+  if (state.eventId !== eventId) {
+    const allTimeHigh = Math.max(state.allTimeHigh || 0, bonusPct || 0);
+    state = newEventState(eventId);
     state.allTimeHigh = allTimeHigh; // all-time high persists across events
   }
 
   // Update rolling event stats.
-  if (cur.bonusPct != null) {
-    state.current = cur.bonusPct;
-    if (cur.bonusPct > (state.eventHigh || 0)) {
-      state.eventHigh = cur.bonusPct;
-      state.eventHighAt = Date.now(); // when the high was observed; backup export/merge metadata
+  if (bonusPct != null) {
+    state.current = bonusPct;
+    if (bonusPct > (state.eventHigh || 0)) {
+      state.eventHigh = bonusPct;
+      state.eventHighAt = now; // when the high was observed; backup export/merge metadata
     }
-    state.allTimeHigh = Math.max(state.allTimeHigh || 0, cur.bonusPct);
+    state.allTimeHigh = Math.max(state.allTimeHigh || 0, bonusPct);
   }
-  if (cur.damage != null) state.damage = cur.damage;
-  if (cur.nextChestAt != null) state.nextChestAt = cur.nextChestAt;
-  if (cur.bossMaxHp != null) state.bossMaxHp = cur.bossMaxHp;
-  state.lastChestTier = cur.lastChestTier;
-  state.nextChestTier = cur.nextChestTier;
-  state.eventActive = active;
-  state.expiresAt = cur.expiresAt;
-  state.updatedAt = Date.now();
 
-  if (active) {
-    // A live event: keep polling and watch for the near-high moment.
-    bossInactiveNotified = false;
-    ensureBossPollingActive();
-  } else {
-    // Between events: stop the standing poll and say so (at most once a day).
-    clearBossRefreshTimer();
-    await notifyBossInactiveOnce();
+  const bossName = json?.Event?.Boss?.Name;
+  if (typeof bossName === "string" && bossName) state.bossName = bossName;
+
+  // Each field is written only when the response actually carries it, so a
+  // partial response leaves a good value alone instead of zeroing it.
+  const lessonsHourly = num(json?.NumLessonsCompletedHourly);
+  if (lessonsHourly != null) state.lessonsHourly = lessonsHourly;
+
+  if (chests) {
+    state.xpUser = chests.xpUser;
+    state.personalTarget = chests.target;
+    state.chestsEarned = chests.earned;
+    state.chestTotal = chests.total;
+    state.nextThreshold = chests.nextThreshold;
+    state.nextTier = chests.nextTier;
+  }
+
+  if (typeof json?.GuildRewardGranted === "boolean") {
+    state.guildRewardGranted = json.GuildRewardGranted;
+  }
+  if (Array.isArray(json?.Guilds)) {
+    const picked = selectBossGuild(json.Guilds, state.pinnedGuildId);
+    state.guild = picked.guild;
+    state.pinnedGuildId = picked.pinnedGuildId;
+  }
+
+  state.eventActive = active;
+  state.expiresAt = getEventExpiry(json);
+  state.updatedAt = now;
+
+  if (visible) {
+    if (active) {
+      // A live event: keep polling and watch for the near-high moment.
+      bossInactiveNotified = false;
+      ensureBossPollingActive();
+    } else {
+      // Between events: stop the standing poll and say so (at most once a day).
+      clearBossRefreshTimer();
+      await notifyBossInactiveOnce();
+    }
   }
 
   bossState = state;
   await chromeSet(BOSS_KEY, { state });
-  if (enhancerStopped) return;
+  if (enhancerStopped || !visible) return;
   renderBossPanel(state);
   if (active) maybeNotifyNearHigh(state);
+}
+
+// Boundary checks for the fields this feature depends on. Every block here
+// degrades to "show less" when a value goes missing, which is exactly what
+// makes a rename invisible (v0.12.1's lesson). These cost nothing on a healthy
+// response and log once per session on a broken one. Note XPUser is checked for
+// ABSENCE, not falsiness — 0 is a legitimate value that pickField preserves,
+// and a fresh account genuinely has it.
+function reportBossFieldGaps(json) {
+  if (json?.XPUser === undefined) {
+    warnOnce(
+      "boss:xp-user",
+      "boss_events_progress carried an event but no XPUser in either casing — " +
+      "personal chest progress will render nothing. Boot.dev may have renamed it."
+    );
+  }
+  reportUsableFields("boss rewards", json?.Rewards, "UserXPThreshold", (r) => r?.UserXPThreshold);
+  // Only fires when guilds[] is present and non-empty: a user in no guild is
+  // normal and must never warn.
+  reportUsableFields("boss guilds", json?.Guilds, "XPThreshold", (g) => g?.XPThreshold);
 }
 
 // An event is active until its ExpiresAt passes. Missing/unparseable expiry on
@@ -437,21 +497,93 @@ async function maybeTriggerBossReminderDebug() {
   });
 }
 
+// be_boss_state as of v0.14.0. The community-era fields (damage, bossMaxHp,
+// nextChestAt, lastChestTier, nextChestTier) are gone: they measured the goal
+// Boot.dev retired on 2026-08-14, and a stored example read "82,949,113 damage
+// of a 10,000 HP boss" once healthPoints changed meaning underneath them.
+// Maintainer-only, and the only way to exercise the panel between events (they
+// run 4-8 weeks apart). Put a captured /v1/boss_events_progress body in
+// be_boss_debug_response (chrome.storage.local) and reload Boot.dev: it runs
+// through the REAL handleBossProgress, so every production guard applies.
+// Accepts probe 01d's wrapper ({ account, label, json }) or a bare body. An
+// expired capture reads as inactive — edit expiresAt in the copy you store,
+// never in the evidence file. Unset the key when done.
+async function maybeReplayBossDebugResponse() {
+  const stored = await chromeGet(BOSS_DEBUG_RESPONSE_KEY);
+  if (!isPlainObject(stored) || enhancerStopped) return;
+  const body = isPlainObject(stored.json) ? stored.json : stored;
+  console.debug("[catalyst] replaying be_boss_debug_response through handleBossProgress");
+  await handleBossProgress(body);
+}
+
 function newEventState(eventId) {
   return {
     eventId,
+    bossName: null,
+    // When Catalyst first saw THIS event. The recorded highs are only the
+    // highest values OBSERVED, so the panel states the window they came from.
+    // Never moved forward; null means "unknown" (a record migrated from an
+    // older version cannot say, and inventing a window would be a lie).
+    observedSince: Date.now(),
     current: 0,
     eventHigh: 0,
     eventHighAt: null, // when eventHigh was last raised (ms); backup export/merge metadata
     allTimeHigh: 0,
-    damage: 0,
-    nextChestAt: 0,
-    bossMaxHp: 0,
-    lastChestTier: null,
-    nextChestTier: null,
+    // Personal fight: xpUser against the userXPThreshold ladder.
+    xpUser: null,
+    personalTarget: null,
+    chestsEarned: null,
+    chestTotal: null,
+    nextThreshold: null,
+    nextTier: null,
+    lessonsHourly: null, // site-wide lessons this hour; the aura's leading indicator
+    // Guild fight: the selected guild (see selectBossGuild) and its pin.
+    guild: null,
+    guildRewardGranted: null,
+    pinnedGuildId: null,
     notifiedHigh: 0, // event-high value we last notified about (dedupe)
     updatedAt: Date.now(),
   };
+}
+
+// Bring a stored record up to the v0.14.0 shape. The aura history carries
+// forward — it still means exactly what it says — and the community-era fields
+// are dropped rather than reinterpreted. observedSince is deliberately NOT
+// backfilled: an older record cannot say when its window began, and the panel
+// would rather admit that than claim one starting now.
+function migrateBossState(stored) {
+  if (!isPlainObject(stored)) return null;
+
+  const eventId = typeof stored.eventId === "string" && stored.eventId ? stored.eventId : "unknown-event";
+  const state = newEventState(eventId);
+  const carryNum = (key, value, fallback = null) => {
+    const parsed = num(value);
+    state[key] = parsed != null ? parsed : fallback;
+  };
+
+  state.observedSince = num(stored.observedSince); // null for a pre-v0.14.0 record
+  state.current = Math.max(0, num(stored.current) ?? 0);
+  state.eventHigh = Math.max(0, num(stored.eventHigh) ?? 0);
+  state.eventHighAt = num(stored.eventHighAt);
+  state.allTimeHigh = Math.max(0, num(stored.allTimeHigh) ?? 0, state.eventHigh);
+  state.notifiedHigh = Math.max(0, num(stored.notifiedHigh) ?? 0);
+  state.updatedAt = num(stored.updatedAt) ?? Date.now();
+  if (typeof stored.bossName === "string") state.bossName = stored.bossName;
+  if (typeof stored.eventActive === "boolean") state.eventActive = stored.eventActive;
+  if (num(stored.expiresAt) != null) state.expiresAt = num(stored.expiresAt);
+
+  carryNum("xpUser", stored.xpUser);
+  carryNum("personalTarget", stored.personalTarget);
+  carryNum("chestsEarned", stored.chestsEarned);
+  carryNum("chestTotal", stored.chestTotal);
+  carryNum("nextThreshold", stored.nextThreshold);
+  carryNum("lessonsHourly", stored.lessonsHourly);
+  if (typeof stored.nextTier === "string") state.nextTier = stored.nextTier;
+  if (typeof stored.guildRewardGranted === "boolean") state.guildRewardGranted = stored.guildRewardGranted;
+  if (typeof stored.pinnedGuildId === "string") state.pinnedGuildId = stored.pinnedGuildId;
+  if (isPlainObject(stored.guild)) state.guild = stored.guild;
+
+  return state;
 }
 
 async function renderBossPanel(s) {
@@ -739,29 +871,6 @@ function hasSavedBossPosition() {
   return Number.isFinite(Number(bossUiState.x)) && Number.isFinite(Number(bossUiState.y));
 }
 
-function getBossRewards(json) {
-  const rewards = Array.isArray(json?.Rewards) ? json.Rewards : [];
-  return rewards
-    .slice()
-    .sort((a, b) => num(a.XPThreshold) - num(b.XPThreshold));
-}
-
-function getNextChestAt(rewards) {
-  const reward = rewards.find((r) => !r.IsUnlocked);
-  return reward ? num(reward.XPThreshold) : null;
-}
-
-function getLastChestTier(rewards) {
-  const unlocked = rewards.filter((r) => r.IsUnlocked && r.IsUnlockedByUser);
-  const reward = unlocked[unlocked.length - 1];
-  return reward ? chestTier(rewards.indexOf(reward)) : null;
-}
-
-function getNextChestTier(rewards) {
-  const reward = rewards.find((r) => !r.IsUnlocked);
-  return reward ? chestTier(rewards.indexOf(reward)) : null;
-}
-
 function chestTier(index) {
   // The reward payload has ChestUUIDs but no tier names; the modal renders
   // these thresholds in this order in the captured boss page.
@@ -888,11 +997,9 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     normalizeBossProgressJson,
     hasBossEventIdentity,
     isBossEventActive,
-    getBossRewards,
-    getNextChestAt,
-    getLastChestTier,
-    getNextChestTier,
     getPersonalChestState,
     selectBossGuild,
+    migrateBossState,
+    newEventState,
   };
 }

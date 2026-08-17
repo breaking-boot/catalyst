@@ -93,6 +93,8 @@ vm.runInContext(
    function handleAsyncError(){}
    function requestApiJson(){return false;}
    function markBossAuthUnavailable(){}
+   function warnOnce(){}
+   function reportUsableFields(){return null;}
    let enhancerStopped = false;`,
   sandbox
 );
@@ -108,10 +110,9 @@ const {
   normalizeBossProgressJson,
   hasBossEventIdentity,
   isBossEventActive,
-  getBossRewards,
-  getNextChestAt,
   getPersonalChestState,
   selectBossGuild,
+  migrateBossState,
 } = boss;
 
 // --- tiny assert ------------------------------------------------------------
@@ -315,6 +316,60 @@ check(
   "ok"
 );
 
+// --- migrating a stored record to the v0.14.0 shape --------------------------
+// A v0.13.1 record carries damage/bossMaxHp/nextChestAt from the community
+// model — one real example read "82,949,113 damage" against a 10,000 HP boss
+// once healthPoints changed meaning. The aura history must survive; the rest
+// must not be reinterpreted.
+
+const legacy = migrateBossState({
+  eventId: "old-event",
+  current: 32,
+  eventHigh: 66.15,
+  eventHighAt: 1755043790000,
+  allTimeHigh: 66.15,
+  damage: 82949113,
+  bossMaxHp: 10000,
+  nextChestAt: 2500,
+  lastChestTier: "Mythic",
+  nextChestTier: null,
+  notifiedHigh: 66.15,
+  updatedAt: 1755043790000,
+});
+check("migrate: eventId survives", legacy.eventId, "old-event");
+check("migrate: aura history survives", [legacy.current, legacy.eventHigh, legacy.allTimeHigh], [32, 66.15, 66.15]);
+check("migrate: eventHighAt survives", legacy.eventHighAt, 1755043790000);
+check("migrate: community damage is dropped", legacy.damage, undefined);
+check("migrate: bossMaxHp is dropped", legacy.bossMaxHp, undefined);
+check("migrate: nextChestAt is dropped", legacy.nextChestAt, undefined);
+check("migrate: lastChestTier is dropped", legacy.lastChestTier, undefined);
+// A record from before v0.14.0 cannot say when its observation window began,
+// and claiming one starting now would misrepresent the recorded high.
+check("migrate: observedSince stays unknown", legacy.observedSince, null);
+check("migrate: personal fields start empty", [legacy.xpUser, legacy.chestsEarned], [null, null]);
+check("migrate: guild fields start empty", [legacy.guild, legacy.pinnedGuildId], [null, null]);
+check("migrate: nothing stored yields nothing", migrateBossState(null), null);
+check("migrate: an all-time high below the event high is corrected",
+  migrateBossState({ eventId: "e", eventHigh: 80, allTimeHigh: 10 }).allTimeHigh, 80);
+
+const current = migrateBossState({
+  eventId: "new-event",
+  observedSince: 1755300000000,
+  eventHigh: 71,
+  allTimeHigh: 100,
+  xpUser: 2689,
+  chestsEarned: 1,
+  nextTier: "Uncommon",
+  pinnedGuildId: "a838d70b",
+  guild: { name: "Byte Club", xp: 263032 },
+  guildRewardGranted: true,
+});
+check("migrate: a v0.14.0 record keeps its window", current.observedSince, 1755300000000);
+check("migrate: it keeps personal progress", [current.xpUser, current.chestsEarned, current.nextTier], [2689, 1, "Uncommon"]);
+check("migrate: it keeps the guild pin", current.pinnedGuildId, "a838d70b");
+check("migrate: it keeps the selected guild", current.guild.name, "Byte Club");
+check("migrate: it keeps the reward flag", current.guildRewardGranted, true);
+
 // --- shapes that carry no event ---------------------------------------------
 
 check("error body is handed back untouched", normalizeBossProgressJson({ error: "nope" }), { error: "nope" });
@@ -348,17 +403,21 @@ let fixturesRun = 0;
 function runFixture(label, json, expected) {
   fixturesRun += 1;
   const n = normalizeBossProgressJson(json);
-  const rewards = getBossRewards(n);
+  const thresholds = n.Rewards.map((r) => r.XPThreshold).sort((a, b) => a - b);
   check(`${label}: event identity readable`, hasBossEventIdentity(n), true);
   check(`${label}: Event.UUID`, n.Event.UUID, expected.uuid);
   check(`${label}: XPBonus is a number`, typeof n.XPBonus, "number");
   check(`${label}: HealthPoints`, n.Event.HealthPoints, expected.hp);
-  check(`${label}: rewards sorted and readable`, rewards.length, expected.rewards);
-  check(`${label}: thresholds ascending`, rewards.map((r) => r.XPThreshold), expected.thresholds);
-  // Depends on IsUnlocked surviving normalization — the reward booleans are the
-  // easiest thing to lose to a casing flip, and losing them is only visible as
-  // a stale "to next chest" number.
-  check(`${label}: next chest threshold`, getNextChestAt(rewards), expected.nextChestAt);
+  check(`${label}: rewards readable`, n.Rewards.length, expected.rewards);
+  check(`${label}: thresholds`, thresholds, expected.thresholds);
+  // The reward booleans are the easiest thing to lose to a casing flip. Nothing
+  // reads them any more (chest state comes from XPUser vs UserXPThreshold), but
+  // losing them silently would still hide a schema change.
+  check(
+    `${label}: reward booleans survive normalization`,
+    n.Rewards.every((r) => typeof r.IsUnlocked === "boolean"),
+    true
+  );
   check(`${label}: active`, isBossEventActive(n), expected.active);
 }
 
@@ -369,7 +428,6 @@ if (existsSync(liveUrl)) {
     hp: 120000000,
     rewards: 4,
     thresholds: [30000000, 60000000, 90000000, 120000000],
-    nextChestAt: 60000000, // the first chest with IsUnlocked false
     active: false, // ExpiresAt 2026-06-29 is in the past now
   });
 }
@@ -380,7 +438,6 @@ if (existsSync(betweenUrl)) {
     hp: 120000000,
     rewards: 4,
     thresholds: [30000000, 60000000, 90000000, 120000000],
-    nextChestAt: 120000000, // three unlocked by the time the event ended
     active: false,
   });
 }
@@ -392,8 +449,7 @@ if (existsSync(AUDIT_BODIES)) {
       hp: 120000000,
       rewards: 4,
       thresholds: [30000000, 60000000, 90000000, 120000000],
-      nextChestAt: 120000000,
-      active: false,
+        active: false,
     });
   }
 }

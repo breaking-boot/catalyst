@@ -138,6 +138,7 @@ async function initEnhancer() {
   maybeShowSettingsIntro().catch((err) => handleAsyncError(err, "intro"));
   maybeRunVersionCheck().catch((err) => handleAsyncError(err, "versionCheck"));
   maybeTriggerBossReminderDebug().catch((err) => handleAsyncError(err, "bossReminderDebug"));
+  maybeReplayBossDebugResponse().catch((err) => handleAsyncError(err, "bossDebugResponse"));
 
   routeScanTimer = setTrackedInterval(() => {
     if (location.pathname === lastPath) return;
@@ -230,6 +231,9 @@ function handleSettingsChange(changes, area) {
 async function applyImportedData() {
   await loadCurrentUserHandle();
   await loadPersonalLeaderboard();
+  // Forced: the memoized load has already run, so without this the next
+  // write-through would clobber the merged boss highs with our stale copy.
+  await loadBossState({ force: true });
   await restoreBossPanel();
   if (enhancerStopped) return;
   schedulePersonalLeaderboardRender();
