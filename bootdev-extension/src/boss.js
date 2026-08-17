@@ -603,7 +603,7 @@ async function renderBossPanel(s) {
     if (bossUiState.minimized) {
       panel.innerHTML = `
         <div class="be-boss-head be-boss-drag-handle">
-          <span class="be-boss-min-title">Boss Event - Current Aura: ${fmtPct(s.current)}</span>
+          <span class="be-boss-title">Boss Event · Current Aura: ${fmtPct(s.current)}</span>
           <div class="be-boss-actions">
             <button id="be-boss-settings-toggle" type="button" title="Open boss settings" aria-label="Open boss settings" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}">&#9881;</button>
             <button id="be-boss-toggle" type="button" title="Expand boss event" aria-label="Expand boss event">+</button>
@@ -657,7 +657,7 @@ async function renderBossPanel(s) {
     // healthPoints-as-community-HP.
     panel.innerHTML = `
       <div class="be-boss-head be-boss-drag-handle">
-        <span>${escapeHtml(s.bossName ? `Boss Event · ${s.bossName}` : "Boss Event")}</span>
+        <span class="be-boss-title">${escapeHtml(s.bossName ? `Boss Event · ${s.bossName}` : "Boss Event")}</span>
         <div class="be-boss-actions">
           <button id="be-boss-settings-toggle" type="button" aria-expanded="${bossUiState.settingsOpen ? "true" : "false"}" title="Boss high settings" aria-label="Boss high settings">&#9881;</button>
           <button id="be-boss-toggle" type="button" title="Minimize boss event" aria-label="Minimize boss event">-</button>

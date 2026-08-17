@@ -534,10 +534,9 @@
 .be-boss-panel.be-dragging {
   user-select: none;
 }
-.be-boss-panel.be-boss-minimized {
-  width: min(380px, calc(100vw - 24px));
-  padding: 9px 14px;
-}
+/* No padding or width override: minimizing must not move the title or the
+   buttons by a pixel — it only adds/removes text after "Boss Event · " and
+   drops the body. The head's own margin-bottom is what collapses (below). */
 .be-boss-head {
   display: flex;
   align-items: center;
@@ -557,11 +556,11 @@
   cursor: move;
   touch-action: none;
 }
-.be-boss-min-title {
+/* One rule for BOTH states. Font size and line-height are inherited from
+   .be-boss-head rather than restated, so the two titles cannot drift apart. */
+.be-boss-title {
   min-width: 0;
-  font-size: 16px;
   overflow: hidden;
-  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
