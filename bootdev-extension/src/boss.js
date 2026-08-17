@@ -37,6 +37,10 @@ const AURA_ALERT_COOLDOWN_MS = {
 // After a higher tier fires, stay quiet on the lower ones for a while: a climb
 // should not produce a record toast chased by a near-high toast.
 const AURA_ALERT_LOWER_SUPPRESS_MS = 15 * 60_000;
+// How long the panel keeps showing the last alert. Long enough to still be
+// there when you look up from an editor; short enough that it never becomes
+// furniture. Dismissable at any time.
+const BOSS_ALERT_NOTE_MAX_AGE_MS = 3 * 60 * 60_000;
 const AURA_ALERT_RANK = { record: 4, high: 3, near: 2, above: 1 };
 const BOSS_REMINDER_REPEAT_MS = 24 * 60 * 60 * 1000; // re-remind at most daily
 const BOSS_REMINDER_TOAST_MS = 20_000; // action toast needs longer than the default 6s
@@ -684,10 +688,16 @@ async function renderBossPanel(s) {
     // The alert also lands here, not only as a toast: a toast can be missed
     // while you are in the editor or another tab, and this is still on screen
     // when you look up. Cleared when the event rolls over.
-    const alertMarkup = isPlainObject(s.lastAlert) && s.lastAlert.note
-      ? `<div class="be-boss-alert be-boss-alert-${escapeHtml(s.lastAlert.tier || "info")}">${escapeHtml(
-          `⚑ ${s.lastAlert.note}${s.lastAlert.at ? ` · ${new Date(s.lastAlert.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`
-        )}</div>`
+    // It ages out on its own — "near the event high" from two days ago is not
+    // news — and can be dismissed the moment it has been read.
+    const alertAge = num(s.lastAlert?.at) == null ? 0 : Date.now() - num(s.lastAlert.at);
+    const alertMarkup = isPlainObject(s.lastAlert) && s.lastAlert.note && alertAge < BOSS_ALERT_NOTE_MAX_AGE_MS
+      ? `<div class="be-boss-alert be-boss-alert-${escapeHtml(s.lastAlert.tier || "info")}">
+          <span>${escapeHtml(
+            `⚑ ${s.lastAlert.note}${s.lastAlert.at ? ` · ${new Date(s.lastAlert.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}` : ""}`
+          )}</span>
+          <button id="be-boss-alert-dismiss" type="button" title="Dismiss this alert" aria-label="Dismiss this alert">&times;</button>
+        </div>`
       : "";
     const settingsMarkup = bossUiState.settingsOpen
       ? `<div class="be-boss-settings-panel">
@@ -787,6 +797,16 @@ function bindBossPanelControls(panel, state) {
       acknowledgeBossReminder(state.eventId, false);
       removeBossPanel();
       setFeatureEnabled("bossTracker", false).catch((err) => handleAsyncError(err, "bossClose"));
+    };
+  }
+
+  const alertDismiss = panel.querySelector("#be-boss-alert-dismiss");
+  if (alertDismiss) {
+    alertDismiss.onclick = async () => {
+      const next = { ...state, lastAlert: null };
+      bossState = next;
+      await chromeSet(BOSS_KEY, { state: next });
+      renderBossPanel(next);
     };
   }
 

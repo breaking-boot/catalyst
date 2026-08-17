@@ -662,14 +662,46 @@
 /* The most recent aura alert, kept on screen after its toast has gone. A toast
    is missable; the panel is not. */
 .be-boss-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   margin-top: 9px;
-  padding: 5px 8px;
+  padding: 5px 4px 5px 8px;
   border: 1px solid rgba(229, 174, 60, 0.4);
   border-radius: 6px;
   background: rgba(229, 174, 60, 0.1);
   color: #fde9b0;
   font-size: 11px;
   font-variant-numeric: tabular-nums;
+}
+.be-boss-alert span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.be-boss-alert button {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(253, 233, 176, 0.7);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.be-boss-alert button:hover {
+  background: rgba(229, 174, 60, 0.22);
+  color: #fef4d1;
+}
+.be-boss-alert button:focus-visible {
+  outline: 2px solid #e5ae3c;
+  outline-offset: 1px;
 }
 .be-boss-alert-record {
   border-color: #e5ae3c;
