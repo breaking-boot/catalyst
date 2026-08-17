@@ -59,7 +59,7 @@ const SETTINGS_DEFAULTS = {
 // add it only when the full text is too long to skim (one sentence, no
 // caveats, no "off by default"; the switch already says that).
 const FEATURE_TOGGLES = [
-  { key: "bossTracker", label: "Boss event tracker", desc: "Floating panel: boss aura, damage, and chest progress." },
+  { key: "bossTracker", label: "Boss event tracker", desc: "Floating panel: Boots Aura, your chest progress, and your guild's progress." },
   { key: "bossReminders", label: "Boss event reminders", desc: "When the tracker is hidden and a boss event is live, show a small toast (at most once a day per event)." },
   { key: "allTimeLeaderboard", label: "Top All-Time Learners Leaderboard", desc: "Cumulative-XP standings Boot.dev doesn't show natively." },
   { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
