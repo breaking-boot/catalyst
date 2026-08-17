@@ -251,7 +251,12 @@ function isValidHandle(handle) {
 // Optional `actions` ({ label, onClick, primary }[]) render as buttons below the
 // text; clicking one runs its handler and closes the toast. Returns a close()
 // function so callers can dismiss the toast early (plain callers can ignore it).
-function toast(text, { actions = [], durationMs = 6000 } = {}) {
+// Several features deliver their entire value through a toast, so one that is
+// missed means the feature effectively did not run. Hence: a dismiss control on
+// every toast, pause-on-hover, severity variants (`info` is the long-standing
+// look; `high` and `record` are for the boss aura alerts, which are rare and
+// worth interrupting for), and durationMs: 0 for a sticky toast that waits.
+function toast(text, { actions = [], durationMs = 8000, variant = "info", dismissible = true } = {}) {
   let stack = document.getElementById("be-toast-stack");
   if (!stack) {
     stack = document.createElement("div");
@@ -261,9 +266,10 @@ function toast(text, { actions = [], durationMs = 6000 } = {}) {
   }
 
   const t = document.createElement("div");
-  t.className = "be-toast";
+  t.className = `be-toast be-toast-${variant}`;
 
   let closed = false;
+  let hideTimer = null;
   const close = () => {
     if (closed) return;
     closed = true;
@@ -274,12 +280,20 @@ function toast(text, { actions = [], durationMs = 6000 } = {}) {
       if (stack && !stack.childElementCount) stack.remove();
     }, 400);
   };
+  // Plain setTimeout (not tracked): close() only touches DOM, so it stays safe
+  // — and useful — even after the extension context is invalidated.
+  const startTimer = () => {
+    if (closed || !durationMs) return; // durationMs 0 = sticky, closes on the X
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(close, durationMs);
+  };
+
+  const textEl = document.createElement("span");
+  textEl.className = "be-toast-text";
+  textEl.textContent = text;
+  t.appendChild(textEl);
 
   if (actions.length) {
-    const textEl = document.createElement("span");
-    textEl.className = "be-toast-text";
-    textEl.textContent = text;
-
     const row = document.createElement("div");
     row.className = "be-toast-actions";
     for (const action of actions) {
@@ -297,16 +311,27 @@ function toast(text, { actions = [], durationMs = 6000 } = {}) {
       });
       row.appendChild(btn);
     }
-    t.append(textEl, row);
-  } else {
-    t.textContent = text;
+    t.appendChild(row);
   }
+
+  if (dismissible) {
+    const closeBtn = document.createElement("button");
+    closeBtn.type = "button";
+    closeBtn.className = "be-toast-close";
+    closeBtn.textContent = "×";
+    closeBtn.title = "Dismiss";
+    closeBtn.setAttribute("aria-label", "Dismiss");
+    closeBtn.addEventListener("click", close);
+    t.appendChild(closeBtn);
+  }
+
+  // Reading a toast should not race its own timer.
+  t.addEventListener("mouseenter", () => clearTimeout(hideTimer));
+  t.addEventListener("mouseleave", startTimer);
 
   stack.appendChild(t);
   requestAnimationFrame(() => t.classList.add("be-toast-in"));
-  // Plain setTimeout (not tracked): close() only touches DOM, so it stays safe
-  // — and useful — even after the extension context is invalidated.
-  const hideTimer = setTimeout(close, durationMs);
+  startTimer();
   return close;
 }
 

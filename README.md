@@ -10,16 +10,15 @@ A Manifest V3 browser extension — for Chromium-based browsers such as Chrome a
 
 1. **All-time XP leaderboard** - adds a global all-time XP section to the leaderboard page. **Temporarily unavailable** - see [Boot.dev changes](#bootdev-changes-temporarily-unavailable) below.
 2. **Cumulative profile XP** - adds lifetime XP and current-level XP progress to public user profile pages.
-3. **Boss-event tracker** - tracks current, event-high, and all-time-high Boots Aura. **Damage and chest progress are temporarily hidden** - see [Boot.dev changes](#bootdev-changes-temporarily-unavailable) below.
+3. **Boss-event tracker** - Boots Aura (current, event high, all-time high, this event's average), your own chest progress, and your guild's progress, plus alerts when the XP bonus is worth submitting on.
 4. **Next Lesson nav button** - adds a top-nav shortcut to the current next lesson when the extension can infer it.
 5. **Personal leaderboards** - lets you save Boot.dev handles and compare them in custom Daily XP, All-Time XP, Daily Karma, and All-Time Karma boards.
 
 ## Boot.dev changes (temporarily unavailable)
 
-Boot.dev changed two things in August 2026 that Catalyst was built on. Rather than
-keep displaying numbers that no longer mean anything, Catalyst hides what it can
-no longer answer for. Both are being rebuilt; **a future version will remove this
-section** and restore the features in their new form.
+Boot.dev changed two things in August 2026 that Catalyst was built on. The boss
+tracker has been rebuilt around the new event (see **Boss Event Tracker** below).
+The other is still pending; **a future version will remove this section**.
 
 - **Top All-Time Learners is hidden.** Boot.dev removed the all-time timeframe
   from the leaderboard endpoint Catalyst read, so the board could no longer be
@@ -27,11 +26,6 @@ section** and restore the features in their new form.
   of the last board is kept, not deleted, and the setting stays in the popup.
   Everything else on the leaderboard page — Personal Leaderboards and the
   comparisons on Boot.dev's own boards — is unaffected.
-- **The boss tracker shows aura only.** Boot.dev replaced the community boss goal
-  with individual and guild progress, which left the damage, chest and progress
-  readouts measuring a target that no longer exists. Those are hidden, with a
-  short note in the panel; current, event-high and all-time-high aura still work,
-  and your recorded highs are untouched.
 
 ## TL;DR
 
@@ -137,14 +131,14 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 ### Settings
 
 - Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chromium browsers hide extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
-- The popup toggles the eleven features: Boss event tracker (off by default), Boss event reminders, Top All-Time Learners Leaderboard (temporarily has nothing to show — see [Boot.dev changes](#bootdev-changes-temporarily-unavailable)), Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds level filter, the CLI command shortcuts, the checklist step shortcuts (off by default), code submission confirmation (off by default), and leaderboard comparisons (XP/karma).
+- The popup toggles the twelve features: Boss event tracker (off by default), Boss event reminders, boss aura alerts, Top All-Time Learners Leaderboard (temporarily has nothing to show — see [Boot.dev changes](#bootdev-changes-temporarily-unavailable)), Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds level filter, the CLI command shortcuts, the checklist step shortcuts (off by default), code submission confirmation (off by default), and leaderboard comparisons (XP/karma).
 - The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), and per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards).
-- Settings sync across your devices (`chrome.storage.sync`; in Brave they stay on-device) and apply instantly — no page reload. Turning a feature off also stops its background work, so it places no load on Boot.dev.
+- Settings sync across your devices (`chrome.storage.sync`; in Brave they stay on-device) and apply instantly — no page reload. Turning a feature off stops any polling or requests it owns, so it adds no load to Boot.dev.
 
 ### Backup & restore
 
 - The options page has a **Backup & restore** section. **Export data** downloads a JSON file (`catalyst-backup-YYYY-MM-DD.json`) containing your settings, tracked Personal Leaderboards learners, XP/karma snapshot history, your own karma comparison series, and boss stats. **Import data** picks a backup file, shows you what's inside, and applies it only after you confirm. The file is created locally and never uploaded anywhere.
-- Importing **merges data and replaces settings** — tracked learners are combined with your current list, snapshot history and boss highs merge (the boss event high only counts if the backup is from the currently running event), and your toggles are restored exactly as exported. An import never deletes anything.
+- Importing **merges data and replaces settings** — tracked learners are combined with your current list, snapshot history and boss highs merge (the boss event high, and the aura history behind the event average, only count if the backup is from the currently running event), and your toggles are restored exactly as exported. An import never deletes anything.
 - Use it before removing/reinstalling the extension, to move Catalyst to another machine, or to sync settings between devices on Brave (which doesn't sync extension data).
 - One honest caveat: XP/karma snapshot history only lives ~24 hours by design (it measures a rolling window), so a backup restores full comparison accuracy only when imported soon after export. Older backups still restore your learners, settings, and boss stats; the expired measurement window simply rebuilds as you browse.
 - Power users: the file's sections (`settings`, `personalLeaderboard`, `currentUser`, `bossState`) are independent — deleting a section from the JSON before importing skips just that part.
@@ -209,15 +203,28 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 ### Boss Event Tracker
 
 - The boss tracker is **off by default** so nothing floats over the page until you ask for it. Turn it on from the settings popup — or just wait: when a boss event is live and the tracker is hidden, Catalyst shows a small **reminder toast** with a **Show Tracker** button (turns the tracker on) and a **Don't remind me for this event** button (silences reminders for that event only). The reminder appears at most once a day per event, and the **Boss event reminders** toggle turns reminders off entirely.
-- While the tracker is off, Catalyst makes no boss-event requests of its own — event detection piggybacks on the responses the Boot.dev page already fetches. The last tracked event's stats are kept, so re-enabling the tracker after an event still shows them until newer event data arrives.
-- Once enabled, the tracker appears on Boot.dev pages when boss-event data has been loaded. It tracks current Boots Aura bonus %, event-high %, all-time-high %, and how far the current aura sits below the event high.
-- **Damage and chest readouts are temporarily hidden.** Boot.dev replaced the community boss goal with individual and guild progress in August 2026, so boss damage, XP to the next chest, XP to defeat the boss, chest tier and both progress bars were measuring a target that no longer exists. The panel shows a short note in their place. Catalyst continues preserving the underlying boss-event state for the future rebuild; a future version will restore these features in a form that matches the new event structure and remove the note.
+- While the tracker is off, Catalyst makes no boss-event requests of its own — event detection piggybacks on the responses the Boot.dev page already fetches. It does **record** what those responses say, so turning the tracker on part-way through an event shows the history it could have had rather than starting blank.
+- Once enabled, the tracker appears on Boot.dev pages when boss-event data has been loaded. It shows three things:
+  - **Boots Aura** - the current bonus %, the highest seen this event, the highest ever seen, this event's running average, how far the current bonus sits below the event high, and the number of lessons the whole site completed this hour (the figure the bonus is derived from).
+  - **Your fight** - your event XP against the four chest milestones, with the next chest named and the XP still needed. Once all four are earned it reads *Boss defeated*.
+  - **Your guild** - one guild at a time: its name, how many members have qualified, and its XP against the guild goal. Before any guild completes, Catalyst shows the one closest to finishing; once a guild completes, it shows that one for the rest of the event. A guild needs two qualified members before its XP counts at all, and the panel says so rather than leaving you with an unexplained 0.
+- Values whose meaning is not obvious from their label carry a small info mark; hover it for an explanation. Anything without one needs none.
+- **"Event high" means the highest bonus Catalyst saw**, which is not the event's peak if the tracker was off for part of it. The panel states the window it has been watching, so a high recorded on day three is not mistaken for the event's best.
+- When an event ends, its final numbers stay on screen behind a *Final* banner, and a one-line summary of it survives into the next event (visible in the gear panel). Boot.dev zeroes the live bonus at that point, so the current aura, the gap below the event high, and lessons this hour read as unavailable rather than as a real zero; the highs, the average and your results stay.
 - Drag the tracker header to reposition it anywhere on screen. The position persists across pages.
-- Use the **−** / **+** button to minimize or expand the tracker. The minimized view still shows the current aura percentage.
+- Use the **−** / **+** button to minimize or expand the tracker. The minimized view still shows the current aura while the event is live.
 - Use the **×** button to close the tracker — it switches the Boss event tracker setting off in one click (turn it back on anytime from the popup). Closing also mutes reminder toasts for the current event.
-- Use the **gear** button to open the high settings panel. You can manually edit the event high and all-time high percentages — useful if you missed a high while the extension wasn't watching. Saving an event high above the all-time high also raises the all-time high.
+- Use the **gear** button to open the settings panel. You can manually edit the event high and all-time high percentages — useful if you missed a high while the extension wasn't watching — and set **Min aura to alert %** (see alerts below). **Apply changes** saves all three. Saving an event high above the all-time high also raises the all-time high, and editing a high re-arms the alerts so a level already announced can announce again.
 - The settings panel also includes a **Refresh** button and a **Reset** button. Reset clears the current event stats while keeping the all-time high.
 - Boss-event data refreshes in the background roughly every 2 minutes, and pauses while the tab is hidden. Navigating within Boot.dev resets that timer and triggers a fresh fetch immediately.
+
+**Aura alerts** (the **Boss aura alerts** toggle, on by default, active only while the tracker is on):
+
+- **New all-time high** - the strongest alert, and the only one that waits for you to dismiss it.
+- **New event high** - the bonus beat this event's previous best.
+- **Near the event high** - within 80% of it, so worth submitting on now.
+- **Well above this event's average** - the bonus is unusually good for this event even though it is nowhere near a record.
+- The last two only fire at or above **Min aura to alert %** in the gear panel (40% by default); a new high always alerts regardless. Only the most important alert fires at a time, each has a cooldown, and every alert also leaves a line in the panel — a toast is easy to miss, the panel is not. The line can be dismissed and disappears on its own after a few hours.
 
 ### Profile Pages
 

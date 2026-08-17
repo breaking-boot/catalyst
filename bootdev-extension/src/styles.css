@@ -534,10 +534,9 @@
 .be-boss-panel.be-dragging {
   user-select: none;
 }
-.be-boss-panel.be-boss-minimized {
-  width: min(380px, calc(100vw - 24px));
-  padding: 9px 14px;
-}
+/* No padding or width override: minimizing must not move the title or the
+   buttons by a pixel — it only adds/removes text after "Boss Event · " and
+   drops the body. The head's own margin-bottom is what collapses (below). */
 .be-boss-head {
   display: flex;
   align-items: center;
@@ -557,11 +556,11 @@
   cursor: move;
   touch-action: none;
 }
-.be-boss-min-title {
+/* One rule for BOTH states. Font size and line-height are inherited from
+   .be-boss-head rather than restated, so the two titles cannot drift apart. */
+.be-boss-title {
   min-width: 0;
-  font-size: 16px;
   overflow: hidden;
-  line-height: 1.2;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -619,24 +618,126 @@
   font-size: 12px;
   color: #a3b3c7;
 }
-.be-boss-progress-list {
+/* Marks a value whose meaning is not obvious from its label. Anything carrying
+   one has a tooltip; anything without one needs no explaining. It takes the
+   colour of the text it follows and stays slightly smaller and lighter: enough
+   to read as "there is more here", not enough to compete with the number. */
+.be-boss-info {
+  /* Boot.dev's CSS reset makes every svg display:block (Tailwind Preflight
+     does exactly this), which put the marker on a line of its own and broke
+     out of a nowrap button. An injected stylesheet inherits the page's resets,
+     so anything injected has to state its own display rather than assume the
+     element default. */
+  display: inline-block;
+  width: 1em;
+  height: 1em;
+  vertical-align: -0.12em;
+  color: inherit; /* the SVG strokes are currentColor */
+  opacity: 0.7;
+  cursor: help;
+}
+.be-boss-grid > div[title],
+.be-boss-caption[title],
+.be-boss-manual label[title] {
+  cursor: help;
+}
+/* Your fight / guild fight. One section per block, each a head row plus a gold
+   bar and captions. */
+.be-boss-section {
   display: grid;
-  gap: 7px;
+  gap: 5px;
   margin-top: 10px;
   padding-top: 9px;
   border-top: 1px solid rgba(229, 174, 60, 0.18);
 }
-.be-boss-progress-label {
+.be-boss-section-head {
   display: flex;
-  align-items: center;
+  align-items: baseline;
   justify-content: space-between;
+  gap: 8px;
   color: #fde9b0;
-  font-size: 11px;
+  font-size: 12px;
+  font-weight: 600;
 }
-.be-boss-progress-label b {
+.be-boss-section-head span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.be-boss-section-head b {
+  flex: 0 0 auto;
   color: #fff;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+.be-boss-caption {
+  color: #a3b3c7;
+  font-size: 11px;
+  line-height: 1.4;
+  font-variant-numeric: tabular-nums;
+}
+.be-boss-status {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+/* The most recent aura alert, kept on screen after its toast has gone. A toast
+   is missable; the panel is not. */
+.be-boss-alert {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 9px;
+  padding: 5px 4px 5px 8px;
+  border: 1px solid rgba(229, 174, 60, 0.4);
+  border-radius: 6px;
+  background: rgba(229, 174, 60, 0.1);
+  color: #fde9b0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+.be-boss-alert span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.be-boss-alert button {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: rgba(253, 233, 176, 0.7);
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+.be-boss-alert button:hover {
+  background: rgba(229, 174, 60, 0.22);
+  color: #fef4d1;
+}
+.be-boss-alert button:focus-visible {
+  outline: 2px solid #e5ae3c;
+  outline-offset: 1px;
+}
+.be-boss-alert-record {
+  border-color: #e5ae3c;
+  background: rgba(229, 174, 60, 0.2);
+  color: #fef4d1;
+  font-weight: 600;
+}
+/* Banner for an event that has ended: its numbers are final results, not live
+   progress, and the panel says so rather than hiding them. */
+.be-boss-final {
+  margin-bottom: 8px;
+  color: #fde9b0;
+  font-size: 11px;
 }
 .be-boss-progress-track {
   height: 5px;
@@ -649,16 +750,6 @@
   height: 100%;
   border-radius: inherit;
   background: linear-gradient(90deg, #dca336, #f4c76a);
-}
-/* Interim note explaining the tiles hidden in v0.13.1; removed with v0.14.0's
-   panel rebuild. Quieter than the tiles, a shade brighter than the meta line. */
-.be-boss-note {
-  margin-top: 10px;
-  padding-top: 9px;
-  border-top: 1px solid rgba(229, 174, 60, 0.18);
-  color: #a3b3c7;
-  font-size: 11px;
-  line-height: 1.45;
 }
 .be-boss-meta {
   margin-top: 8px;
@@ -705,6 +796,10 @@
   grid-column: 1 / -1;
   gap: 8px;
 }
+.be-boss-settings-note {
+  grid-column: 1 / -1;
+  margin-top: -2px;
+}
 .be-boss-manual button {
   min-height: 31px;
   border: 1px solid rgba(229, 174, 60, 0.45);
@@ -720,8 +815,13 @@
   border-color: #e5ae3c;
   background: rgba(229, 174, 60, 0.22);
 }
+/* Refresh and Reset share a width; Apply changes takes more, because equal
+   thirds squeezed its longer label against the info marker. */
 .be-boss-manual-actions button {
   flex: 1 1 0;
+}
+.be-boss-manual-actions #be-boss-save-highs {
+  flex: 1.5 1 0;
 }
 .be-boss-manual .be-boss-reset-button {
   border-color: rgba(248, 113, 113, 0.42);
@@ -753,8 +853,9 @@
   pointer-events: none;
 }
 .be-toast {
+  position: relative;
   width: 100%;
-  padding: 12px 18px;
+  padding: 12px 34px 12px 18px; /* room for the dismiss control */
   border-radius: 10px;
   background: #2b6cb0;
   color: #fff;
@@ -803,6 +904,54 @@
 }
 .be-toast-btn-primary:hover {
   background: rgba(255, 255, 255, 0.88);
+}
+.be-toast-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.75);
+  font: inherit;
+  font-size: 17px;
+  line-height: 1;
+  cursor: pointer;
+}
+.be-toast-close:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.be-toast-close:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 1px;
+}
+/* Severity. `info` keeps the long-standing blue; the two boss-aura variants
+   borrow the panel's gold so a rare alert reads as one, and `record` (a new
+   all-time high) is sticky, so it also gets the strongest treatment. */
+.be-toast-high,
+.be-toast-record {
+  background: linear-gradient(180deg, #2c2412, #1c1710);
+  border: 1px solid #e5ae3c;
+  color: #fef4d1;
+}
+.be-toast-high .be-toast-btn,
+.be-toast-record .be-toast-btn {
+  border-color: rgba(229, 174, 60, 0.6);
+  color: #fde9b0;
+}
+.be-toast-high .be-toast-btn-primary,
+.be-toast-record .be-toast-btn-primary {
+  background: #e5ae3c;
+  border-color: #e5ae3c;
+  color: #1c1710;
+}
+.be-toast-record {
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45), 0 0 22px rgba(229, 174, 60, 0.45);
+  font-weight: 600;
 }
 
 /* ---------------------------------------------------------------------------

@@ -59,6 +59,30 @@ function backupOptionalMs(value) {
   return value == null ? null : backupNum(value);
 }
 
+// Mirrors the aura record in boss.js — keep in sync. The running aggregate is
+// two numbers, so a mean survives a restore without the raw series being
+// trusted; `changes` is capped the same way boss.js caps it.
+const BACKUP_AURA_CHANGES_MAX = 500;
+function sanitizeBackupAura(aura) {
+  if (!backupIsPlainObject(aura)) return null;
+  const observedMs = Math.max(0, backupNum(aura.observedMs) ?? 0);
+  const weightedSum = Math.max(0, backupNum(aura.weightedSum) ?? 0);
+  if (!observedMs || !weightedSum) return null; // nothing measured yet
+  const changes = Array.isArray(aura.changes)
+    ? aura.changes
+        .filter((entry) => Array.isArray(entry) && backupNum(entry[0]) != null && backupNum(entry[1]) != null)
+        .map((entry) => [backupNum(entry[0]), backupNum(entry[1])])
+        .slice(-BACKUP_AURA_CHANGES_MAX)
+    : [];
+  return {
+    observedMs,
+    weightedSum,
+    lastSampleAt: backupOptionalMs(aura.lastSampleAt),
+    lastPct: backupOptionalMs(aura.lastPct),
+    changes,
+  };
+}
+
 function backupNormalizeHandle(value) {
   const raw = String(value || "")
     .trim()
@@ -225,6 +249,12 @@ async function collectBackupData() {
       eventHigh: Math.max(0, backupNum(boss.eventHigh) ?? 0),
       eventHighAt: backupOptionalMs(boss.eventHighAt), // null on pre-0.9.0 states
       allTimeHigh: Math.max(0, backupNum(boss.allTimeHigh) ?? 0),
+      // Observation history for the CURRENT event: like the highs, it records
+      // what this device happened to watch and cannot be recomputed from any
+      // API — the aura is only ever served as a current value. Everything else
+      // in the panel (your XP, chests, guild) is deliberately left out, because
+      // the next boss_events_progress response refills it in seconds.
+      aura: sanitizeBackupAura(boss.aura),
     };
   }
 
@@ -318,7 +348,11 @@ function summarizeBackup(data) {
 
   if (backupIsPlainObject(data.bossState)) {
     const ath = Math.round(Math.max(0, backupNum(data.bossState.allTimeHigh) ?? 0));
-    lines.push(`Boss stats — all-time high ${ath}% (merges; event high only if it's the same event)`);
+    const aura = sanitizeBackupAura(data.bossState.aura);
+    const watched = aura ? `, plus ${Math.round(aura.observedMs / 60000)} min of aura history` : "";
+    lines.push(
+      `Boss stats — all-time high ${ath}%${watched} (merges; the event high and aura history only if it's the same event)`
+    );
   }
 
   if (!lines.length) lines.push("No recognizable Catalyst data in this file.");
@@ -448,19 +482,33 @@ async function mergeBossState(imported, now) {
 
   if (!local) {
     if (!eventId && !allTimeHigh) return { message: "Boss stats: nothing to restore.", wrote: false };
-    // Mirrors the shape of newEventState in boss.js — keep in sync.
+    // Mirrors the shape of newEventState in boss.js — keep in sync. Only the
+    // aura history is restorable; the live fields refill from the next
+    // boss_events_progress response, and observedSince stays null because an
+    // imported high has no local observation window.
     const fresh = {
       eventId: eventId || "unknown-event",
+      bossName: null,
+      observedSince: null,
       current: 0,
       eventHigh,
       eventHighAt,
       allTimeHigh,
-      damage: 0,
-      nextChestAt: 0,
-      bossMaxHp: 0,
-      lastChestTier: null,
-      nextChestTier: null,
-      notifiedHigh: 0,
+      xpUser: null,
+      personalTarget: null,
+      chestsEarned: null,
+      chestTotal: null,
+      nextThreshold: null,
+      nextTier: null,
+      lessonsHourly: null,
+      guild: null,
+      guildRewardGranted: null,
+      pinnedGuildId: null,
+      aura: sanitizeBackupAura(imported.aura) || {
+        observedMs: 0, weightedSum: 0, lastSampleAt: null, lastPct: null, changes: [],
+      },
+      alerts: null,
+      lastAlert: null,
       updatedAt: now,
     };
     const ok = await backupStorageSet("local", BACKUP_BOSS_KEY, { state: fresh });
@@ -481,6 +529,14 @@ async function mergeBossState(imported, now) {
       local.eventHigh = eventHigh;
       local.eventHighAt = eventHighAt;
       if (local.eventHigh > (backupNum(local.allTimeHigh) ?? 0)) local.allTimeHigh = local.eventHigh;
+      changed = true;
+    }
+    // Aura statistics: the copy that watched MORE of the event wins, whole.
+    // They are not added together — two devices watching the same hour would
+    // double-count it and bias the average toward whichever was open more.
+    const importedAura = sanitizeBackupAura(imported.aura);
+    if (importedAura && importedAura.observedMs > (backupNum(local.aura?.observedMs) ?? 0)) {
+      local.aura = importedAura;
       changed = true;
     }
   } else if (eventId && eventHigh > 0) {
