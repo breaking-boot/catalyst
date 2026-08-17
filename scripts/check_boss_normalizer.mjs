@@ -14,7 +14,7 @@
 // `Event` was present, so a MIXED response would slip through untouched and
 // silently freeze the tracker's aura %. These checks pin that down.
 
-import { readFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
 
@@ -25,6 +25,25 @@ const AUDIT_BODIES = new URL(
   "../reference_data/catalyst_versions/v0.12.2_api_casing_audit/api/responses/api_bodies_v3_2026-07-31.json",
   import.meta.url
 );
+// The v0.14.0 captures are named <account>_<label>_<timestamp>.json by probe
+// 01d, so they are located by PREFIX — the timestamp is evidence, not an API
+// contract, and a re-filed capture must not break the checks.
+const REDESIGN_BODIES = new URL(
+  "../reference_data/catalyst_versions/v0.14.0_boss_event_redesign/api/responses/",
+  import.meta.url
+);
+function loadProbeBody(prefix) {
+  try {
+    const names = readdirSync(REDESIGN_BODIES)
+      .filter((n) => n.startsWith(prefix) && n.endsWith(".json"))
+      .sort();
+    if (!names.length) return null;
+    // Probe 01d wraps the response under `json`, alongside account/label/etc.
+    return JSON.parse(readFileSync(new URL(names[names.length - 1], REDESIGN_BODIES), "utf8"))?.json ?? null;
+  } catch (_) {
+    return null;
+  }
+}
 
 // --- evaluate boss.js in a sandbox ------------------------------------------
 
@@ -84,7 +103,16 @@ if (!boss) {
   console.error("FAIL: boss.js did not expose test hooks");
   process.exit(1);
 }
-const { pickField, normalizeBossProgressJson, hasBossEventIdentity, isBossEventActive, getBossRewards, getNextChestAt } = boss;
+const {
+  pickField,
+  normalizeBossProgressJson,
+  hasBossEventIdentity,
+  isBossEventActive,
+  getBossRewards,
+  getNextChestAt,
+  getPersonalChestState,
+  selectBossGuild,
+} = boss;
 
 // --- tiny assert ------------------------------------------------------------
 
@@ -156,6 +184,136 @@ check("pascal: Event.UUID unchanged", np.Event.UUID, "p1");
 check("pascal: XPBonus unchanged", np.XPBonus, 0.5);
 check("pascal: Rewards unchanged", np.Rewards[0].XPThreshold, 3);
 check("pascal: IsUnlockedByUser false survives", np.Rewards[0].IsUnlockedByUser, false);
+
+// --- the 2026-08-14 event redesign: guilds ----------------------------------
+// guilds[] and guildRewardGranted arrived in this same response. They are read
+// per field like everything else, so a casing flip on the guild DTO alone (the
+// way /v1/challenges/search flipped in v0.12.1) cannot silently empty the block.
+
+const guildCamel = normalizeBossProgressJson({
+  event: { uuid: "g1", expiresAt: "2099-01-01T00:00:00Z" },
+  xpBonus: 0.3,
+  xpUser: 3045,
+  rewards: [{ userXPThreshold: 2500 }],
+  guilds: [
+    {
+      guildUUID: "u1", name: "Byte Club", handle: "byteclub",
+      memberCount: 2, contributorCount: 2, xp: 263032, xpThreshold: 20000, isCompleted: true,
+    },
+  ],
+  guildRewardGranted: true,
+});
+check("guilds: camelCase guildUUID", guildCamel.Guilds[0].GuildUUID, "u1");
+check("guilds: camelCase memberCount", guildCamel.Guilds[0].MemberCount, 2);
+check("guilds: camelCase contributorCount", guildCamel.Guilds[0].ContributorCount, 2);
+check("guilds: camelCase xp", guildCamel.Guilds[0].XP, 263032);
+check("guilds: camelCase xpThreshold", guildCamel.Guilds[0].XPThreshold, 20000);
+check("guilds: camelCase isCompleted", guildCamel.Guilds[0].IsCompleted, true);
+check("guilds: camelCase guildRewardGranted", guildCamel.GuildRewardGranted, true);
+
+// A MIXED response — PascalCase Event beside camelCase guilds — is the shape
+// that would slip past a whole-response casing gate.
+const guildMixed = normalizeBossProgressJson({
+  Event: { UUID: "g2", ExpiresAt: "2099-01-01T00:00:00Z" },
+  XPUser: 100,
+  Rewards: [{ UserXPThreshold: 2500 }],
+  guilds: [{ guildUUID: "u2", name: "Mixed", memberCount: 2, contributorCount: 0, xp: 0, xpThreshold: 20000, isCompleted: false }],
+  guildRewardGranted: false,
+});
+check("guilds: mixed response still maps the guild entry", guildMixed.Guilds[0].XPThreshold, 20000);
+check("guilds: mixed response maps a false isCompleted", guildMixed.Guilds[0].IsCompleted, false);
+check("guilds: mixed response maps a false guildRewardGranted", guildMixed.GuildRewardGranted, false);
+
+// A response with no guilds key must not grow one — a user in no guild is
+// normal, and an invented empty array would look like a rename.
+const noGuilds = normalizeBossProgressJson({ event: { uuid: "g3" }, xpBonus: 0.1 });
+check("guilds: absent key stays absent", Array.isArray(noGuilds.Guilds), false);
+
+// --- personal chest ladder ---------------------------------------------------
+
+const ladder = (xpUser, thresholds = [2500, 5000, 7500, 10000]) =>
+  getPersonalChestState(
+    normalizeBossProgressJson({
+      event: { uuid: "p", healthPoints: 10000 },
+      xpUser,
+      rewards: thresholds.map((t) => ({ userXPThreshold: t, xpThreshold: t })),
+    })
+  );
+
+check("ladder: zero progress earns nothing", ladder(0).earned, 0);
+check("ladder: zero progress points at the first chest", ladder(0).nextTier, "Common");
+check("ladder: exactly on a threshold counts as earned", ladder(2500).earned, 1);
+check("ladder: exactly on a threshold advances the next tier", ladder(2500).nextTier, "Uncommon");
+check("ladder: between thresholds", ladder(2689).earned, 1);
+check("ladder: remaining XP to the next chest", ladder(2689).remaining, 2311);
+check("ladder: target is the top of the ladder", ladder(2689).target, 10000);
+check("ladder: not defeated mid-ladder", ladder(2689).defeated, false);
+check("ladder: every chest earned", ladder(253180).earned, 4);
+check("ladder: defeated at the top", ladder(253180).defeated, true);
+check("ladder: no next chest at the top", ladder(253180).nextThreshold, null);
+check("ladder: remaining is 0 at the top", ladder(253180).remaining, 0);
+// Ladder unreadable -> fall back to Event.HealthPoints for the target only.
+check(
+  "ladder: unreadable thresholds fall back to HealthPoints",
+  getPersonalChestState(normalizeBossProgressJson({ event: { uuid: "p", healthPoints: 10000 }, xpUser: 500, rewards: [] }))?.target,
+  10000
+);
+// XPUser ABSENT (not 0) yields no personal state at all: a rename must hide the
+// block, never render a confident 0. pickField preserves a legitimate 0.
+check(
+  "ladder: absent XPUser yields no state",
+  getPersonalChestState(normalizeBossProgressJson({ event: { uuid: "p" }, rewards: [{ userXPThreshold: 2500 }] })),
+  null
+);
+check("ladder: a legitimate 0 still yields state", ladder(0).xpUser, 0);
+
+// --- guild selection and the per-event pin -----------------------------------
+
+const G = (uuid, over = {}) => ({
+  GuildUUID: uuid, Name: uuid, MemberCount: 2, ContributorCount: 2,
+  XP: 0, XPThreshold: 20000, IsCompleted: false, ...over,
+});
+
+check("guild: no guilds selects nothing", selectBossGuild([]).guild, null);
+check("guild: no guilds clears any pin", selectBossGuild([], "gone").pinnedGuildId, null);
+check("guild: a non-array is handled", selectBossGuild(undefined).guild, null);
+
+const race = [G("a", { XP: 5000 }), G("b", { XP: 12000 })];
+check("guild: closest to completing wins", selectBossGuild(race).guild.name, "b");
+check("guild: a live 'closest' pick is NOT pinned", selectBossGuild(race).pinnedGuildId, null);
+
+const oneDone = [G("a", { XP: 5000 }), G("b", { XP: 21000, IsCompleted: true })];
+check("guild: a completed guild wins", selectBossGuild(oneDone).guild.name, "b");
+check("guild: a completed guild is pinned", selectBossGuild(oneDone).pinnedGuildId, "b");
+
+// The whole point of the pin: a second guild completing later must not move the
+// display off the one the user already saw.
+const bothDone = [G("a", { XP: 30000, IsCompleted: true }), G("b", { XP: 21000, IsCompleted: true })];
+check("guild: the pin survives a second completion", selectBossGuild(bothDone, "b").guild.name, "b");
+check("guild: the pin is kept as-is", selectBossGuild(bothDone, "b").pinnedGuildId, "b");
+// Deterministic first choice when two are already complete at first sight.
+check("guild: two completed at once -> most XP", selectBossGuild(bothDone).guild.name, "a");
+check("guild: ties break by UUID", selectBossGuild([G("b", { IsCompleted: true }), G("a", { IsCompleted: true })]).guild.name, "a");
+
+// A pin naming a guild that is gone (the user left it) falls back to the rule.
+check("guild: a stale pin falls back to the rule", selectBossGuild(race, "gone").guild.name, "b");
+check("guild: a stale pin is cleared", selectBossGuild(race, "gone").pinnedGuildId, null);
+
+// Eligibility: a 1-member guild is ineligible and loses to any eligible guild,
+// but is still shown (without a bar) when it is all the user has.
+const mixedEligibility = [G("solo", { MemberCount: 1, XPThreshold: 20000 }), G("pair", { XP: 100 })];
+check("guild: an eligible guild beats an ineligible one", selectBossGuild(mixedEligibility).guild.name, "pair");
+check("guild: an ineligible guild is still selectable alone", selectBossGuild([G("solo", { MemberCount: 1 })]).guild.name, "solo");
+check("guild: ineligible is flagged", selectBossGuild([G("solo", { MemberCount: 1 })]).guild.eligible, false);
+// Guild XP is suppressed until two members qualify — the panel needs to say so.
+check("guild: xpPending below 2 qualified", selectBossGuild([G("x", { ContributorCount: 1 })]).guild.xpPending, true);
+check("guild: not pending at 2 qualified", selectBossGuild([G("x", { ContributorCount: 2 })]).guild.xpPending, false);
+// An unreadable threshold must not win "closest to completing" by default.
+check(
+  "guild: an unreadable threshold sorts last",
+  selectBossGuild([G("broken", { XPThreshold: undefined }), G("ok", { XP: 1 })]).guild.name,
+  "ok"
+);
 
 // --- shapes that carry no event ---------------------------------------------
 
@@ -239,6 +397,78 @@ if (existsSync(AUDIT_BODIES)) {
     });
   }
 }
+// --- v0.14.0 redesign captures (probe 01d, 2026-08-16/17) --------------------
+// These are the states that could only be produced during a live event, from
+// accounts that had not yet crossed the thresholds. They pin the new model
+// against real bodies rather than synthetic ones.
+
+// A partially filled ladder: the ONE capture that proves IsUnlocked and
+// IsUnlockedByUser flip per chest and agree, while the community XPTotal is
+// above 100M. Catalyst ignores both flags — this asserts the computed state
+// matches them anyway.
+const oneChest = loadProbeBody("boss_progress_villainousrent97_dummy1_one_chest_");
+if (oneChest) {
+  fixturesRun += 1;
+  const n = normalizeBossProgressJson(oneChest);
+  const chests = getPersonalChestState(n);
+  check("capture one_chest: xpUser", chests.xpUser, 2689);
+  check("capture one_chest: one chest earned", chests.earned, 1);
+  check("capture one_chest: next threshold", chests.nextThreshold, 5000);
+  check("capture one_chest: next tier", chests.nextTier, "Uncommon");
+  check("capture one_chest: target is the personal 10000", chests.target, 10000);
+  check("capture one_chest: not defeated", chests.defeated, false);
+  check(
+    "capture one_chest: computed state matches the reward flags",
+    n.Rewards.map((r) => r.IsUnlockedByUser),
+    n.Rewards.map((r) => chests.xpUser >= Number(r.UserXPThreshold))
+  );
+  check("capture one_chest: IsUnlocked mirrors IsUnlockedByUser",
+    n.Rewards.map((r) => r.IsUnlocked), n.Rewards.map((r) => r.IsUnlockedByUser));
+  // Two eligible guilds, neither completed, neither yet counting XP.
+  const picked = selectBossGuild(n.Guilds);
+  check("capture one_chest: two guilds normalized", n.Guilds.length, 2);
+  check("capture one_chest: nothing pinned with no completion", picked.pinnedGuildId, null);
+  check("capture one_chest: selected guild is eligible", picked.guild.eligible, true);
+  check("capture one_chest: guild XP is pending below 2 qualified", picked.guild.xpPending, true);
+}
+
+// The moment a second member qualified: guild XP goes 0 -> 6149 (3045 + 3104),
+// still short of the 20000 goal. The mid-progress guild bar, which no earlier
+// capture contained.
+const midGuild = loadProbeBody("boss_progress_emotionalpost67_dummy2_qualified_2026-08-17T003347");
+if (midGuild) {
+  fixturesRun += 1;
+  const n = normalizeBossProgressJson(midGuild);
+  const picked = selectBossGuild(n.Guilds);
+  check("capture mid_guild: xp", picked.guild.xp, 6149);
+  check("capture mid_guild: threshold", picked.guild.xpThreshold, 20000);
+  check("capture mid_guild: 2 of 2 qualified", [picked.guild.contributorCount, picked.guild.memberCount], [2, 2]);
+  check("capture mid_guild: not completed", picked.guild.isCompleted, false);
+  check("capture mid_guild: XP is no longer pending", picked.guild.xpPending, false);
+  check("capture mid_guild: an incomplete guild is not pinned", picked.pinnedGuildId, null);
+  check("capture mid_guild: guildRewardGranted still false", n.GuildRewardGranted, false);
+}
+
+// One body carrying a COMPLETED guild and a MID-PROGRESS one — the fixture the
+// pin rule exists for.
+const twoGuilds = loadProbeBody("boss_progress_villainousrent97_dummy1_two_qualified_");
+if (twoGuilds) {
+  fixturesRun += 1;
+  const n = normalizeBossProgressJson(twoGuilds);
+  const picked = selectBossGuild(n.Guilds);
+  check("capture two_guilds: the completed guild is selected", picked.guild.name, "Byte Club");
+  check("capture two_guilds: it is pinned", picked.pinnedGuildId, "a838d70b-450e-4b1c-9da3-9f0b3f32d878");
+  check("capture two_guilds: completed", picked.guild.isCompleted, true);
+  check("capture two_guilds: guildRewardGranted is true", n.GuildRewardGranted, true);
+  // ...and the pin holds if the other guild completes later in the same event.
+  const laterBothDone = n.Guilds.map((g) => ({ ...g, IsCompleted: true, XP: 999999 }));
+  check(
+    "capture two_guilds: the pin survives the other guild completing",
+    selectBossGuild(laterBothDone, picked.pinnedGuildId).guild.name,
+    "Byte Club"
+  );
+}
+
 if (!fixturesRun) {
   console.log("note: reference_data fixtures not present; skipped capture checks");
 }

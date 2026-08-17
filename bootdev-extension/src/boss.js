@@ -141,6 +141,7 @@ function normalizeBossProgressJson(json) {
   if (!isPlainObject(json)) return json;
   const event = pickField(json, "Event", "event");
   const rewards = pickField(json, "Rewards", "rewards");
+  const guilds = pickField(json, "Guilds", "guilds");
   // Nothing boss-shaped to normalize (an error body, or an empty response):
   // hand it back untouched so hasBossEventIdentity can rule it inactive.
   if (!isPlainObject(event) && !Array.isArray(rewards)) return json;
@@ -176,6 +177,22 @@ function normalizeBossProgressJson(json) {
           IsUnlockedByUser: pickField(r, "IsUnlockedByUser", "isUnlockedByUser"),
         }))
       : rewards,
+    // Guild progress arrived with the 2026-08-14 event redesign, in this same
+    // response — there is no guild endpoint (eleven guessed names 404'd).
+    Guilds: Array.isArray(guilds)
+      ? guilds.map((g) => ({
+          ...(isPlainObject(g) ? g : {}),
+          GuildUUID: pickField(g, "GuildUUID", "guildUUID"),
+          Name: pickField(g, "Name", "name"),
+          Handle: pickField(g, "Handle", "handle"),
+          MemberCount: pickField(g, "MemberCount", "memberCount"),
+          ContributorCount: pickField(g, "ContributorCount", "contributorCount"),
+          XP: pickField(g, "XP", "xp"),
+          XPThreshold: pickField(g, "XPThreshold", "xpThreshold"),
+          IsCompleted: pickField(g, "IsCompleted", "isCompleted"),
+        }))
+      : guilds,
+    GuildRewardGranted: pickField(json, "GuildRewardGranted", "guildRewardGranted"),
   };
 }
 
@@ -751,6 +768,118 @@ function chestTier(index) {
   return ["Common", "Uncommon", "Rare", "Mythic"][index] ?? `Tier ${index + 1}`;
 }
 
+// ---------------------------------------------------------------------------
+// The new event model (v0.14.0): personal ladder + guild progress
+// ---------------------------------------------------------------------------
+// Boot.dev replaced the community boss goal with individual and guild progress
+// on 2026-08-14. Both helpers below are PURE so scripts/check_boss_normalizer.mjs
+// can exercise them against the real captures in
+// reference_data/catalyst_versions/v0.14.0_boss_event_redesign/api/responses/.
+
+// Your own chest progress, computed from XPUser against the UserXPThreshold
+// ladder — NOT from IsUnlocked/IsUnlockedByUser. Captures on 2026-08-16 show
+// the two flags agree per chest (2,500 unlocked at xpUser 2689 while the rest
+// stayed false), so this is no longer a workaround for ambiguous booleans; it
+// is simply a value Catalyst can recompute, from a field whose meaning has not
+// changed under it once already.
+function getPersonalChestState(json) {
+  const xpUser = num(json?.XPUser);
+  if (xpUser == null) return null;
+
+  const thresholds = (Array.isArray(json?.Rewards) ? json.Rewards : [])
+    .map((r) => num(r?.UserXPThreshold))
+    .filter((t) => t != null && t > 0)
+    .sort((a, b) => a - b);
+
+  // Event.HealthPoints is the same number as the top of the ladder (10000 in
+  // every capture since the redesign) but it carried the COMMUNITY hit points
+  // before it, so it is only a fallback — and never compared against XPTotal.
+  const hp = num(json?.Event?.HealthPoints);
+  const target = thresholds.length ? thresholds[thresholds.length - 1] : hp;
+  const earned = thresholds.filter((t) => xpUser >= t).length;
+  const nextIndex = thresholds.findIndex((t) => xpUser < t);
+  const nextThreshold = nextIndex === -1 ? null : thresholds[nextIndex];
+
+  return {
+    xpUser,
+    target: target != null && target > 0 ? target : null,
+    thresholds,
+    earned,
+    total: thresholds.length,
+    nextThreshold,
+    nextTier: nextIndex === -1 ? null : chestTier(nextIndex),
+    remaining: nextThreshold == null ? 0 : Math.max(0, nextThreshold - xpUser),
+    defeated: thresholds.length > 0 && earned === thresholds.length,
+  };
+}
+
+const GUILD_MIN_MEMBERS = 2; // Boot.dev: a guild needs 2 members to be eligible
+const GUILD_MIN_QUALIFIED = 2; // ...and 2 qualified contributors before its XP counts
+
+function describeBossGuild(g) {
+  const memberCount = num(g?.MemberCount);
+  const contributorCount = num(g?.ContributorCount);
+  return {
+    uuid: typeof g?.GuildUUID === "string" ? g.GuildUUID : null,
+    name: typeof g?.Name === "string" ? g.Name : "",
+    memberCount,
+    contributorCount,
+    xp: num(g?.XP),
+    xpThreshold: num(g?.XPThreshold),
+    isCompleted: g?.IsCompleted === true,
+    eligible: (memberCount ?? 0) >= GUILD_MIN_MEMBERS,
+    // Guild XP reads 0 until two members qualify, then jumps to the full
+    // retroactive sum of their event XP (measured 2026-08-16/17: Byte Club sat
+    // at 0 while a member held 260k, then went to 263,032 the instant a second
+    // member qualified; DumbAndDumber went 0 -> 6149 = 3045 + 3104 exactly).
+    // The panel says so, otherwise a user who has personally earned thousands
+    // reads that 0 as a Catalyst bug.
+    xpPending: (contributorCount ?? 0) < GUILD_MIN_QUALIFIED,
+  };
+}
+
+// Which guild the panel shows, and whether that choice is pinned for the event.
+// Maintainer-specified rule:
+//   1. an existing pin wins, so the display never switches away mid-event
+//   2. otherwise a COMPLETED guild wins AND is pinned (most XP, then UUID —
+//      deterministic from the response's own values, independent of array order)
+//   3. otherwise the eligible guild closest to completing (least XP remaining),
+//      deliberately NOT pinned, because "closest" is a live measure
+//   4. otherwise an ineligible guild, which the panel renders without a bar
+// A pin naming a guild that is no longer in the list (the user left it) is
+// cleared and the rule re-runs, rather than showing nothing.
+function selectBossGuild(guilds, pinnedGuildId = null) {
+  const list = (Array.isArray(guilds) ? guilds : []).filter(isPlainObject);
+  if (!list.length) return { guild: null, pinnedGuildId: null };
+
+  const pinned = pinnedGuildId ? list.find((g) => g.GuildUUID === pinnedGuildId) : null;
+  if (pinned) return { guild: describeBossGuild(pinned), pinnedGuildId };
+
+  const byUuid = (a, b) => String(a?.GuildUUID ?? "").localeCompare(String(b?.GuildUUID ?? ""));
+  const completed = list
+    .filter((g) => g.IsCompleted === true)
+    .sort((a, b) => (num(b.XP) ?? 0) - (num(a.XP) ?? 0) || byUuid(a, b));
+  if (completed.length) {
+    return {
+      guild: describeBossGuild(completed[0]),
+      pinnedGuildId: typeof completed[0].GuildUUID === "string" ? completed[0].GuildUUID : null,
+    };
+  }
+
+  // An unreadable threshold sorts last rather than winning by default.
+  const remaining = (g) => {
+    const threshold = num(g.XPThreshold);
+    return threshold == null ? Infinity : Math.max(0, threshold - (num(g.XP) ?? 0));
+  };
+  const eligible = list.filter((g) => (num(g.MemberCount) ?? 0) >= GUILD_MIN_MEMBERS);
+  const pool = eligible.length ? eligible : list;
+  const best = pool
+    .slice()
+    .sort((a, b) => remaining(a) - remaining(b) || (num(b.XP) ?? 0) - (num(a.XP) ?? 0) || byUuid(a, b))[0];
+
+  return { guild: describeBossGuild(best), pinnedGuildId: null };
+}
+
 // Test hook: scripts/check_boss_normalizer.mjs predefines this global before
 // evaluating the file. Never defined on the real page.
 if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
@@ -763,5 +892,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     getNextChestAt,
     getLastChestTier,
     getNextChestTier,
+    getPersonalChestState,
+    selectBossGuild,
   };
 }
