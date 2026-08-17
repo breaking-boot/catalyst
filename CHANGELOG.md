@@ -1,4 +1,37 @@
 # Changelog
+## v0.14.0 - Boss tracker rebuilt for the new event format
+
+Boot.dev replaced the community boss fight with individual and guild progress in August 2026. The tracker was built entirely around the community goal, so most of what it showed had stopped meaning anything — v0.13.1 hid those readouts rather than keep displaying them. This release rebuilds the panel around the event as it actually works now, and makes the aura alerts useful for an event whose bonus sits near 32% most of the time.
+
+### Added
+
+* **Your own progress toward the four chests**, on a gold bar, with the next chest named and the XP still needed. Once all four are earned it says so in a line instead of a permanently full bar.
+* **Guild progress.** One guild at a time: its name, how many members have qualified, and its XP against the guild goal. Before any guild completes, Catalyst shows the one closest to finishing; once a guild completes, it shows that one for the rest of the event. A guild needs two qualified members before its XP counts at all, and the panel says so rather than leaving you with an unexplained 0.
+* **Aura alerts tuned to the new event.** The old alert needed the bonus to return to at least 95% once the event high reached 100%; after August's opening surge, the aura instead sat near 32% for a week. Catalyst now alerts on four levels: a new all-time high, a new event high, nearing this event's high, and simply being well above this event's average. Only the most important one fires at a time, each has a cooldown, and every alert also leaves a line in the panel, because a toast is easy to miss. New **Boss aura alerts** setting, on by default, with a **Min aura to alert %** threshold in the tracker's settings (40% by default) below which the two "good time to submit" alerts stay quiet. A new high always alerts regardless.
+* **An event average.** Catalyst tracks the bonus over the part of the event it actually observes, so "is 52% good?" has an answer on screen instead of a guess. It says how long that observed window covers.
+* **Lessons completed this hour**, the site-wide figure the bonus is derived from — the earliest sign the bonus is about to move.
+* **The panel says how long it has been watching.** "Event high" has always meant the highest bonus Catalyst happened to see, which is not the event's peak if the tracker was off for part of it.
+* **Explanations where a number cannot speak for itself.** The two highs, the event average, lessons this hour, the guild's qualified count and the alert threshold carry a small info mark; hovering it explains the value. Values that need no explaining have no mark.
+
+### Changed
+
+* **Finished events stay readable.** When an event ends, the panel keeps showing your final chests, your guild's result and the event's aura summary behind a *Final* banner, and keeps a one-line summary of it once the next event begins. Boot.dev zeroes the live bonus at expiry, so the current aura, the gap below the event high and lessons this hour read as unavailable rather than as a real zero, and those zeros are kept out of the event's average.
+* **The tracker keeps a record even while it is hidden.** Catalyst still makes no boss-event requests of its own when the tracker is off — it only reads what the Boot.dev page already fetched — but it now records what it sees, so turning the tracker on part-way through an event shows the history it could have had.
+* **Toasts are easier to catch**: they stay a little longer, pause while the pointer is over them, can be dismissed, and important ones stand out.
+* **Backups carry the aura history.** Like the recorded highs, it measures what your device happened to watch and cannot be recovered from Boot.dev, so it travels with them. It restores only for the same event.
+* **Damage, chest tier and the two old progress bars are gone for good**, along with the temporary note explaining their absence.
+
+### Fixed
+
+* **The tracker no longer stops refreshing after a single rejected request.** A sign-in hiccup could stop the background refresh for the rest of the session unless you happened to navigate.
+* **Minimizing no longer nudges the panel's title and buttons.** The panel is now anchored by its top-left corner, so collapsing it changes only its height.
+
+### Notes
+
+* No new permissions or dependencies, and no backup format version bump — the aura history is an additive field inside the existing boss section, so older Catalyst versions still read the file. One new setting, **Boss aura alerts**, on by default.
+* Your recorded aura highs carry over. The retired damage and chest figures are dropped from stored data rather than reinterpreted — Boot.dev changed what one of those fields meant, which is how a stored record ended up reading "82,949,113 damage" against a 10,000-point boss.
+* Chest progress is computed from your own event XP rather than from Boot.dev's unlock flags.
+
 ## v0.13.1 - Stale data correctness fixes
 
 Boot.dev changed several things at once, and Catalyst failed too quietly when some of its assumptions stopped being valid. This release fixes the affected cases where Catalyst was showing stale, incomplete, or misleading information instead of admitting that the underlying data was no longer available, and adds detection that should make similar failures easier to catch.
