@@ -1033,8 +1033,14 @@
 }
 .be-tg-filter-dot {
   position: absolute; /* the native filter button is position:relative */
-  top: -2px;
-  right: 2px;
+  /* Fully inside the button's own background rather than straddling its top
+     border. The original offsets (-2px/2px) were written for the icon-only
+     filter control, where a dot hanging off the corner reads as a badge;
+     Boot.dev has since replaced it with a wide labelled "Filter" button, and
+     against that the same dot sat half on the page background and read as
+     detached from the control it belongs to. */
+  top: 4px;
+  right: 4px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
