@@ -274,6 +274,13 @@ check("global karma board does not", requiresAuth("/v1/leaderboard_karma/alltime
 check("public profile does not", requiresAuth("/v1/users/public/a-fleming"), false);
 check("challenge search does not", requiresAuth("/v1/challenges/search"), false);
 check("league pattern does not over-match a deeper path", requiresAuth("/v1/league_leaderboard_xp/day/extra"), false);
+// Backs the Submit confirmation's risk gate and 401s without the header.
+check("user lesson state requires auth", requiresAuth("/v1/users/lessons/1953ea16-0000-0000-0000-000000000000"), true);
+check("user lesson pattern does not over-match a deeper path", requiresAuth("/v1/users/lessons/a/b"), false);
+// Catalyst no longer requests this one, so it does not need queueing — but note
+// it answers 200 un-personalised without a token, so anything that starts
+// requesting it must add it back.
+check("course progress by lesson is not requested, so not queued", requiresAuth("/v1/course_progress_by_lesson/1953ea16-0000-0000-0000-000000000000"), false);
 
 // --- parseLevelList (data-be-dl / dl= values): validation + canonical order --
 

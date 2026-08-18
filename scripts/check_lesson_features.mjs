@@ -45,6 +45,13 @@ vm.runInContext(
   'function normalizeText(s) { return String(s || "").replace(/\\s+/g, " ").trim(); }',
   sandbox
 );
+// pickField (and its isPlainObject) likewise live in utils.js; submitConfirm.js
+// reads the course-progress fields through it. Mirrors utils.js exactly.
+vm.runInContext(
+  'function isPlainObject(v) { return Boolean(v) && typeof v === "object" && !Array.isArray(v); }\n' +
+  'function pickField(o, pascal, camel) { if (!isPlainObject(o)) return undefined; return o[pascal] !== undefined ? o[pascal] : o[camel]; }',
+  sandbox
+);
 
 for (const file of ["submitConfirm.js", "cliShortcuts.js", "assignmentShortcuts.js"]) {
   const url = new URL(file, SRC);
@@ -59,7 +66,7 @@ if (!cli || !confirmHooks || !assignment) {
   process.exit(1);
 }
 const { matchCliShortcut, classifyBootdevCommand } = cli;
-const { isPointerActivation, isSubmitButtonLabel } = confirmHooks;
+const { isPointerActivation, isSubmitButtonLabel, lessonSubmitIsRiskFree } = confirmHooks;
 const { matchAssignmentShortcut, selectNumberedTarget, selectNextUncheckedTarget } = assignment;
 
 // --- tiny assert ------------------------------------------------------------
@@ -474,6 +481,154 @@ if (!checklistFixturesRun) {
   console.log("note: v0.12.0 UI captures not present; skipped checklist fixture checks");
 }
 fixturesRun += checklistFixturesRun;
+
+// --- the Submit confirmation's risk gate (v0.14.1) --------------------------
+// The dialog warns that a failed submission can cost armor and Sharpshooter
+// progress. Two fields from /v1/users/lessons/{uuid} say whether it still can:
+// successCount > 0 (completed at least once) or armorUsedAt set (armor already
+// spent here). Neither is cleared by a reset, which is what makes them cover
+// the reset states too.
+
+check("completed once", lessonSubmitIsRiskFree({ successCount: 1, armorUsedAt: null }), true);
+check("armor already spent", lessonSubmitIsRiskFree({ successCount: 0, armorUsedAt: "2026-08-18T00:48:39Z" }), true);
+check("both", lessonSubmitIsRiskFree({ successCount: 4, armorUsedAt: "2026-08-18T00:48:39Z" }), true);
+check("untouched", lessonSubmitIsRiskFree({
+  successCount: 0, armorUsedAt: null, previousSubmissionCode: { submittedAt: null, files: null },
+}), false);
+
+// A previous submission protects NOTHING. Boot.dev lists exactly three
+// protections — completed, armor already used here, or holding armor — and the
+// third is not free. Measured 2026-08-18: failing the same lesson twice with no
+// armor held reset the spree BOTH times.
+check("a previous submission does not suppress", lessonSubmitIsRiskFree({
+  successCount: 0, armorUsedAt: null,
+  previousSubmissionCode: { submittedAt: "2026-08-18T02:56:49Z", files: [{ name: "main.py" }] },
+}), false);
+
+// Strict reads: unknown must show the dialog, never suppress it.
+check("no fields at all", lessonSubmitIsRiskFree({}), false);
+check("null body", lessonSubmitIsRiskFree(null), false);
+check("successCount absent", lessonSubmitIsRiskFree({ armorUsedAt: null }), false);
+check("successCount null", lessonSubmitIsRiskFree({ successCount: null, armorUsedAt: null }), false);
+check("successCount not a number", lessonSubmitIsRiskFree({ successCount: "lots", armorUsedAt: null }), false);
+check("successCount negative", lessonSubmitIsRiskFree({ successCount: -1, armorUsedAt: null }), false);
+check("a numeric string still counts", lessonSubmitIsRiskFree({ successCount: "2", armorUsedAt: null }), true);
+check("armorUsedAt empty string", lessonSubmitIsRiskFree({ successCount: 0, armorUsedAt: "   " }), false);
+check("armorUsedAt true is not a timestamp", lessonSubmitIsRiskFree({ successCount: 0, armorUsedAt: true }), false);
+check("PascalCase reads identically", lessonSubmitIsRiskFree({ SuccessCount: 0, ArmorUsedAt: "2026-08-18T00:48:39Z" }), true);
+check("a data envelope is accepted", lessonSubmitIsRiskFree({ data: { successCount: 3 } }), true);
+
+// Holding armor is Boot.dev's third protection, and the only one that is not
+// free — it spends an armor, which is precisely what the dialog warns about. It
+// is also absent from this response, so nothing here can accidentally read it.
+
+// The fields Catalyst deliberately does NOT read.
+// hasCodeHistory is the one field that survives every reset, which is exactly
+// why it must NOT be read: it is true in the post-reset state that goes on to
+// break an armor. Reading it would suppress the dialog there and cost the user
+// the armor the feature exists to protect.
+check("hasCodeHistory must not suppress — it is true where armor still breaks", lessonSubmitIsRiskFree({
+  successCount: 0, armorUsedAt: null, hasCodeHistory: true, latestResetAt: "2026-08-18T02:36:18Z",
+  previousSubmissionCode: { submittedAt: null, files: null },
+}), false);
+// A reset grants no protection, but neither is it risk on its own, so
+// latestResetAt is not a safety signal in either direction — what protects you
+// is whichever persistent condition survived the reset, never the reset itself.
+check("a reset with nothing behind it does not suppress", lessonSubmitIsRiskFree({
+  successCount: 0, armorUsedAt: null, latestResetAt: "2026-08-18T01:25:44Z",
+  previousSubmissionCode: { submittedAt: null, files: null },
+}), false);
+check("a reset after a completion still suppresses, on successCount", lessonSubmitIsRiskFree({
+  successCount: 4, armorUsedAt: null, latestResetAt: "2026-08-18T01:22:17Z",
+  previousSubmissionCode: { submittedAt: null, files: null },
+}), true);
+check("a reset after a broken armor still suppresses, on armorUsedAt", lessonSubmitIsRiskFree({
+  successCount: 0, armorUsedAt: "2026-08-18T02:36:26Z", latestResetAt: "2026-08-18T02:39:59Z",
+  previousSubmissionCode: { submittedAt: null, files: null },
+}), true);
+check("a viewed hint does not suppress (a Seer stone does not protect a submit)", lessonSubmitIsRiskFree({
+  successCount: 0, armorUsedAt: null,
+  hintViewedAt: "2026-08-18T01:00:00Z", solutionViewedAt: "2026-08-18T01:00:00Z",
+  previousSubmissionCode: { submittedAt: null, files: null },
+}), false);
+
+// --- against every real capture ---------------------------------------------
+// Eleven /v1/users/lessons bodies across every state the maintainer could
+// produce. The four from 2026-08-15 also carry the course-progress body, so
+// those rows additionally assert that this one endpoint reproduces the
+// isComplete/isReset answer that used to need two.
+
+const LESSON_CAPTURES = new URL(
+  "../reference_data/catalyst_versions/v0.14.1_lesson_and_catalog_workflow/api/responses/",
+  import.meta.url
+);
+let lessonFixturesRun = 0;
+
+// name, risk-free?, why
+const USER_LESSON_FIXTURES = [
+  ["user_lesson_completed_2026-08-18.json", true, "successCount 4"],
+  ["user_lesson_completed_then_reset_2026-08-18.json", true, "successCount survives a reset"],
+  ["user_lesson_failed_2026-08-18.json", true, "armor already spent"],
+  ["user_lesson_failed_then_reset_2026-08-18.json", true, "armorUsedAt survives a reset"],
+  ["user_lesson_untouched_after_fail_2026-08-18.json", true, "armor spent by that failure"],
+  // Failing with no armor held costs the spree EVERY time — measured twice on
+  // one lesson, 90 seconds apart. A previous submission protects nothing, so
+  // these must all still ask.
+  ["user_lesson_noarmor_fail1_2026-08-18.json", false, "failed holding no armor — spree lost, nothing banked"],
+  ["user_lesson_noarmor_fail2_armor_held_2026-08-18.json", false, "still no armorUsedAt, so still unprotected"],
+  ["user_lesson_noarmor_spree_lost_fail1_2026-08-18.json", false, "first fail with no armor — spree lost"],
+  ["user_lesson_noarmor_spree_lost_fail2_2026-08-18.json", false, "second fail with no armor — spree lost AGAIN"],
+  // A RESET GRANTS NO PROTECTION. Measured 2026-08-18: the lesson above — which
+  // held neither persistent condition — was reset, then failed 8 seconds later,
+  // and that failure DID break an armor. So the post-reset state must still ask.
+  // The two rows after it must not, because armorUsedAt survives the reset.
+  ["user_lesson_noarmor_fail_then_reset_2026-08-18.json", false, "neither persistent protection applies — the next fail broke armor"],
+  ["user_lesson_reset_then_fail_armor_broke_2026-08-18.json", true, "armor broke here"],
+  ["user_lesson_armor_broke_then_reset_2026-08-18.json", true, "armorUsedAt survives the reset"],
+  ["user_lesson_armor_broke_reset_then_fail_2026-08-18.json", true, "failed again after a second reset — no armor broke"],
+  ["user_lesson_unattempted_2026-08-18.json", false, "nothing has happened yet"],
+  ["user_lesson_untouched_before_fail_2026-08-18.json", false, "nothing has happened yet"],
+];
+for (const [name, riskFree, why] of USER_LESSON_FIXTURES) {
+  const url = new URL(name, LESSON_CAPTURES);
+  if (!existsSync(url)) continue;
+  lessonFixturesRun += 1;
+  check(`${name}: ${why}`, lessonSubmitIsRiskFree(JSON.parse(readFileSync(url, "utf8"))), riskFree);
+}
+
+// name, risk-free?, course size, the course-progress answer it must reproduce
+const LESSON_STATE_FIXTURES = [
+  ["lesson_state_completed_2026-08-15.json", true, 105, "isComplete"],
+  ["lesson_state_reset_2026-08-15.json", true, 168, "isReset"],
+  ["lesson_state_failed_2026-08-15.json", true, 105, "neither flag — armor spent"],
+  ["lesson_state_notstarted_2026-08-15.json", false, 105, "neither flag"],
+];
+for (const [name, riskFree, courseSize, note] of LESSON_STATE_FIXTURES) {
+  const url = new URL(name, LESSON_CAPTURES);
+  if (!existsSync(url)) continue;
+  lessonFixturesRun += 1;
+  const capture = JSON.parse(readFileSync(url, "utf8"));
+  const userLesson = capture.replay[`/v1/users/lessons/${capture.uuid}`]?.json;
+  check(`${name}: ${note}`, lessonSubmitIsRiskFree(userLesson), riskFree);
+
+  // The course-progress body is no longer read, but it is the ground truth the
+  // two-field rule has to agree with. A disagreement here means the rule has
+  // drifted from what "nothing at risk" was originally measured to mean.
+  const own = capture.current;
+  const flagsSaySafe = own.isComplete === true || own.isReset === true;
+  if (flagsSaySafe) {
+    check(`${name}: agrees with the course-progress flags`, lessonSubmitIsRiskFree(userLesson), true);
+  }
+  check(`${name}: the capture still covers ${courseSize} lessons`,
+    capture.replay[`/v1/course_progress_by_lesson/${capture.uuid}`].json.chapters
+      .reduce((n, c) => n + (c.lessons?.length || 0), 0), courseSize);
+}
+
+if (lessonFixturesRun) {
+  fixturesRun += lessonFixturesRun;
+} else {
+  console.log("note: v0.14.1 lesson-state captures not present; skipped risk-gate fixture checks");
+}
 
 // -----------------------------------------------------------------------------
 
