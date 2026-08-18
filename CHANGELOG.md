@@ -1,4 +1,17 @@
 # Changelog
+## v0.14.1 - Lesson and catalog workflow fixes
+
+### Fixed
+
+* **The difficulty level filter applies again.** Boot.dev removed the Search button from the Training Grounds filter, and the level selection had nothing left to commit it — picking a level appeared to work and then filtered nothing. Pressing `Enter` in the search box now applies it. Level links you had already shared or bookmarked were never affected.
+* **The filter follows the difficulty tier more reliably.** Catalyst had to work out which tier was selected from the section's icon image, because nothing else on the pills said so. Boot.dev now marks the selected pill properly, so Catalyst reads that instead and keeps the old method as a fallback.
+* **The filter indicator sits on the redesigned Filter button.** Its old offsets were written for an icon-only control and left the gold dot straddling the border of Boot.dev's new labelled button. It now sits fully inside the control it belongs to.
+* **The submit confirmation stays out of the way where a failed submission genuinely costs nothing.** Boot.dev protects your spree on a lesson you have completed, on one that has already broken an armor, and while you are holding armor — but that last one spends an armor, which is exactly what the confirmation is there to warn you about. So it now stays quiet on the first two only: a lesson you have already completed, or one that has already cost you an armor. Everything else still asks, including a lesson you have merely attempted before, and any lesson whose state Catalyst cannot determine. A reset is not itself a reason to suppress the dialog: a reset lesson can still be at risk when neither persistent protection applies, while a prior completion or armor use still keeps it quiet because those protections survive the reset.
+
+### Notes
+
+* No new permissions, settings, storage keys, dependencies, or backup-format changes. Lesson risk state comes from the same request Boot.dev already makes when you open a lesson, and is kept in memory for that tab only — nothing is stored, and Catalyst asks for it itself only while the confirmation is switched on and only for a lesson it has not already seen.
+
 ## v0.14.0 - Boss tracker rebuilt for the new event format
 
 Boot.dev replaced the community boss fight with individual and guild progress in August 2026. The tracker was built entirely around the community goal, so most of what it showed had stopped meaning anything — v0.13.1 hid those readouts rather than keep displaying them. This release rebuilds the panel around the event as it actually works now, and makes the aura alerts useful for an event whose bonus sits near 32% most of the time.
