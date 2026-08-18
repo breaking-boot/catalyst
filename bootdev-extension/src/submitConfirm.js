@@ -18,6 +18,7 @@
 // v0.11.0_submit_confirmation_and_cli_shortcuts/implementation_plan.md
 
 const SUBMIT_CONFIRM_FEATURE = "submitConfirm";
+const USER_LESSON_URL = "https://api.boot.dev/v1/users/lessons/";
 const SUBMIT_CONFIRM_DIALOG_ID = "be-submit-confirm";
 const SUBMIT_CONFIRM_TITLE_ID = "be-submit-confirm-title";
 const SUBMIT_CONFIRM_BODY_ID = "be-submit-confirm-body";
@@ -25,6 +26,17 @@ const SUBMIT_CONFIRM_BODY_ID = "be-submit-confirm-body";
 const SUBMIT_CONSOLE_SCOPE_ID = "console-resizer";
 
 let submitConfirmClickHandler = null;
+
+// Which lessons are risk-free to submit on, in memory for this tab only —
+// never storage. Absent means unknown, which shows the dialog.
+//
+// No expiry, deliberately. A lesson becomes risk-free and never becomes risky
+// again: successCount only ever rises, and armorUsedAt is a timestamp that is
+// kept even across a reset (measured 2026-08-18). So a stale entry cannot fail
+// in the dangerous direction.
+const lessonRiskFreeByUuid = new Map();
+// At most one request per lesson per tab.
+const lessonStateRequested = new Set();
 
 // ---------------------------------------------------------------------------
 // Pure helpers (exercised by scripts/check_lesson_features.mjs)
@@ -35,6 +47,63 @@ let submitConfirmClickHandler = null;
 // untrusted. Both are deliberately out of scope.
 function isPointerActivation(event) {
   return Boolean(event) && event.isTrusted === true && Number(event.detail) > 0;
+}
+
+// Can a failed submission on this lesson still cost anything?
+//
+// Boot.dev states the rule itself (in-app panel, transcribed 2026-08-18 to
+// reference_data/catalyst_versions/v0.14.1_lesson_and_catalog_workflow/
+// bootdev_sharpshooter_rules_2026-08-18.md):
+//
+//   "Your streak is protected if any of the following is true:
+//      - The lesson has been completed
+//      - Armor has already been used on the lesson
+//      - You have armor"
+//
+// Only the first two are FREE. The third protects the spree by consuming an
+// armor, so a submission made under it still costs exactly what this dialog
+// warns about. That is why holding armor is not a reason to stay quiet — and
+// why the user's armor count, which this response does not carry, is not needed.
+//
+//   successCount > 0   the lesson has been completed at least once. Counts
+//                      historical successes and is NOT cleared by a reset, so it
+//                      also covers "completed, then reset" (verified: completed,
+//                      reset, then failed cost nothing).
+//   armorUsedAt set    an armor has already broken here. Also NOT cleared by a
+//                      reset, and Boot.dev never breaks a second one on the same
+//                      lesson (verified: reset an armor-spent lesson, fail it,
+//                      nothing broke).
+//
+// Everything else shows the dialog, including a lesson that has merely been
+// submitted on before. That last point is measured, not assumed: failing a
+// lesson twice with no armor held reset the spree BOTH times (2026-08-18), so a
+// previous submission protects nothing. A reset is likewise not a protection:
+// a reset lesson carrying NEITHER of the two conditions above broke an armor
+// when failed 8 seconds later. Note the narrow claim — a reset does not make
+// every lesson risky again, it simply grants nothing, and both conditions above
+// survive a reset, so a reset lesson still carrying one stays quiet.
+//
+// Both reads are strict: an absent or unparseable field means unknown, and
+// unknown shows the dialog. That is the inverse of Catalyst's usual fail-open
+// rule.
+//
+// Deliberately NOT read:
+//   previousSubmissionCode — not protective (above), and cleared by a reset.
+//   hasCodeHistory — survives resets, so it is true in exactly the post-reset
+//     state where an armor does break. Reading it would suppress the dialog
+//     where the loss happens.
+//   latestResetAt — a reset is neither a protection nor, on its own, evidence
+//     of risk, so it is not a safety signal in either direction.
+//   hintViewedAt / solutionViewedAt — a Seer stone does not protect a
+//     submission (maintainer-verified 2026-08-18).
+function lessonSubmitIsRiskFree(json) {
+  const data = json?.data ?? json;
+
+  const successCount = Number(pickField(data, "SuccessCount", "successCount"));
+  if (Number.isFinite(successCount) && successCount > 0) return true;
+
+  const armorUsedAt = pickField(data, "ArmorUsedAt", "armorUsedAt");
+  return typeof armorUsedAt === "string" && armorUsedAt.trim() !== "";
 }
 
 // Run and Solution share every class with Submit; the button's own text is the
@@ -89,13 +158,51 @@ function findSubmitButtonInPage() {
 }
 
 // ---------------------------------------------------------------------------
+// Lesson completion cache
+// ---------------------------------------------------------------------------
+
+// Router entry (content.js) for /v1/users/lessons/{uuid}. Boot.dev fetches it
+// on EVERY lesson navigation (17 of 17, 15 of 15 and 14 of 14 across three
+// HARs), so in normal browsing this costs no request at all.
+function recordLessonRiskState(uuid, json) {
+  if (enhancerStopped || !isFeatureEnabled(SUBMIT_CONFIRM_FEATURE)) return;
+  const key = String(uuid || "").toLowerCase();
+  if (!key) return;
+  lessonRiskFreeByUuid.set(key, lessonSubmitIsRiskFree(json));
+}
+
+// The fallback for the case Boot.dev's own traffic does not cover: a cold load
+// is server-rendered and may make no API call at all.
+//
+// It must never run from the click handler — the decision is made synchronously
+// against what is already cached, so an answer arriving later cannot inform a
+// click that has already been cancelled. Called from the ensure pass instead,
+// which runs on route change and when the setting is switched on.
+//
+// This endpoint correctly 401s without a bearer token, so unlike
+// /v1/course_progress_by_lesson there is no un-personalised body to mistake for
+// a real answer; it is in AUTH_REQUIRED_PATTERNS so the request waits for a
+// token rather than being spent on a 401.
+function requestLessonStateIfUseful() {
+  if (enhancerStopped || !isFeatureEnabled(SUBMIT_CONFIRM_FEATURE)) return false;
+  const uuid = lessonUuidFromPath();
+  if (!uuid || lessonRiskFreeByUuid.has(uuid) || lessonStateRequested.has(uuid)) return false;
+  lessonStateRequested.add(uuid);
+  return requestApiJson(`${USER_LESSON_URL}${uuid}`);
+}
+
+// ---------------------------------------------------------------------------
 // The guard
 // ---------------------------------------------------------------------------
 
 function handleSubmitConfirmClick(event) {
   if (enhancerStopped || !isFeatureEnabled(SUBMIT_CONFIRM_FEATURE)) return;
   if (!isPointerActivation(event)) return;
-  if (!lessonUuidFromPath()) return;
+  const uuid = lessonUuidFromPath();
+  if (!uuid) return;
+  // Nothing at risk here, so don't interpose. Unknown lessons — including every
+  // lesson before its state has been seen — fall through to the dialog.
+  if (lessonRiskFreeByUuid.get(uuid) === true) return;
 
   const button = findSubmitButtonFromEvent(event);
   if (!button) return; // anything unrecognized submits natively — fail open
@@ -210,10 +317,13 @@ function runNativeSubmit() {
   button.click();
 }
 
-// Idempotent per-render check: drop a dialog left open when the route leaves the
-// lesson or the feature is switched off.
+// Idempotent per-render check: fetch the completion state this route needs, and
+// drop a dialog left open when the route leaves the lesson or the feature is
+// switched off. Reached on route change and from applyFeatureSettings, so
+// switching the setting on asks for the current lesson straight away.
 function ensureSubmitConfirmUiState() {
   if (enhancerStopped) return;
+  requestLessonStateIfUseful();
   if (!document.getElementById(SUBMIT_CONFIRM_DIALOG_ID)) return;
   if (!isFeatureEnabled(SUBMIT_CONFIRM_FEATURE) || !lessonUuidFromPath()) {
     closeSubmitConfirmDialog();
@@ -234,6 +344,8 @@ function bindSubmitConfirm() {
 
 // Called from stopEnhancer so the listener doesn't outlive an invalidated context.
 function unbindSubmitConfirm() {
+  lessonRiskFreeByUuid.clear();
+  lessonStateRequested.clear();
   if (!submitConfirmClickHandler) return;
   document.removeEventListener("click", submitConfirmClickHandler, true);
   submitConfirmClickHandler = null;
@@ -242,5 +354,9 @@ function unbindSubmitConfirm() {
 // Test hook: scripts/check_lesson_features.mjs predefines this global before
 // evaluating the file. Never defined on the real page.
 if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
-  window.__BOOTDEV_ENHANCER_TEST__.submitConfirm = { isPointerActivation, isSubmitButtonLabel };
+  window.__BOOTDEV_ENHANCER_TEST__.submitConfirm = {
+    isPointerActivation,
+    isSubmitButtonLabel,
+    lessonSubmitIsRiskFree,
+  };
 }

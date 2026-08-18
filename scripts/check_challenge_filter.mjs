@@ -79,6 +79,38 @@ const {
   requiresAuth,
 } = hooks;
 
+// --- evaluate trainingGrounds.js in its own sandbox -------------------------
+// A separate context because both files declare top-level constants of the same
+// name; injected.js keeps its inside an IIFE, trainingGrounds.js does not.
+// Nothing at that file's top level runs beyond declarations, so a stubbed
+// window is enough to reach its pure helpers.
+
+const TRAINING_GROUNDS = new URL("../bootdev-extension/src/trainingGrounds.js", import.meta.url);
+const tgHook = {};
+const tgSandbox = {
+  window: { __BOOTDEV_ENHANCER_TEST__: tgHook },
+  document: { addEventListener() {}, removeEventListener() {} },
+  location: { pathname: "/training-grounds/search", search: "" },
+  console,
+};
+vm.createContext(tgSandbox);
+// normalizeText lives in utils.js; loading that file whole would drag in the
+// chrome.* globals, so provide just the helper (same approach as
+// scripts/check_lesson_features.mjs).
+vm.runInContext(
+  'function normalizeText(s) { return String(s || "").replace(/\\s+/g, " ").trim(); }',
+  tgSandbox
+);
+vm.runInContext(readFileSync(TRAINING_GROUNDS, "utf8"), tgSandbox, {
+  filename: fileURLToPath(TRAINING_GROUNDS),
+});
+const tg = tgHook.trainingGrounds;
+if (!tg) {
+  console.error("FAIL: trainingGrounds.js did not expose its test hook");
+  process.exit(1);
+}
+const { matchChallengeSearchCommitKey, isChallengeSearchLabel, tierIdFromPillStates } = tg;
+
 // --- tiny assert ------------------------------------------------------------
 
 let failures = 0;
@@ -242,6 +274,13 @@ check("global karma board does not", requiresAuth("/v1/leaderboard_karma/alltime
 check("public profile does not", requiresAuth("/v1/users/public/a-fleming"), false);
 check("challenge search does not", requiresAuth("/v1/challenges/search"), false);
 check("league pattern does not over-match a deeper path", requiresAuth("/v1/league_leaderboard_xp/day/extra"), false);
+// Backs the Submit confirmation's risk gate and 401s without the header.
+check("user lesson state requires auth", requiresAuth("/v1/users/lessons/1953ea16-0000-0000-0000-000000000000"), true);
+check("user lesson pattern does not over-match a deeper path", requiresAuth("/v1/users/lessons/a/b"), false);
+// Catalyst no longer requests this one, so it does not need queueing — but note
+// it answers 200 un-personalised without a token, so anything that starts
+// requesting it must add it back.
+check("course progress by lesson is not requested, so not queued", requiresAuth("/v1/course_progress_by_lesson/1953ea16-0000-0000-0000-000000000000"), false);
 
 // --- parseLevelList (data-be-dl / dl= values): validation + canonical order --
 
@@ -361,6 +400,79 @@ for (const [dir, name, total, expected] of FIXTURES) {
 }
 if (!fixturesRun) {
   console.log("note: reference_data fixtures not present; skipped distribution checks");
+}
+
+// --- the Enter commit trigger (v0.14.1) -------------------------------------
+// Boot.dev removed the Search button and pressing Enter emits no `submit`
+// event (probe 06, 2026-08-14), so the form-submit listener never fired and no
+// level selection was ever committed. Enter in the search box is the trigger
+// now; these pin what counts as that keystroke.
+
+const key = (over) => ({ key: "Enter", ctrlKey: false, metaKey: false, altKey: false, ...over });
+
+check("plain Enter commits", matchChallengeSearchCommitKey(key()), true);
+check("Shift+Enter commits (a one-line box submits either way)", matchChallengeSearchCommitKey(key({ shiftKey: true })), true);
+check("Ctrl+Enter does not", matchChallengeSearchCommitKey(key({ ctrlKey: true })), false);
+check("Meta+Enter does not", matchChallengeSearchCommitKey(key({ metaKey: true })), false);
+check("Alt+Enter does not", matchChallengeSearchCommitKey(key({ altKey: true })), false);
+check("an IME candidate confirmation does not", matchChallengeSearchCommitKey(key({ isComposing: true })), false);
+check("another key does not", matchChallengeSearchCommitKey(key({ key: "a" })), false);
+check("Escape does not", matchChallengeSearchCommitKey(key({ key: "Escape" })), false);
+check("no event does not", matchChallengeSearchCommitKey(null), false);
+
+// The search box is identified by its own labelling, shared by the keydown and
+// submit paths. Boot.dev words the two boxes differently (2026-07-30).
+check("search page box", isChallengeSearchLabel("Search Challenges", ""), true);
+check("landing page box", isChallengeSearchLabel("", "Search existing challenges"), true);
+check("either half alone is not enough", isChallengeSearchLabel("Search", ""), false);
+check("an unrelated box", isChallengeSearchLabel("Search spellbooks", ""), false);
+check("no labelling at all", isChallengeSearchLabel(null, null), false);
+
+// --- the native tier, read from the pills (v0.14.1) -------------------------
+// v0.13.0 recorded that the native pills carried no aria-pressed, so the tier
+// had to be read from the section header icon's filename. Boot.dev has since
+// added it (capture 2026-08-15), and it is now read first.
+
+check("the pressed pill names the tier", tierIdFromPillStates([
+  { label: "Easy", pressed: false },
+  { label: "Medium", pressed: false },
+  { label: "Hard", pressed: true },
+]), "hard");
+check("nothing pressed -> no tier", tierIdFromPillStates([
+  { label: "Easy", pressed: false },
+  { label: "Hard", pressed: false },
+]), null);
+check("a pressed pill Catalyst does not know -> no tier", tierIdFromPillStates([{ label: "Nightmare", pressed: true }]), null);
+check("labels are matched loosely on whitespace/case", tierIdFromPillStates([{ label: " medium ", pressed: true }]), "medium");
+check("a pressed pill with no label -> no tier", tierIdFromPillStates([{ label: "", pressed: true }]), null);
+check("no pills -> no tier", tierIdFromPillStates([]), null);
+check("not a list -> no tier", tierIdFromPillStates(null), null);
+
+// The same read against the real popover capture, which also pins the scoping
+// rule: the native section is found by an EXACT "Difficulty" header match, so
+// Catalyst's own "Difficulty Level" section — whose pills carry aria-pressed
+// too — cannot be mistaken for it. Renaming that section would break this.
+const POPOVER_CAPTURE = new URL(
+  "../reference_data/catalyst_versions/v0.14.1_lesson_and_catalog_workflow/ui/html/tg_popover_2026-08-15.html",
+  import.meta.url
+);
+if (existsSync(POPOVER_CAPTURE)) {
+  const html = readFileSync(POPOVER_CAPTURE, "utf8");
+  const sections = html.split("<section").slice(1);
+  const native = sections.filter((chunk) => chunk.includes("<span>Difficulty</span>"));
+  check("exactly one section is the native Difficulty section", native.length, 1);
+
+  const pills = [];
+  for (const [, attrs, inner] of native[0].matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/gi)) {
+    pills.push({ label: inner.replace(/<[^>]*>/g, ""), pressed: /aria-pressed="true"/.test(attrs) });
+  }
+  check("the capture's native pills are the three tiers", pills.length, 3);
+  check("the capture reports Hard", tierIdFromPillStates(pills), "hard");
+
+  const ours = sections.filter((chunk) => chunk.includes('id="be-tg-level"'));
+  check("Catalyst's own section is in the capture", ours.length, 1);
+  check("and is not matched as the native section", ours[0].includes("<span>Difficulty</span>"), false);
+  fixturesRun += 1;
 }
 
 // -----------------------------------------------------------------------------

@@ -24,7 +24,13 @@
   // need a pattern rather than an exact path. Omitting them used to mean a
   // cold, server-rendered /leaderboard (where Boot.dev fetches nothing, so
   // nothing is harvested) silently lost both League comparison boards.
-  const AUTH_REQUIRED_PATTERNS = [/^\/v1\/league_leaderboard_xp\/[^/]+$/];
+  // /v1/users/lessons/{uuid} 401s without the header and backs the Submit
+  // confirmation's risk gate, so a request made before one is harvested is
+  // queued rather than spent on a 401.
+  const AUTH_REQUIRED_PATTERNS = [
+    /^\/v1\/league_leaderboard_xp\/[^/]+$/,
+    /^\/v1\/users\/lessons\/[^/]+$/,
+  ];
   // Passively-observed responses are only broadcast for the handful of paths the
   // content-script router actually consumes, so unrelated (and possibly
   // sensitive) api.boot.dev payloads are never re-exposed on the window bus.

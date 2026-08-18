@@ -65,6 +65,7 @@ async function routeResponse({ url, status, json, catalyst }) {
   try {
     const path = new URL(url, window.location.origin).pathname;
     const publicUserMatch = /^\/v1\/users\/public\/([^/]+)(\/stats)?$/.exec(path);
+    const userLessonMatch = /^\/v1\/users\/lessons\/([^/]+)$/.exec(path);
     const heatmapMatch = /^\/v1\/users\/public\/([^/]+)\/activity_heatmap$/.exec(path);
 
     if (status === 0 && json?.error === "auth_headers_unavailable") {
@@ -105,8 +106,12 @@ async function routeResponse({ url, status, json, catalyst }) {
       await handleBossProgress(json);
     } else if (path === "/v1/dashboard_content") {
       await handleDashboardContent(json);
-    } else if (/\/v1\/users\/lessons\/[^/]+$/.test(path) ||
-        /\/v1\/course_progress_by_lesson\/[^/]+$/.test(path)) {
+    } else if (userLessonMatch) {
+      // Whether a failed submission here can still cost armor — the Submit
+      // confirmation's whole question, and this is the only source for it.
+      recordLessonRiskState(decodeURIComponent(userLessonMatch[1]), json);
+      refreshNextLessonFromDashboardSoon();
+    } else if (/\/v1\/course_progress_by_lesson\/[^/]+$/.test(path)) {
       refreshNextLessonFromDashboardSoon();
     }
   } catch (e) {

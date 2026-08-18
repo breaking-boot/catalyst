@@ -162,18 +162,50 @@ function findNativeDifficultySection(popover) {
   return null;
 }
 
-// The PENDING native tier — the one clicked but not yet Searched. Selection is
-// not on the pills themselves: the 2026-08-01 popover diff showed it lives only
-// in Tailwind color utilities (border-gray-200 vs border-gray-600), which would
-// be a color-value dependency. What does change is the section header icon,
-// which swaps its generic <svg> for the tier's own artwork. Match the authored
+// Which tier a set of pills reports, by the pressed one's own label.
+function tierIdFromPillStates(pills) {
+  for (const pill of Array.isArray(pills) ? pills : []) {
+    if (!pill || pill.pressed !== true) continue;
+    const label = normalizeText(pill.label).toLowerCase();
+    const tier = CHALLENGE_TIERS.find((t) => t.label.toLowerCase() === label);
+    if (tier) return tier.id;
+  }
+  return null;
+}
+
+// The PENDING native tier, from the pills themselves. The v0.13.0 note recorded
+// that selection lived ONLY in Tailwind color utilities (border-gray-200 vs
+// border-gray-600) — Boot.dev has since added `aria-pressed` to them (capture
+// 2026-08-15), which is a real accessibility attribute and inside the documented
+// anchor priority list. An anchor rejected once can become available later.
+//
+// Safe to scope this way because findNativeDifficultySection matches the header
+// span's text EXACTLY against "difficulty": Catalyst's own "Difficulty Level"
+// section, whose pills also carry aria-pressed, can never be reached from here.
+function nativeTierFromPills(section) {
+  const pills = [];
+  for (const btn of section.querySelectorAll("button")) {
+    pills.push({ label: btn.textContent, pressed: btn.getAttribute("aria-pressed") === "true" });
+  }
+  return tierIdFromPillStates(pills);
+}
+
+// The fallback, and the anchor this used to rely on alone: the section header
+// icon swaps its generic <svg> for the tier's own artwork. Match the authored
 // filename stem only — the build hash in the middle is never matched.
-function nativeTierFromPopover(section) {
+function nativeTierFromIcon(section) {
   for (const img of section.querySelectorAll("img")) {
     const match = /difficulty_(easy|medium|hard)_icon/.exec(img.getAttribute("src") || "");
     if (match) return match[1];
   }
   return null;
+}
+
+// Pills first, icon second. Both report the pending selection, so keeping the
+// icon costs nothing and means a dropped aria-pressed cannot take the feature
+// with it.
+function nativeTierFromPopover(section) {
+  return nativeTierFromPills(section) ?? nativeTierFromIcon(section);
 }
 
 // While the popover is open the section is authoritative INCLUDING its negative
@@ -364,16 +396,28 @@ function resultsMatchCommitted() {
   return challengeLevelsEqual(effective, applied);
 }
 
-// Is this the challenge-catalog search form? The /training-grounds/search page
-// labels its box `aria-label="Search Challenges"`, but the search field
-// Boot.dev added to the landing page (2026-07-30) words it differently
-// ("Search existing challenges"), so a single exact string missed it and
-// difficulty picks made on the landing page were dropped. Match the
+// Does this labelling belong to a challenge-search box? The
+// /training-grounds/search page labels its box `aria-label="Search Challenges"`,
+// but the search field Boot.dev added to the landing page (2026-07-30) words it
+// differently ("Search existing challenges"), so a single exact string missed it
+// and difficulty picks made on the landing page were dropped. Match the
 // search+challenge word pair in the label or placeholder instead.
+function isChallengeSearchLabel(label, placeholder) {
+  const text = `${label || ""} ${placeholder || ""}`;
+  return /search/i.test(text) && /challenge/i.test(text);
+}
+
+// The keydown listener matches one input directly, the submit listener matches
+// a form containing one, so the rule lives in a single place.
+function isChallengeSearchInput(input) {
+  if (!input || typeof input.getAttribute !== "function") return false;
+  return isChallengeSearchLabel(input.getAttribute("aria-label"), input.getAttribute("placeholder"));
+}
+
+// Is this the challenge-catalog search form?
 function isChallengeSearchForm(form) {
   for (const input of form.querySelectorAll("input")) {
-    const text = `${input.getAttribute("aria-label") || ""} ${input.placeholder || ""}`;
-    if (/search/i.test(text) && /challenge/i.test(text)) return true;
+    if (isChallengeSearchInput(input)) return true;
   }
   return false;
 }
@@ -387,6 +431,38 @@ function handleTrainingGroundsSubmit(event) {
   const form = event.target;
   if (!(form instanceof Element)) return;
   if (!isChallengeSearchForm(form)) return;
+  commitChallengeSelection();
+}
+
+// Enter in the search box is the only commit trigger Boot.dev still offers.
+// It removed the Search button, and pressing Enter emits NO `submit` event
+// (probe 06, 2026-08-14: the Enter keydown, then history.replaceState, then the
+// fetch, with nothing in between), so the submit listener below stopped firing
+// and a level selection was never committed — the pills toggled and filtered
+// nothing. Matched on the keystroke rather than on the form.
+function matchChallengeSearchCommitKey(event) {
+  if (!event || event.key !== "Enter") return false;
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
+  // Enter also confirms an IME candidate. That keystroke finishes a word; it
+  // does not run a search.
+  return event.isComposing !== true;
+}
+
+// Capture-phase keydown listener, bound to the document so a search box Vue
+// re-renders needs no rebinding and no observer. It never cancels the key:
+// Boot.dev's own search must run exactly as it would have, and all Catalyst
+// needs is for `data-be-dl` to be written first — which a synchronous attribute
+// write on the capture phase manages roughly half a second before the fetch.
+//
+// Kept ALONGSIDE the submit listener rather than replacing it, so an Apply
+// button (or a restored form submit) starts working on its own. Both firing is
+// harmless: commitChallengeSelection re-derives the same committed state from
+// the same pending state and re-arms its verify timer.
+function handleTrainingGroundsKeydown(event) {
+  if (enhancerStopped || !isTrainingGroundsPage()) return;
+  if (!isFeatureEnabled(CHALLENGE_FILTER_FEATURE)) return;
+  if (!matchChallengeSearchCommitKey(event)) return;
+  if (!isChallengeSearchInput(event.target)) return;
   commitChallengeSelection();
 }
 
@@ -844,10 +920,10 @@ function handleTrainingGroundsClick(event) {
   setTrackedTimeout(ensureTrainingGroundsUiState, 400);
 }
 
-// Tripwire for the one anchor outside the documented priority list: the tier
-// is read from the section header icon's filename, so if Boot.dev stops
-// swapping that icon the level pills quietly stop following the native
-// selection while everything still looks fine. Checking on every tick would
+// Tripwire for the tier anchors. The tier is read from the pills' aria-pressed
+// state, falling back to the section header icon's filename, so if Boot.dev
+// drops both the level pills quietly stop following the native selection while
+// everything still looks fine. Checking on every tick would
 // false-positive constantly (no icon is the correct answer most of the time),
 // so this only fires on the unambiguous case: the user just clicked a tier
 // that was NOT already selected, and shortly after the icon still doesn't
@@ -863,9 +939,9 @@ function watchNativeTierClick(btn, popover) {
     const now = current ? findNativeDifficultySection(current) : null;
     if (!now || nativeTierFromPopover(now) === tier.id) return;
     warnOnce(
-      "tg:tier-icon",
-      `selecting the native ${tier.label} difficulty did not update the filter popover's ` +
-      "difficulty icon — Boot.dev may have changed it, so Catalyst's level pills will " +
+      "tg:tier-anchor",
+      `selecting the native ${tier.label} difficulty left neither the pill's aria-pressed ` +
+      "state nor the section's difficulty icon reporting it, so Catalyst's level pills will " +
       "only follow the tier after a search. See nativeTierFromPopover() in trainingGrounds.js."
     );
   }, 400);
@@ -874,11 +950,13 @@ function watchNativeTierClick(btn, popover) {
 function bindTrainingGroundsEvents() {
   document.addEventListener("click", handleTrainingGroundsClick, true);
   document.addEventListener("submit", handleTrainingGroundsSubmit, true);
+  document.addEventListener("keydown", handleTrainingGroundsKeydown, true);
 }
 
 function unbindTrainingGroundsEvents() {
   document.removeEventListener("click", handleTrainingGroundsClick, true);
   document.removeEventListener("submit", handleTrainingGroundsSubmit, true);
+  document.removeEventListener("keydown", handleTrainingGroundsKeydown, true);
 }
 
 // Live-apply of the feature toggle (from applyFeatureSettings).
@@ -905,4 +983,14 @@ function applyChallengeFilterSetting(before, after) {
     onTrainingGroundsRoute = false;
     ensureTrainingGroundsUiState();
   }
+}
+
+// Test hook: scripts/check_challenge_filter.mjs predefines this global before
+// evaluating the file. Never defined on the real page.
+if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
+  window.__BOOTDEV_ENHANCER_TEST__.trainingGrounds = {
+    matchChallengeSearchCommitKey,
+    isChallengeSearchLabel,
+    tierIdFromPillStates,
+  };
 }
