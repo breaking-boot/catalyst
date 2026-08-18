@@ -94,6 +94,13 @@ const tgSandbox = {
   console,
 };
 vm.createContext(tgSandbox);
+// normalizeText lives in utils.js; loading that file whole would drag in the
+// chrome.* globals, so provide just the helper (same approach as
+// scripts/check_lesson_features.mjs).
+vm.runInContext(
+  'function normalizeText(s) { return String(s || "").replace(/\\s+/g, " ").trim(); }',
+  tgSandbox
+);
 vm.runInContext(readFileSync(TRAINING_GROUNDS, "utf8"), tgSandbox, {
   filename: fileURLToPath(TRAINING_GROUNDS),
 });
@@ -102,7 +109,7 @@ if (!tg) {
   console.error("FAIL: trainingGrounds.js did not expose its test hook");
   process.exit(1);
 }
-const { matchChallengeSearchCommitKey, isChallengeSearchLabel } = tg;
+const { matchChallengeSearchCommitKey, isChallengeSearchLabel, tierIdFromPillStates } = tg;
 
 // --- tiny assert ------------------------------------------------------------
 
@@ -413,6 +420,53 @@ check("landing page box", isChallengeSearchLabel("", "Search existing challenges
 check("either half alone is not enough", isChallengeSearchLabel("Search", ""), false);
 check("an unrelated box", isChallengeSearchLabel("Search spellbooks", ""), false);
 check("no labelling at all", isChallengeSearchLabel(null, null), false);
+
+// --- the native tier, read from the pills (v0.14.1) -------------------------
+// v0.13.0 recorded that the native pills carried no aria-pressed, so the tier
+// had to be read from the section header icon's filename. Boot.dev has since
+// added it (capture 2026-08-15), and it is now read first.
+
+check("the pressed pill names the tier", tierIdFromPillStates([
+  { label: "Easy", pressed: false },
+  { label: "Medium", pressed: false },
+  { label: "Hard", pressed: true },
+]), "hard");
+check("nothing pressed -> no tier", tierIdFromPillStates([
+  { label: "Easy", pressed: false },
+  { label: "Hard", pressed: false },
+]), null);
+check("a pressed pill Catalyst does not know -> no tier", tierIdFromPillStates([{ label: "Nightmare", pressed: true }]), null);
+check("labels are matched loosely on whitespace/case", tierIdFromPillStates([{ label: " medium ", pressed: true }]), "medium");
+check("a pressed pill with no label -> no tier", tierIdFromPillStates([{ label: "", pressed: true }]), null);
+check("no pills -> no tier", tierIdFromPillStates([]), null);
+check("not a list -> no tier", tierIdFromPillStates(null), null);
+
+// The same read against the real popover capture, which also pins the scoping
+// rule: the native section is found by an EXACT "Difficulty" header match, so
+// Catalyst's own "Difficulty Level" section — whose pills carry aria-pressed
+// too — cannot be mistaken for it. Renaming that section would break this.
+const POPOVER_CAPTURE = new URL(
+  "../reference_data/catalyst_versions/v0.14.1_lesson_and_catalog_workflow/ui/html/tg_popover_2026-08-15.html",
+  import.meta.url
+);
+if (existsSync(POPOVER_CAPTURE)) {
+  const html = readFileSync(POPOVER_CAPTURE, "utf8");
+  const sections = html.split("<section").slice(1);
+  const native = sections.filter((chunk) => chunk.includes("<span>Difficulty</span>"));
+  check("exactly one section is the native Difficulty section", native.length, 1);
+
+  const pills = [];
+  for (const [, attrs, inner] of native[0].matchAll(/<button\b([^>]*)>([\s\S]*?)<\/button>/gi)) {
+    pills.push({ label: inner.replace(/<[^>]*>/g, ""), pressed: /aria-pressed="true"/.test(attrs) });
+  }
+  check("the capture's native pills are the three tiers", pills.length, 3);
+  check("the capture reports Hard", tierIdFromPillStates(pills), "hard");
+
+  const ours = sections.filter((chunk) => chunk.includes('id="be-tg-level"'));
+  check("Catalyst's own section is in the capture", ours.length, 1);
+  check("and is not matched as the native section", ours[0].includes("<span>Difficulty</span>"), false);
+  fixturesRun += 1;
+}
 
 // -----------------------------------------------------------------------------
 

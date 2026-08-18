@@ -162,18 +162,50 @@ function findNativeDifficultySection(popover) {
   return null;
 }
 
-// The PENDING native tier — the one clicked but not yet Searched. Selection is
-// not on the pills themselves: the 2026-08-01 popover diff showed it lives only
-// in Tailwind color utilities (border-gray-200 vs border-gray-600), which would
-// be a color-value dependency. What does change is the section header icon,
-// which swaps its generic <svg> for the tier's own artwork. Match the authored
+// Which tier a set of pills reports, by the pressed one's own label.
+function tierIdFromPillStates(pills) {
+  for (const pill of Array.isArray(pills) ? pills : []) {
+    if (!pill || pill.pressed !== true) continue;
+    const label = normalizeText(pill.label).toLowerCase();
+    const tier = CHALLENGE_TIERS.find((t) => t.label.toLowerCase() === label);
+    if (tier) return tier.id;
+  }
+  return null;
+}
+
+// The PENDING native tier, from the pills themselves. The v0.13.0 note recorded
+// that selection lived ONLY in Tailwind color utilities (border-gray-200 vs
+// border-gray-600) — Boot.dev has since added `aria-pressed` to them (capture
+// 2026-08-15), which is a real accessibility attribute and inside the documented
+// anchor priority list. An anchor rejected once can become available later.
+//
+// Safe to scope this way because findNativeDifficultySection matches the header
+// span's text EXACTLY against "difficulty": Catalyst's own "Difficulty Level"
+// section, whose pills also carry aria-pressed, can never be reached from here.
+function nativeTierFromPills(section) {
+  const pills = [];
+  for (const btn of section.querySelectorAll("button")) {
+    pills.push({ label: btn.textContent, pressed: btn.getAttribute("aria-pressed") === "true" });
+  }
+  return tierIdFromPillStates(pills);
+}
+
+// The fallback, and the anchor this used to rely on alone: the section header
+// icon swaps its generic <svg> for the tier's own artwork. Match the authored
 // filename stem only — the build hash in the middle is never matched.
-function nativeTierFromPopover(section) {
+function nativeTierFromIcon(section) {
   for (const img of section.querySelectorAll("img")) {
     const match = /difficulty_(easy|medium|hard)_icon/.exec(img.getAttribute("src") || "");
     if (match) return match[1];
   }
   return null;
+}
+
+// Pills first, icon second. Both report the pending selection, so keeping the
+// icon costs nothing and means a dropped aria-pressed cannot take the feature
+// with it.
+function nativeTierFromPopover(section) {
+  return nativeTierFromPills(section) ?? nativeTierFromIcon(section);
 }
 
 // While the popover is open the section is authoritative INCLUDING its negative
@@ -888,10 +920,10 @@ function handleTrainingGroundsClick(event) {
   setTrackedTimeout(ensureTrainingGroundsUiState, 400);
 }
 
-// Tripwire for the one anchor outside the documented priority list: the tier
-// is read from the section header icon's filename, so if Boot.dev stops
-// swapping that icon the level pills quietly stop following the native
-// selection while everything still looks fine. Checking on every tick would
+// Tripwire for the tier anchors. The tier is read from the pills' aria-pressed
+// state, falling back to the section header icon's filename, so if Boot.dev
+// drops both the level pills quietly stop following the native selection while
+// everything still looks fine. Checking on every tick would
 // false-positive constantly (no icon is the correct answer most of the time),
 // so this only fires on the unambiguous case: the user just clicked a tier
 // that was NOT already selected, and shortly after the icon still doesn't
@@ -907,9 +939,9 @@ function watchNativeTierClick(btn, popover) {
     const now = current ? findNativeDifficultySection(current) : null;
     if (!now || nativeTierFromPopover(now) === tier.id) return;
     warnOnce(
-      "tg:tier-icon",
-      `selecting the native ${tier.label} difficulty did not update the filter popover's ` +
-      "difficulty icon — Boot.dev may have changed it, so Catalyst's level pills will " +
+      "tg:tier-anchor",
+      `selecting the native ${tier.label} difficulty left neither the pill's aria-pressed ` +
+      "state nor the section's difficulty icon reporting it, so Catalyst's level pills will " +
       "only follow the tier after a search. See nativeTierFromPopover() in trainingGrounds.js."
     );
   }, 400);
@@ -959,5 +991,6 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
   window.__BOOTDEV_ENHANCER_TEST__.trainingGrounds = {
     matchChallengeSearchCommitKey,
     isChallengeSearchLabel,
+    tierIdFromPillStates,
   };
 }
