@@ -79,6 +79,31 @@ const {
   requiresAuth,
 } = hooks;
 
+// --- evaluate trainingGrounds.js in its own sandbox -------------------------
+// A separate context because both files declare top-level constants of the same
+// name; injected.js keeps its inside an IIFE, trainingGrounds.js does not.
+// Nothing at that file's top level runs beyond declarations, so a stubbed
+// window is enough to reach its pure helpers.
+
+const TRAINING_GROUNDS = new URL("../bootdev-extension/src/trainingGrounds.js", import.meta.url);
+const tgHook = {};
+const tgSandbox = {
+  window: { __BOOTDEV_ENHANCER_TEST__: tgHook },
+  document: { addEventListener() {}, removeEventListener() {} },
+  location: { pathname: "/training-grounds/search", search: "" },
+  console,
+};
+vm.createContext(tgSandbox);
+vm.runInContext(readFileSync(TRAINING_GROUNDS, "utf8"), tgSandbox, {
+  filename: fileURLToPath(TRAINING_GROUNDS),
+});
+const tg = tgHook.trainingGrounds;
+if (!tg) {
+  console.error("FAIL: trainingGrounds.js did not expose its test hook");
+  process.exit(1);
+}
+const { matchChallengeSearchCommitKey, isChallengeSearchLabel } = tg;
+
 // --- tiny assert ------------------------------------------------------------
 
 let failures = 0;
@@ -362,6 +387,32 @@ for (const [dir, name, total, expected] of FIXTURES) {
 if (!fixturesRun) {
   console.log("note: reference_data fixtures not present; skipped distribution checks");
 }
+
+// --- the Enter commit trigger (v0.14.1) -------------------------------------
+// Boot.dev removed the Search button and pressing Enter emits no `submit`
+// event (probe 06, 2026-08-14), so the form-submit listener never fired and no
+// level selection was ever committed. Enter in the search box is the trigger
+// now; these pin what counts as that keystroke.
+
+const key = (over) => ({ key: "Enter", ctrlKey: false, metaKey: false, altKey: false, ...over });
+
+check("plain Enter commits", matchChallengeSearchCommitKey(key()), true);
+check("Shift+Enter commits (a one-line box submits either way)", matchChallengeSearchCommitKey(key({ shiftKey: true })), true);
+check("Ctrl+Enter does not", matchChallengeSearchCommitKey(key({ ctrlKey: true })), false);
+check("Meta+Enter does not", matchChallengeSearchCommitKey(key({ metaKey: true })), false);
+check("Alt+Enter does not", matchChallengeSearchCommitKey(key({ altKey: true })), false);
+check("an IME candidate confirmation does not", matchChallengeSearchCommitKey(key({ isComposing: true })), false);
+check("another key does not", matchChallengeSearchCommitKey(key({ key: "a" })), false);
+check("Escape does not", matchChallengeSearchCommitKey(key({ key: "Escape" })), false);
+check("no event does not", matchChallengeSearchCommitKey(null), false);
+
+// The search box is identified by its own labelling, shared by the keydown and
+// submit paths. Boot.dev words the two boxes differently (2026-07-30).
+check("search page box", isChallengeSearchLabel("Search Challenges", ""), true);
+check("landing page box", isChallengeSearchLabel("", "Search existing challenges"), true);
+check("either half alone is not enough", isChallengeSearchLabel("Search", ""), false);
+check("an unrelated box", isChallengeSearchLabel("Search spellbooks", ""), false);
+check("no labelling at all", isChallengeSearchLabel(null, null), false);
 
 // -----------------------------------------------------------------------------
 
