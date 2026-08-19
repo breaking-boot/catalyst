@@ -251,7 +251,12 @@ async function applyImportedData() {
   // write-through would clobber the merged boss highs with our stale copy.
   await loadBossState({ force: true });
   await restoreBossPanel();
+  // The roster isn't in the backup, but an import can add tracked handles whose
+  // stored /stats carry an in-window rank — bootstrap those now rather than
+  // waiting for the next page load.
+  await loadAllTimeRoster(personalRecords);
   if (enhancerStopped) return;
+  renderAllTimeLeaderboard();
   schedulePersonalLeaderboardRender();
   if (isLeaderboardPage() && personalDataMissing()) requestPersonalLeaderboardData();
 }
