@@ -33,6 +33,7 @@
         "src/utils.js",
         "src/settings-schema.js",
         "src/settings.js",
+        "src/alltime-seed.js",
         "src/leaderboard.js",
         "src/profile.js",
         "src/boss.js",
