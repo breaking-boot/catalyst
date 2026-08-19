@@ -1268,6 +1268,11 @@ function persistDailyBoardLookup(boardKey, entries) {
 
 function handleDailyXpLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
+  // An unreadable response must not overwrite what is already known. Without
+  // this, persistDailyBoardLookup stores an empty map and markBoardSeen makes
+  // dailyBoardXpFor skip the persisted fallback, so one bad response costs the
+  // exact daily tier for the rest of the session. Matches handleKarmaLeaderboard.
+  if (!entries.length) return;
   reportUsableFields("/v1/leaderboard_xp/day", entries, "XPEarned", (e) => readField(e, "XPEarned"));
   cachedDailyEntries = entries;
   markBoardSeen("daily");
@@ -1343,6 +1348,7 @@ function harvestPersonalKarmaSnapshots(entries, { asOf = 0 } = {}) {
 
 function handleLeagueDailyLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
+  if (!entries.length) return; // see handleDailyXpLeaderboard
   reportUsableFields("/v1/league_leaderboard_xp/day", entries, "XPEarned", (e) => readField(e, "XPEarned"));
   cachedLeagueDailyEntries = entries;
   markBoardSeen("leagueDaily");
