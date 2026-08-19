@@ -530,14 +530,17 @@ function handleAllTimeLeaderboard(json) {
     if (!isValidHandle(handle)) continue;
     changed = applyRosterObservation(allTimeRoster, {
       handle,
+      // Keys are the roster's own observation shape; the values are API reads,
+      // so every one goes through readField. This path cannot run today (the
+      // alltime timeframe 400s) — which is exactly why it would rot unnoticed.
       Handle: getHandle(entry),
-      rank: entry.Position ?? entry.Rank,
+      rank: readField(entry, "Position") ?? entry.Rank,
       rankAt: now,
-      XP: entry.XP,
-      FirstName: entry.FirstName,
-      LastName: entry.LastName,
-      Role: entry.Role,
-      Level: entry.Level,
+      XP: readField(entry, "XP"),
+      FirstName: readField(entry, "FirstName"),
+      LastName: readField(entry, "LastName"),
+      Role: readField(entry, "Role"),
+      Level: readField(entry, "Level"),
       ProfileImageURL: getAvatarUrl(entry),
       profileAt: now,
     }) || changed;

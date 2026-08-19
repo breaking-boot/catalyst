@@ -143,6 +143,10 @@ const API_FIELD_ALIASES = Object.freeze({
   GithubCommits: "githubCommits",
   Date: "date",
   Count: "count",
+  // Added in v0.15.0, its first consumer. Note the interior capitals — the camel
+  // form is `leaderboardXPRankAlltime`, not `leaderboardXpRankAlltime`, so it is
+  // not derivable by lowercasing. Measured 2026-08-19.
+  LeaderboardXPRankAlltime: "leaderboardXPRankAlltime",
 });
 
 // Read one API field by its PascalCase name, in whichever casing the response

@@ -277,27 +277,30 @@ function bootstrapRosterFromPersonalRecords(roster, records) {
 // ---------------------------------------------------------------------------
 // Field reads
 // ---------------------------------------------------------------------------
-// PascalCase first, then a case-insensitive sweep. Boot.dev migrates casing per
-// DTO rather than globally, so this endpoint can flip on its own schedule — and
-// a rank that silently stopped resolving would freeze every row at its seed
-// value while the board still looked healthy (see reportAlltimeRankField).
+// Both readers unwrap `data` first, because /stats is wrapped and
+// /v1/leaderboard_stats was captured bare — and either could gain or lose the
+// wrapper without warning.
+//
+// The rank goes through the shared alias table (utils.js), which carries the
+// measured camel spelling `leaderboardXPRankAlltime`. A rank that silently
+// stopped resolving would freeze every row at its seed value while the board
+// still looked healthy, which is what reportAlltimeRankField watches for.
 function readAlltimeRank(json) {
   const data = json?.data ?? json;
   if (!isPlainObject(data)) return null;
-  const direct = rosterNum(data.LeaderboardXPRankAlltime);
-  if (direct != null) return direct;
-  for (const [key, value] of Object.entries(data)) {
-    if (key.toLowerCase() === "leaderboardxprankalltime") return rosterNum(value);
-  }
-  return null;
+  return rosterNum(readField(data, "LeaderboardXPRankAlltime"));
 }
 
-// /v1/leaderboard_stats answers a BARE object (no data wrapper), PascalCase.
+// /v1/leaderboard_stats is the ONE leaderboard-related endpoint that was not
+// re-read in the 2026-08-19 casing audit, so its current shape is genuinely
+// unverified — the "bare PascalCase object" note dates from 2026-08-14, before
+// every other endpoint in this family flipped. Hence the case-insensitive sweep
+// rather than an entry in API_FIELD_ALIASES: a guessed alias would be a claim,
+// while the sweep resolves whatever spelling actually arrives. Fold this into
+// the alias table once a capture settles it.
 function readRegisteredUsers(json) {
   const data = json?.data ?? json;
   if (!isPlainObject(data)) return null;
-  const direct = rosterNum(data.RegisteredUsersAlltime);
-  if (direct != null) return direct;
   for (const [key, value] of Object.entries(data)) {
     if (key.toLowerCase() === "registeredusersalltime") return rosterNum(value);
   }
@@ -607,7 +610,7 @@ function saveAllTimeRoster() {
 function noteAllTimeObservation(username, isStats, json) {
   if (!allTimeRoster || !isFeatureEnabled("allTimeLeaderboard")) return;
   const data = json?.data ?? json;
-  const handle = normalizeHandle(data?.Handle || username);
+  const handle = normalizeHandle(readField(data, "Handle") || username);
   if (!isValidHandle(handle)) return;
 
   const now = Date.now();
@@ -621,7 +624,7 @@ function noteAllTimeObservation(username, isStats, json) {
         allTimeRoster.self = { handle, rank, rankAt: now };
         changed = true;
       }
-      changed = applyRosterObservation(allTimeRoster, { handle, Handle: data?.Handle, rank, rankAt: now }) || changed;
+      changed = applyRosterObservation(allTimeRoster, { handle, Handle: readField(data, "Handle"), rank, rankAt: now }) || changed;
     }
   } else {
     changed = noteAllTimeProfile(handle, data, now) || changed;
@@ -638,7 +641,7 @@ function noteAllTimeObservation(username, isStats, json) {
 // an unknown one that clears the admission floor. The overtake check runs here
 // because this is where a value read NOW is available to compare against.
 function noteAllTimeProfile(handle, data, now = Date.now()) {
-  const xp = rosterNum(data?.XP);
+  const xp = rosterNum(readField(data, "XP"));
   if (xp == null) return false;
 
   const known = Boolean(allTimeRoster.entries[handle]);
@@ -650,12 +653,14 @@ function noteAllTimeProfile(handle, data, now = Date.now()) {
 
   return applyRosterObservation(allTimeRoster, {
     handle,
-    Handle: data?.Handle,
+    // Keys are Catalyst's own observation shape (see mergeRosterObservation) and
+    // stay PascalCase; only the VALUES are API reads.
+    Handle: readField(data, "Handle"),
     XP: xp,
-    FirstName: data?.FirstName,
-    LastName: data?.LastName,
-    Role: data?.Role,
-    Level: rosterNum(data?.Level),
+    FirstName: readField(data, "FirstName"),
+    LastName: readField(data, "LastName"),
+    Role: readField(data, "Role"),
+    Level: rosterNum(readField(data, "Level")),
     ProfileImageURL: getAvatarUrl(data),
     profileAt: now,
     candidate: !known,

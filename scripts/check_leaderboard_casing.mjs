@@ -46,7 +46,12 @@ const sandbox = {
   location: { origin: "https://www.boot.dev", pathname: "/leaderboard" },
   console: { ...console, warn: (msg) => warnings.push(String(msg)) },
   URL,
-  chrome: { runtime: { getURL: (p) => `chrome-extension://catalyst-test/${p}` } },
+  chrome: {
+    runtime: { getURL: (p) => `chrome-extension://catalyst-test/${p}` },
+    storage: { local: { get: (k, cb) => cb({}), set: (o, cb) => cb && cb() } },
+  },
+  // allTimeRoster.js gates its intake on this; settings.js is not loaded here.
+  isFeatureEnabled: () => true,
   setTimeout: () => 0,
   clearTimeout() {},
   setInterval: () => 0,
@@ -54,7 +59,7 @@ const sandbox = {
   queueMicrotask: () => {},
 };
 vm.createContext(sandbox);
-for (const file of ["utils.js", "leaderboard.js"]) {
+for (const file of ["utils.js", "alltime-seed.js", "allTimeRoster.js", "leaderboard.js"]) {
   const url = new URL(file, SRC);
   vm.runInContext(readFileSync(url, "utf8"), sandbox, { filename: fileURLToPath(url) });
 }
@@ -70,6 +75,14 @@ const {
   leaderAvatarSignature,
 } = hooks;
 const { readField, readNum, reportUsableFields } = sandbox;
+
+const rosterHooks = testHook.allTimeRoster;
+if (!rosterHooks) {
+  console.error("FAIL: allTimeRoster.js did not expose test hooks");
+  process.exit(1);
+}
+const { readAlltimeRank, readRegisteredUsers, emptyRoster, applyRosterObservation } = rosterHooks;
+const runInSandbox = (code) => vm.runInContext(code, sandbox);
 
 // --- tiny assert -------------------------------------------------------------
 
@@ -263,6 +276,95 @@ if (existsSync(PASCAL_CAPTURE)) {
   }
 } else {
   console.log("note: reference_data fixtures not present; skipped capture checks");
+}
+
+// --- all-time roster (v0.15.0) ----------------------------------------------
+// The roster is the one place in Catalyst where two shapes meet: API responses
+// (either casing) flow IN, and Catalyst's own persisted entries (PascalCase by
+// design) stay put. Both halves are pinned here, because converting the wrong
+// one is a real and already-made mistake — v0.14.2 broke the avatar tests by
+// treating getPersonalRows' own lowercase row keys as casing aliases.
+
+{
+  const pascalStats = { data: { Karma: 5, LeaderboardXPRankAlltime: 2 } };
+  const camelStats = { data: { karma: 5, leaderboardXPRankAlltime: 2 } };
+  check("rank: PascalCase /stats resolves", readAlltimeRank(pascalStats), 2);
+  check("rank: camelCase /stats resolves", readAlltimeRank(camelStats), 2);
+  check("rank: bare (unwrapped) body resolves", readAlltimeRank({ leaderboardXPRankAlltime: 7 }), 7);
+  // The camel form keeps interior capitals; a lowercasing guess would miss it.
+  check("rank: lowercased guess is NOT what ships", readAlltimeRank({ leaderboardXpRankAlltime: 9 }), null);
+  check("rank: absent yields null, never 0", readAlltimeRank({ data: { Karma: 5 } }), null);
+  check("rank: junk yields null", readAlltimeRank(null), null);
+}
+
+{
+  // /v1/leaderboard_stats was NOT re-read in the 2026-08-19 audit, so this
+  // reader resolves any spelling rather than asserting one.
+  check("students: PascalCase bare body", readRegisteredUsers({ RegisteredUsersAlltime: 1390194 }), 1390194);
+  check("students: camelCase bare body", readRegisteredUsers({ registeredUsersAlltime: 1396977 }), 1396977);
+  check("students: wrapped in data", readRegisteredUsers({ data: { registeredUsersAlltime: 42 } }), 42);
+  check("students: absent yields null, never 0", readRegisteredUsers({ LessonCompletions: 1 }), null);
+}
+
+{
+  // Ingesting the same person in either casing must produce an identical entry.
+  // Values deliberately DIFFER from the bundled seed's katcodes row, and the
+  // observation is newer than the seed — otherwise "newest observation wins"
+  // correctly keeps the seed and the test would pass on seed data instead of on
+  // the read under test. That is exactly how the first draft of this check
+  // fooled itself.
+  const AFTER_SEED = Date.parse("2026-09-01T12:00:00Z");
+  const profilePascal = {
+    Handle: "katcodes", XP: 1999999, FirstName: "Kat", LastName: "C",
+    Role: "Archmage", Level: 205, ProfileImageURL: "https://example.test/a.png",
+  };
+  const profileCamel = {
+    handle: "katcodes", xp: 1999999, firstName: "Kat", lastName: "C",
+    role: "Archmage", level: 205, profileImageURL: "https://example.test/a.png",
+  };
+
+  const ingest = (profile) => {
+    runInSandbox("allTimeRoster = emptyRoster(); applySeedToRoster(allTimeRoster);");
+    sandbox.__probeProfile = profile;
+    runInSandbox(`noteAllTimeProfile("katcodes", __probeProfile, ${AFTER_SEED});`);
+    return runInSandbox('JSON.parse(JSON.stringify(allTimeRoster.entries.katcodes))');
+  };
+
+  const fromPascal = ingest(profilePascal);
+  const fromCamel = ingest(profileCamel);
+  check("roster: camelCase profile ingests identically to PascalCase", fromCamel, fromPascal);
+  check("roster: the ingest actually overwrote the seed row", fromPascal.XP, 1999999);
+  check("roster: XP read from a camelCase profile", fromCamel.XP, 1999999);
+  check("roster: name read from a camelCase profile", fromCamel.FirstName, "Kat");
+  check("roster: role read from a camelCase profile", fromCamel.Role, "Archmage");
+  check("roster: level read from a camelCase profile", fromCamel.Level, 205);
+  check("roster: avatar read from a camelCase profile", fromCamel.ProfileImageURL, "https://example.test/a.png");
+
+  // The STORED shape is Catalyst's own and must stay PascalCase whichever way
+  // the API is pointing — this is the over-conversion guard.
+  check(
+    "roster: stored entry keeps Catalyst's PascalCase shape",
+    ["Handle", "XP", "FirstName", "Role", "Level", "ProfileImageURL"].every((k) => k in fromCamel),
+    true
+  );
+  check("roster: stored entry does not gain camel keys", "xp" in fromCamel || "firstName" in fromCamel, false);
+}
+
+{
+  // Discovery off a live board: a camelCase entry above the admission floor
+  // must be admitted just as a PascalCase one is.
+  const admit = (entry) => {
+    runInSandbox("allTimeRoster = emptyRoster(); applySeedToRoster(allTimeRoster);");
+    sandbox.__probeEntry = entry;
+    runInSandbox("noteAllTimeBoardEntries([__probeEntry]);");
+    return runInSandbox('Boolean(allTimeRoster.entries.climber)');
+  };
+  check("roster: discovery admits a PascalCase board entry",
+    admit({ Handle: "climber", XP: 5000000, FirstName: "C", Role: "Archmage", Level: 200 }), true);
+  check("roster: discovery admits a camelCase board entry",
+    admit({ handle: "climber", xp: 5000000, firstName: "C", role: "Archmage", level: 200 }), true);
+  check("roster: discovery still refuses someone below the floor",
+    admit({ handle: "nobody", xp: 10, firstName: "N", role: "Sage", level: 60 }), false);
 }
 
 // --- report ------------------------------------------------------------------

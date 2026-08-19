@@ -414,7 +414,11 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
 {
   eq("rank reads PascalCase", R.readAlltimeRank({ data: { LeaderboardXPRankAlltime: 2 } }), 2);
   eq("rank reads a bare body", R.readAlltimeRank({ LeaderboardXPRankAlltime: 9 }), 9);
-  eq("rank tolerates a casing flip", R.readAlltimeRank({ data: { leaderboardXpRankAlltime: 4 } }), 4);
+  // The measured camel spelling keeps its interior capitals. This assertion
+  // used to accept `leaderboardXpRankAlltime`, which was a guess made before the
+  // field had been observed — v0.14.2 measured the real one, and the reader now
+  // goes through API_FIELD_ALIASES rather than a case-insensitive sweep.
+  eq("rank reads the measured camel spelling", R.readAlltimeRank({ data: { leaderboardXPRankAlltime: 4 } }), 4);
   eq("a missing rank is null, never 0", R.readAlltimeRank({ data: { Karma: 5 } }), null);
 
   // The real capture is a BARE object with no data wrapper.
