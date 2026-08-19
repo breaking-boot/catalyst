@@ -280,21 +280,34 @@ function checkFrameAssetsForRot() {
 // ---------------------------------------------------------------------------
 // Leaderboard entry helpers
 // ---------------------------------------------------------------------------
+// Envelope keys that can carry the entry array, PascalCase -> camelCase. Kept
+// separate from API_FIELD_ALIASES because these name containers, not values.
+//
+// The league boards are the only WRAPPED leaderboard responses, and their key
+// flipped along with their entries on 2026-08-19: `LeagueMembers` ->
+// `leagueMembers`. That made this function return [] for both League boards,
+// and because those two handlers had no usable-field check, the comparisons
+// vanished with nothing in the console at all. Casing the entry fields alone
+// would not have repaired them.
+const LEADERBOARD_ENVELOPE_KEYS = Object.freeze({
+  Leaderboard: "leaderboard",
+  LeaderboardXP: "leaderboardXP",
+  Entries: "entries",
+  Members: "members",
+  Users: "users",
+  LeagueMembers: "leagueMembers",
+});
+
 function getLeaderboardEntries(json) {
   if (Array.isArray(json)) return json;
-  if (Array.isArray(json?.Leaderboard)) return json.Leaderboard;
-  if (Array.isArray(json?.LeaderboardXP)) return json.LeaderboardXP;
-  if (Array.isArray(json?.Entries)) return json.Entries;
-  if (Array.isArray(json?.Members)) return json.Members;
-  if (Array.isArray(json?.Users)) return json.Users;
-  if (Array.isArray(json?.LeagueMembers)) return json.LeagueMembers;
-  if (Array.isArray(json?.data)) return json.data;
-  if (Array.isArray(json?.data?.Leaderboard)) return json.data.Leaderboard;
-  if (Array.isArray(json?.data?.LeaderboardXP)) return json.data.LeaderboardXP;
-  if (Array.isArray(json?.data?.Entries)) return json.data.Entries;
-  if (Array.isArray(json?.data?.Members)) return json.data.Members;
-  if (Array.isArray(json?.data?.Users)) return json.data.Users;
-  if (Array.isArray(json?.data?.LeagueMembers)) return json.data.LeagueMembers;
+  for (const container of [json, json?.data]) {
+    if (Array.isArray(container)) return container;
+    if (!isPlainObject(container)) continue;
+    for (const [pascal, camel] of Object.entries(LEADERBOARD_ENVELOPE_KEYS)) {
+      if (Array.isArray(container[pascal])) return container[pascal];
+      if (Array.isArray(container[camel])) return container[camel];
+    }
+  }
   return [];
 }
 
