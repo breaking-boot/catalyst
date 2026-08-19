@@ -39,6 +39,10 @@
   const RELAY_PATH_PATTERNS = [
     /^\/v1\/leaderboard_xp\/[^/]+$/,
     /^\/v1\/leaderboard_karma\/[^/]+$/,
+    // Platform-wide counters; RegisteredUsersAlltime is the "of N total
+    // students" figure the All-Time subtitle used to scrape out of the page.
+    // Relayed passively too, so Boot.dev's own call satisfies ours.
+    /^\/v1\/leaderboard_stats$/,
     /^\/v1\/league_leaderboard_xp\/[^/]+$/,
     /^\/v1\/users\/public\/[^/]+(?:\/stats|\/activity_heatmap)?$/,
     /^\/v1\/boss_events_progress$/,

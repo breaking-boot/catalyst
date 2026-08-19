@@ -161,6 +161,38 @@
 .be-leader-card:hover {
   border-color: #e5ae3c;
 }
+/* A position whose occupant Catalyst does not know. Dashed and dimmed so it
+   reads as an absence at a glance, but the same height as a real row so the
+   board's shape doesn't jump as gaps open and close. It keeps its rank frame:
+   whoever holds the slot outranks the learner below, so they cannot be a lower
+   tier — that much is known even when the person is not. */
+.be-leader-gap {
+  border-style: dashed;
+  opacity: 0.55;
+}
+.be-leader-gap:hover {
+  border-color: #4e5564;
+}
+.be-leader-gap .be-leader-name,
+.be-leader-gap .be-leader-xp {
+  font-style: italic;
+}
+/* The viewer's own row when they rank below the board, appended rather than
+   displacing someone real. Separated by a rule so it reads as "and you", not
+   as position 26. */
+.be-leader-outside {
+  margin-top: 12px;
+  border-top: 1px solid #4e5564;
+}
+/* Second subtitle line: how much of the board Catalyst actually knows. Same
+   type as the native subtitle, tightened up since it follows another line. */
+.be-alltime-coverage {
+  padding-bottom: 16px;
+  font-style: normal;
+}
+.be-native-subtitle:not([hidden]) + .be-alltime-coverage {
+  padding-top: 0;
+}
 .be-leader-card.be-current-user {
   border-color: #4e5564;
   background: transparent;

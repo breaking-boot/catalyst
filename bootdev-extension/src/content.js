@@ -90,6 +90,11 @@ async function routeResponse({ url, status, json, catalyst }) {
       handleAllTimeLeaderboard(json);
     } else if (path === "/v1/leaderboard_xp/day") {
       handleDailyXpLeaderboard(json);
+    } else if (path === "/v1/leaderboard_xp/week" || path === "/v1/leaderboard_xp/month") {
+      // Discovery only — never a daily figure. See handleXpDiscoveryBoard.
+      handleXpDiscoveryBoard(json);
+    } else if (path === "/v1/leaderboard_stats") {
+      handleLeaderboardStats(json);
     } else if (path === "/v1/leaderboard_karma/alltime") {
       handleKarmaLeaderboard(json);
     } else if (path === "/v1/league_leaderboard_xp/day") {
@@ -122,10 +127,13 @@ async function routeResponse({ url, status, json, catalyst }) {
 async function initEnhancer() {
   await loadSettings();
   await loadBossUiState();
-  await loadCachedAllTimeLeaderboard();
   await loadNextLessonHref();
   await loadCurrentUserHandle();
   await loadPersonalLeaderboard();
+  // After loadPersonalLeaderboard: the roster bootstraps from the ranks already
+  // sitting in be_personal_leaderboard_cache, which needs those records loaded.
+  await loadAllTimeRoster(personalRecords);
+  await loadLeaderboardStats();
   await loadFrameDebugFlag();
   if (enhancerStopped) return;
   chrome.storage.onChanged.addListener(handleSettingsChange);
@@ -183,7 +191,7 @@ function renderRouteScopedUi() {
   ensureSubmitConfirmUiState();
 
   if (isLeaderboardPage()) {
-    if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
+    renderAllTimeLeaderboard();
     schedulePersonalLeaderboardRender();
   } else {
     removeAllTimeLeaderboard();
@@ -200,9 +208,12 @@ function renderRouteScopedUi() {
 // without re-pulling everything.
 function requestRouteScopedData() {
   if (!isLeaderboardPage()) return;
-  setTrackedTimeout(() => requestAllTimeLeaderboardData(), 50);
   setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
   setTrackedTimeout(() => requestNativeLeaderboardData(), 150);
+  // Last: the personal pass above is already in flight, so its handles are
+  // skipped rather than fetched twice, and the native boards may have answered
+  // with sightings that make part of this pass unnecessary.
+  setTrackedTimeout(() => requestAllTimeRosterRefresh(), 400);
 }
 
 // Refresh boss data when the tab regains focus. Forced, so a new event that
@@ -283,10 +294,10 @@ function applyFeatureSettings(before, after) {
   // Fetch only when a feature just turned on AND its data isn't already cached.
   if (!before || !after || !isLeaderboardPage()) return;
   const turnedOn = (key) => before[key] === false && after[key] !== false;
-  // Routed through the same helper as the route-scoped fetch so the disabled
-  // alltime timeframe is honored here too (see requestAllTimeLeaderboardData).
-  if (turnedOn("allTimeLeaderboard") && !cachedAllTimeEntries.length) {
-    requestAllTimeLeaderboardData();
+  // The board renders from the roster with no request at all (renderRouteScopedUi
+  // above already did); this only schedules whatever refresh is due.
+  if (turnedOn("allTimeLeaderboard")) {
+    requestAllTimeRosterRefresh();
   }
   if ((turnedOn("personalLeaderboards") || PERSONAL_BOARDS.some((b) => turnedOn(b.settingKey))) &&
       personalDataMissing()) {
