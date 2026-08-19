@@ -6,6 +6,11 @@ const LEADERBOARD_CACHE_KEY = "be_alltime_leaderboard_cache";
 const ALL_TIME_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/alltime";
 const DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/day";
 const KARMA_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_karma/alltime";
+// `limit=25` is an upper bound, not an expectation. Boot.dev resized leagues
+// from 25 members to 10 (observed 2026-08-19), and the server simply returns
+// what the league holds. Deliberately NOT lowered to 10: asking for more than
+// exists costs nothing, while asking for fewer than exists would silently drop
+// league-mates off the comparisons if leagues grow again.
 const LEAGUE_DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/day?limit=25";
 const LEAGUE_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/alltime?limit=25";
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
