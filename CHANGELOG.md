@@ -1,4 +1,29 @@
 # Changelog
+## v0.15.0 - Top All-Time Learners, rebuilt
+
+Boot.dev removed the all-time leaderboard data Catalyst had been using, and no endpoint lists the top 25 any more. The board is back, built a different way: Catalyst now keeps its own roster of the highest-ranked learners it knows about and reads each one's true all-time position from their public stats.
+
+### Added
+
+* **Top All-Time Learners is back**, and every position on it is a real rank read from Boot.dev rather than a guess. A new installation shows a full board immediately, from a list bundled with the extension.
+* **Honest gaps.** When Catalyst does not know who holds a position, that row says so instead of quietly showing 24 people as if they were the top 24 — it keeps the position and the rank frame, and leaves the name and XP blank. A line under the title says how many of the top 25 it knows. Positions you already know never turn into gaps just because time passed; a gap only appears when Catalyst finds out that somebody moved.
+* **The board keeps itself up to date as you browse.** Ranks and XP are picked up from responses Boot.dev's own pages already make — every profile you open, every native board, and the handles on your own Personal Leaderboards all contribute for free. On top of that, each time you open or reload the leaderboard Catalyst refreshes the XP of a few more learners, so the whole board comes up to date over a handful of loads and reloading brings it current sooner. A brand-new installation catches up faster still, so the bundled list stops showing its release-day figures within about a minute of use. Never more than twelve requests per load.
+* **It looks for newcomers where they actually appear.** Anyone seen with enough lifetime XP to belong on the board is checked automatically, and while a position is unknown Catalyst also consults the weekly and monthly boards — where someone climbing into the top 25 is most likely to show up.
+* **Hover a row** to see when its XP was last read and its position last confirmed.
+
+### Changed
+
+* **The order updates as soon as XP does.** When one learner passes another, the board reflects it on the next refresh of their XP rather than waiting to re-check positions, and Catalyst then confirms the new positions in the background.
+* **Your position and the student count come from Boot.dev's API**, not from reading the page. The subtitle now shows your own all-time rank.
+* **All-Time XP comparisons are always measured against a live figure for you.**
+* **If you rank below the board, your own row is added underneath it** rather than replacing the learner in 25th place.
+
+### Notes
+
+* No new permissions, settings, or backup-format changes. The roster lives on your device only, holds public profile data for about thirty handles, and is rebuilt from the bundled list plus ordinary browsing, so it is not part of backups.
+* The board may show fewer than 25 learners. That is deliberate: nothing on Boot.dev lists the top 25 any more, so Catalyst shows what it can verify and marks the rest as unknown.
+* Your old saved copy of the board is still on disk and is still never deleted; it is no longer read, because it holds the same handles the bundled list does and its numbers were known to be wrong.
+
 ## v0.14.1 - Lesson and catalog workflow fixes
 
 ### Fixed

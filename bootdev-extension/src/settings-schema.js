@@ -63,7 +63,7 @@ const FEATURE_TOGGLES = [
   { key: "bossTracker", label: "Boss event tracker", desc: "Floating panel: Boots Aura, your chest progress, and your guild's progress." },
   { key: "bossReminders", label: "Boss event reminders", desc: "When the tracker is hidden and a boss event is live, show a small toast (at most once a day per event)." },
   { key: "bossAuraAlerts", label: "Boss aura alerts", shortDesc: "Tell me when the XP bonus is worth submitting on.", desc: "While the tracker is on, alert when the Boots Aura reaches a new all-time high, a new high for this event, close to this event's high, or simply well above this event's average. Set the minimum bonus worth interrupting you for in the tracker's settings (the gear button)." },
-  { key: "allTimeLeaderboard", label: "Top All-Time Learners Leaderboard", desc: "Cumulative-XP standings Boot.dev doesn't show natively." },
+  { key: "allTimeLeaderboard", label: "Top All-Time Learners Leaderboard", shortDesc: "Cumulative-XP standings Boot.dev doesn't show natively.", desc: "Cumulative-XP standings Boot.dev doesn't show natively. Boot.dev removed the data this used to come from, so Catalyst now assembles the board from each learner's own published all-time rank: it ships with the current top 25, keeps them up to date as you browse, and marks any position it can't yet confirm as unknown rather than guessing." },
   { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
