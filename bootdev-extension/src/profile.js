@@ -61,7 +61,7 @@ function ensureProfileUiState() {
 
   // A cached response for this same profile just needs a re-render.
   const cached = lastProfileStatsJson?.data ?? lastProfileStatsJson;
-  if (normalizeHandle(cached?.Handle) === handle) {
+  if (normalizeHandle(readField(cached, "Handle")) === handle) {
     handleProfileStats(lastProfileStatsJson);
     return;
   }
@@ -82,7 +82,7 @@ function handleProfileStats(json) {
   if (!isProfilePage()) return;
 
   const profile = json?.data ?? json;
-  const totalXp = profile?.XP ?? null;
+  const totalXp = readField(profile, "XP") ?? null;
   if (totalXp == null) return;
 
   const wantBadge = isFeatureEnabled("profileXp");
@@ -127,8 +127,8 @@ function handleProfileStats(json) {
 }
 
 function getLevelProgress(profile) {
-  const current = num(profile?.XPForLevel);
-  const total = num(profile?.XPTotalForLevel);
+  const current = readNum(profile, "XPForLevel");
+  const total = readNum(profile, "XPTotalForLevel");
   if (current == null || total == null || total <= 0) return null;
 
   return {
@@ -140,16 +140,17 @@ function getLevelProgress(profile) {
 
 function findProfileAnchor(profile) {
   const fullName = getProfileFullName(profile);
+  const handle = readField(profile, "Handle");
   return (
     (fullName && findHeadingByText(fullName)) ||
-    (profile?.Handle && findElementByText(`@ ${profile.Handle}`)) ||
-    (profile?.Handle && findElementByText(`@${profile.Handle}`)) ||
+    (handle && findElementByText(`@ ${handle}`)) ||
+    (handle && findElementByText(`@${handle}`)) ||
     null
   );
 }
 
 function findProfileLevelAnchor(profile) {
-  const level = profile?.Level;
+  const level = readField(profile, "Level");
   if (level == null) return null;
 
   const levelText = `Level ${level}`;
@@ -162,9 +163,11 @@ function findProfileLevelAnchor(profile) {
 
 function findProfileSummaryScope(profile) {
   const fullName = getProfileFullName(profile);
-  const levelText = profile?.Level == null ? "" : `Level ${profile.Level}`;
-  const handleNeedles = profile?.Handle
-    ? [`@ ${profile.Handle}`, `@${profile.Handle}`]
+  const level = readField(profile, "Level");
+  const handle = readField(profile, "Handle");
+  const levelText = level == null ? "" : `Level ${level}`;
+  const handleNeedles = handle
+    ? [`@ ${handle}`, `@${handle}`]
     : [];
   if (!fullName && !handleNeedles.length && !levelText) return null;
 
@@ -183,7 +186,7 @@ function findProfileSummaryScope(profile) {
 }
 
 function getProfileFullName(profile) {
-  return [profile?.FirstName, profile?.LastName]
+  return [readField(profile, "FirstName"), readField(profile, "LastName")]
     .filter(Boolean)
     .join(" ")
     .trim();
@@ -211,7 +214,7 @@ function removeNativeProfileLevelXp(anchor, currentXp) {
 }
 
 function renderProfilePersonalAddButton(profile, anchor) {
-  const handle = normalizeHandle(profile?.Handle);
+  const handle = normalizeHandle(readField(profile, "Handle"));
   if (!isValidHandle(handle) || !anchor) return;
 
   let button = document.getElementById("be-profile-personal-add");

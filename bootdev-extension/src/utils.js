@@ -106,11 +106,59 @@ function isPlainObject(value) {
 // never gated on the shape of the whole response: a mixed response (some fields
 // flipped, some not) is the case that slips past a whole-object gate and freezes
 // a value while everything still looks healthy. PascalCase wins when both are
-// present. Used by boss.js (boss_events_progress) and nextLesson.js
-// (dashboard_content); check_boss_normalizer.mjs pins the behavior.
+// present, but only when it actually carries a value: a legacy key left behind
+// as an explicit null must not beat the live camelCase one, because null reads
+// as 0 through num() and a fabricated 0 is harder to notice than a blank. Other
+// falsy values (0, false, "") are real answers and still win. Used by boss.js
+// (boss_events_progress), nextLesson.js (dashboard_content), submitConfirm.js
+// (users/lessons) and the leaderboard readers below;
+// check_boss_normalizer.mjs pins the behavior.
 function pickField(obj, pascal, camel) {
   if (!isPlainObject(obj)) return undefined;
-  return obj[pascal] !== undefined ? obj[pascal] : obj[camel];
+  const value = obj[pascal] != null ? obj[pascal] : obj[camel];
+  return value == null ? undefined : value;
+}
+
+// The camelCase spelling of every API field Catalyst reads off a leaderboard
+// entry, a public profile, a stats response or an activity heatmap. Explicit on
+// purpose: `ProfileImageURL -> profileImageURL` keeps its trailing capitals, so
+// a generic lowercasing rule guesses wrong on exactly the field whose failure is
+// most visible (a blank avatar on every row). Verified per field against live
+// responses on 2026-08-19, when Boot.dev migrated these DTOs; the PascalCase
+// names are kept because Boot.dev has moved casing in both directions before.
+const API_FIELD_ALIASES = Object.freeze({
+  XP: "xp",
+  XPEarned: "xpEarned",
+  Karma: "karma",
+  Position: "position",
+  Level: "level",
+  Role: "role",
+  Handle: "handle",
+  FirstName: "firstName",
+  LastName: "lastName",
+  ProfileImageURL: "profileImageURL",
+  XPForLevel: "xpForLevel",
+  XPTotalForLevel: "xpTotalForLevel",
+  Calendar: "calendar",
+  GithubCommits: "githubCommits",
+  Date: "date",
+  Count: "count",
+});
+
+// Read one API field by its PascalCase name, in whichever casing the response
+// actually uses. Callers keep naming fields the way the OpenAPI spec does, so
+// the names stay greppable against it. A name with no alias is read as-is
+// rather than silently returning undefined, so an unlisted field still behaves
+// like a plain property read.
+function readField(obj, name) {
+  return pickField(obj, name, API_FIELD_ALIASES[name] || name);
+}
+
+// readField + num, which is how almost every numeric consumer uses it. Missing
+// in both casings yields null, never 0 — a value Catalyst cannot read must not
+// become a real-looking number (see the XPEarned note in getMyValue).
+function readNum(obj, name) {
+  return num(readField(obj, name));
 }
 
 // --- rename detection -------------------------------------------------------

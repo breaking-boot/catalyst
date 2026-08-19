@@ -154,6 +154,49 @@ check(
   true
 );
 
+// --- casing: a board entry renders identically either way --------------------
+// The rows above are the shape getPersonalRows() builds. These are raw API
+// entries, which is where the 2026-08-19 PascalCase -> camelCase migration hit:
+// ProfileImageURL and Role/Level stopped resolving, so every row fell back to a
+// silhouette with no frame while still rendering. Same entry, both spellings,
+// same output.
+
+const apiEntryPascal = {
+  Handle: "katcodes", FirstName: "Kat", Role: "archmage", Level: 100,
+  ProfileImageURL: "https://storage.googleapis.com/avatars/kat.png",
+};
+const apiEntryCamel = {
+  handle: "katcodes", firstName: "Kat", role: "archmage", level: 100,
+  profileImageURL: "https://storage.googleapis.com/avatars/kat.png",
+};
+
+check(
+  "casing: signature identical for a PascalCase and camelCase entry",
+  leaderAvatarSignature(apiEntryCamel, "Kat"),
+  leaderAvatarSignature(apiEntryPascal, "Kat")
+);
+check(
+  "casing: camelCase entry resolves its role frame",
+  getRoleFrameIndex(apiEntryCamel),
+  getRoleFrameIndex(apiEntryPascal)
+);
+check(
+  "casing: camelCase entry renders the image and the frame",
+  (() => {
+    const markup = renderLeaderAvatar(apiEntryCamel, "Kat");
+    return markup.includes("be-leader-avatar-img") && markup.includes("be-leader-frame");
+  })(),
+  true
+);
+check(
+  "casing: an entry readable in neither spelling still renders the silhouette",
+  (() => {
+    const markup = renderLeaderAvatar({ Handle: "x", pfp: "y.png", rank: "archmage" }, "x");
+    return markup.includes("be-leader-avatar-fallback") && !markup.includes("be-leader-frame");
+  })(),
+  true
+);
+
 // --- report ------------------------------------------------------------------
 
 if (failures) {
