@@ -1333,7 +1333,9 @@ function harvestPersonalKarmaSnapshots(entries, { asOf = 0 } = {}) {
 }
 
 function handleLeagueDailyLeaderboard(json) {
-  cachedLeagueDailyEntries = getLeaderboardEntries(json);
+  const entries = getLeaderboardEntries(json);
+  reportUsableFields("/v1/league_leaderboard_xp/day", entries, "XPEarned", (e) => readField(e, "XPEarned"));
+  cachedLeagueDailyEntries = entries;
   markBoardSeen("leagueDaily");
   persistDailyBoardLookup("leagueDaily", cachedLeagueDailyEntries);
   harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true });
@@ -1344,7 +1346,9 @@ function handleLeagueDailyLeaderboard(json) {
 }
 
 function handleLeagueLeaderboard(json) {
-  cachedLeagueEntries = getLeaderboardEntries(json);
+  const entries = getLeaderboardEntries(json);
+  reportUsableFields("/v1/league_leaderboard_xp/alltime", entries, "XPEarned", (e) => readField(e, "XPEarned"));
+  cachedLeagueEntries = entries;
   markBoardSeen("league");
   harvestPersonalSnapshots(cachedLeagueEntries);
   if (isLeaderboardPage()) augmentNativeLeagueStanding();
