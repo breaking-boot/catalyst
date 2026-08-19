@@ -2319,5 +2319,11 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     getRoleFrameIndex,
     getRoleFrameUrl,
     getAvatarUrl,
+    getLeaderboardEntries,
+    getHandle,
+    getDisplayName,
+    mapByHandle,
+    leagueMyValueOrZero,
+    distillHeatmap,
   };
 }
