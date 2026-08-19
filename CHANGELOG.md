@@ -23,7 +23,21 @@ Boot.dev removed the all-time leaderboard data Catalyst had been using, and no e
 * No new permissions, settings, or backup-format changes. The roster lives on your device only, holds public profile data for about thirty handles, and is rebuilt from the bundled list plus ordinary browsing, so it is not part of backups.
 * The board may show fewer than 25 learners. That is deliberate: nothing on Boot.dev lists the top 25 any more, so Catalyst shows what it can verify and marks the rest as unknown.
 * Your old saved copy of the board is still on disk and is still never deleted; it is no longer read, because it holds the same handles the bundled list does and its numbers were known to be wrong.
+## v0.14.2 - Leaderboard compatibility fix
 
+Boot.dev changed the format of its leaderboard and profile responses in mid-August 2026. Catalyst could no longer read them, and most of what it adds to the leaderboard page quietly stopped working.
+
+### Fixed
+
+* **Leaderboard values and comparisons work again.** Comparisons had disappeared from all four native boards, and Personal Leaderboards had lost its avatars, rank frames, real names, All-Time XP and All-Time Karma — while still listing everyone, which is why it looked half-healthy rather than broken. Catalyst now reads both the old and the new format, so a change back does not break it a second time.
+* **Daily XP and Daily Karma are live again.** Those columns kept showing numbers throughout, because they are measured from history Catalyst had already recorded. Nothing new was being recorded, so they had frozen at their last good reading. They resume updating from the data that was already stored; Catalyst did not erase any previously recorded history.
+* **The League boards were failing silently, and now report themselves.** Their response changed shape as well as field names, so Catalyst read them as empty rather than as unreadable. They were also the only boards with no health check, so nothing reached the console. Both are checked now, like every other board.
+* **A value Catalyst cannot read shows as unknown instead of zero.** Three places could turn a missing number into a real-looking one — including a league comparison that would have claimed you trail every league-mate by their entire score.
+* **The profile page XP badge returns.** It locates itself on the page using your level and handle, so when those became unreadable it had nowhere to attach and did not appear at all.
+
+### Notes
+
+* No new permissions, settings, storage keys, dependencies, or backup-format changes. Your recorded history is untouched.
 ## v0.14.1 - Lesson and catalog workflow fixes
 
 ### Fixed

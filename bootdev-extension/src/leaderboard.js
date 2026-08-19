@@ -10,6 +10,11 @@
 // XP were already known wrong (a-fleming at rank 1 while katcodes led on XP).
 const DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/day";
 const KARMA_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_karma/alltime";
+// `limit=25` is an upper bound, not an expectation. Boot.dev resized leagues
+// from 25 members to 10 (observed 2026-08-19), and the server simply returns
+// what the league holds. Deliberately NOT lowered to 10: asking for more than
+// exists costs nothing, while asking for fewer than exists would silently drop
+// league-mates off the comparisons if leagues grow again.
 const LEAGUE_DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/day?limit=25";
 const LEAGUE_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/alltime?limit=25";
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
@@ -168,7 +173,7 @@ function isLeaderboardPage() {
 function getHandle(entry) {
   return (
     entry?.handle ||
-    entry?.Handle ||
+    readField(entry, "Handle") ||
     entry?.Username ||
     entry?.UserHandle ||
     entry?.User?.Handle ||
@@ -180,7 +185,7 @@ function getHandle(entry) {
 function getDisplayName(entry, handle) {
   return (
     entry?.name ||
-    entry?.FirstName ||
+    readField(entry, "FirstName") ||
     entry?.Name ||
     entry?.DisplayName ||
     entry?.User?.FirstName ||
@@ -193,7 +198,7 @@ function getDisplayName(entry, handle) {
 function getAvatarUrl(entry) {
   return (
     entry?.avatar ||
-    entry?.ProfileImageURL ||
+    readField(entry, "ProfileImageURL") ||
     entry?.ProfileImageUrl ||
     entry?.ProfilePictureURL ||
     entry?.AvatarURL ||
@@ -233,12 +238,12 @@ function getExplicitFrameUrl(entry) {
 }
 
 function getRoleFrameIndex(entry) {
-  const role = normalizeText(entry?.Role || entry?.User?.Role)
+  const role = normalizeText(readField(entry, "Role") || entry?.User?.Role)
     .toLowerCase()
     .replace(/[\s_-]+/g, "");
   if (ROLE_FRAME_INDEX_BY_ROLE[role] != null) return ROLE_FRAME_INDEX_BY_ROLE[role];
 
-  const level = num(entry?.Level ?? entry?.User?.Level);
+  const level = num(readField(entry, "Level") ?? entry?.User?.Level);
   if (level != null) {
     const idx = Math.floor(level / 10) - 1;
     if (idx < 0) return -1;
@@ -283,21 +288,34 @@ function checkFrameAssetsForRot() {
 // ---------------------------------------------------------------------------
 // Leaderboard entry helpers
 // ---------------------------------------------------------------------------
+// Envelope keys that can carry the entry array, PascalCase -> camelCase. Kept
+// separate from API_FIELD_ALIASES because these name containers, not values.
+//
+// The league boards are the only WRAPPED leaderboard responses, and their key
+// flipped along with their entries on 2026-08-19: `LeagueMembers` ->
+// `leagueMembers`. That made this function return [] for both League boards,
+// and because those two handlers had no usable-field check, the comparisons
+// vanished with nothing in the console at all. Casing the entry fields alone
+// would not have repaired them.
+const LEADERBOARD_ENVELOPE_KEYS = Object.freeze({
+  Leaderboard: "leaderboard",
+  LeaderboardXP: "leaderboardXP",
+  Entries: "entries",
+  Members: "members",
+  Users: "users",
+  LeagueMembers: "leagueMembers",
+});
+
 function getLeaderboardEntries(json) {
   if (Array.isArray(json)) return json;
-  if (Array.isArray(json?.Leaderboard)) return json.Leaderboard;
-  if (Array.isArray(json?.LeaderboardXP)) return json.LeaderboardXP;
-  if (Array.isArray(json?.Entries)) return json.Entries;
-  if (Array.isArray(json?.Members)) return json.Members;
-  if (Array.isArray(json?.Users)) return json.Users;
-  if (Array.isArray(json?.LeagueMembers)) return json.LeagueMembers;
-  if (Array.isArray(json?.data)) return json.data;
-  if (Array.isArray(json?.data?.Leaderboard)) return json.data.Leaderboard;
-  if (Array.isArray(json?.data?.LeaderboardXP)) return json.data.LeaderboardXP;
-  if (Array.isArray(json?.data?.Entries)) return json.data.Entries;
-  if (Array.isArray(json?.data?.Members)) return json.data.Members;
-  if (Array.isArray(json?.data?.Users)) return json.data.Users;
-  if (Array.isArray(json?.data?.LeagueMembers)) return json.data.LeagueMembers;
+  for (const container of [json, json?.data]) {
+    if (Array.isArray(container)) return container;
+    if (!isPlainObject(container)) continue;
+    for (const [pascal, camel] of Object.entries(LEADERBOARD_ENVELOPE_KEYS)) {
+      if (Array.isArray(container[pascal])) return container[pascal];
+      if (Array.isArray(container[camel])) return container[camel];
+    }
+  }
   return [];
 }
 
@@ -500,7 +518,7 @@ function handleAllTimeLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
   if (!entries.length) return;
   // A renamed XP would render 25 rows of "0 xp" rather than failing outright.
-  reportUsableFields("/v1/leaderboard_xp/alltime", entries, "XP", (e) => e?.XP);
+  reportUsableFields("/v1/leaderboard_xp/alltime", entries, "XP", (e) => readField(e, "XP"));
   markBoardSeen("alltime");
   harvestPersonalSnapshots(entries);
   recordCurrentUserLiveXp(myValueFromEntries(entries, "XP"));
@@ -999,7 +1017,7 @@ function mapByHandle(entries, ...fields) {
     if (!handle) continue;
     let value = null;
     for (const field of fields) {
-      value = num(entry[field]);
+      value = readNum(entry, field);
       if (value != null) break;
     }
     if (value != null) map[handle] = value;
@@ -1012,7 +1030,7 @@ function myValueFromEntries(entries, ...fields) {
   const mine = entries.find((entry) => isCurrentLeaderboardEntry(entry, identity));
   if (!mine) return null;
   for (const field of fields) {
-    const value = num(mine[field]);
+    const value = readNum(mine, field);
     if (value != null) return value;
   }
   return null;
@@ -1077,8 +1095,17 @@ function augmentNativeLeagueStanding() {
 // Our own value on a league board. Absence means 0 (small pool), but only once
 // the board data has actually loaded — with an empty cache there are no cards to
 // annotate anyway, so returning null there avoids a misleading "0" comparison.
+//
+// "I am not on this board" and "this field moved" are indistinguishable from a
+// single missing read, and only the first is genuinely 0. So if NO entry on a
+// non-empty board yields the field, treat it as unreadable and return null:
+// otherwise a rename tells the user they are exactly each league-mate's entire
+// score behind, which is the plausible-wrong-value failure that is harder to
+// notice than a blank.
 function leagueMyValueOrZero(entries, ...fields) {
   if (!entries.length) return null;
+  const readable = entries.some((entry) => fields.some((field) => readNum(entry, field) != null));
+  if (!readable) return null;
   return myValueFromEntries(entries, ...fields) ?? 0;
 }
 
@@ -1243,13 +1270,13 @@ function harvestPersonalSnapshots(entries, { backdate = false, asOf = 0 } = {}) 
     const handle = normalizeHandle(getHandle(entry));
     if (!handle || !isPersonalHandle(handle)) continue;
 
-    const total = num(entry?.XP);
+    const total = readNum(entry, "XP");
     if (total == null) continue;
 
     const record = ensurePersonalRecord(handle);
     recordXpSnapshot(record, total, at);
     if (backdate) {
-      const earned = num(entry?.XPEarned);
+      const earned = readNum(entry, "XPEarned");
       if (earned != null && earned >= 0 && earned <= total) {
         recordXpSnapshot(record, total - earned, at - DAY_WINDOW_MS);
       }
@@ -1287,7 +1314,7 @@ function persistDailyBoardLookup(boardKey, entries) {
   const byHandle = {};
   for (const entry of entries) {
     const handle = normalizeHandle(getHandle(entry));
-    const earned = num(entry?.XPEarned);
+    const earned = readNum(entry, "XPEarned");
     if (handle && earned != null) byHandle[handle] = earned;
   }
   persistedDailyBoards[boardKey] = { byHandle, seenAt: Date.now() };
@@ -1296,7 +1323,12 @@ function persistDailyBoardLookup(boardKey, entries) {
 
 function handleDailyXpLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
-  reportUsableFields("/v1/leaderboard_xp/day", entries, "XPEarned", (e) => e?.XPEarned);
+  // An unreadable response must not overwrite what is already known. Without
+  // this, persistDailyBoardLookup stores an empty map and markBoardSeen makes
+  // dailyBoardXpFor skip the persisted fallback, so one bad response costs the
+  // exact daily tier for the rest of the session. Matches handleKarmaLeaderboard.
+  if (!entries.length) return;
+  reportUsableFields("/v1/leaderboard_xp/day", entries, "XPEarned", (e) => readField(e, "XPEarned"));
   cachedDailyEntries = entries;
   markBoardSeen("daily");
   persistDailyBoardLookup("daily", entries);
@@ -1310,7 +1342,7 @@ function handleKarmaLeaderboard(json) {
   if (!entries.length) return;
   // Karma has no second source, so a rename here shows up as a permanent
   // "Not enough data yet" — indistinguishable from a normal cold start.
-  reportUsableFields("/v1/leaderboard_karma/alltime", entries, "Karma", (e) => e?.Karma);
+  reportUsableFields("/v1/leaderboard_karma/alltime", entries, "Karma", (e) => readField(e, "Karma"));
   cachedKarmaEntries = entries;
   markBoardSeen("karma");
   harvestPersonalKarmaSnapshots(entries);
@@ -1342,7 +1374,7 @@ async function refreshCurrentUserKarma() {
   );
   if (result.status < 200 || result.status >= 300) return;
   const data = result.json?.data ?? result.json;
-  recordCurrentUserKarma(data?.Karma);
+  recordCurrentUserKarma(readField(data, "Karma"));
 }
 
 // Harvest karma snapshots for tracked users from the all-time karma board.
@@ -1358,7 +1390,7 @@ function harvestPersonalKarmaSnapshots(entries, { asOf = 0 } = {}) {
     const handle = normalizeHandle(getHandle(entry));
     if (!handle || !isPersonalHandle(handle)) continue;
 
-    const total = num(entry?.Karma);
+    const total = readNum(entry, "Karma");
     if (total == null) continue;
 
     const record = ensurePersonalRecord(handle);
@@ -1389,7 +1421,10 @@ function handleXpDiscoveryBoard(json) {
 }
 
 function handleLeagueDailyLeaderboard(json) {
-  cachedLeagueDailyEntries = getLeaderboardEntries(json);
+  const entries = getLeaderboardEntries(json);
+  if (!entries.length) return; // see handleDailyXpLeaderboard
+  reportUsableFields("/v1/league_leaderboard_xp/day", entries, "XPEarned", (e) => readField(e, "XPEarned"));
+  cachedLeagueDailyEntries = entries;
   markBoardSeen("leagueDaily");
   persistDailyBoardLookup("leagueDaily", cachedLeagueDailyEntries);
   harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true });
@@ -1402,7 +1437,9 @@ function handleLeagueDailyLeaderboard(json) {
 }
 
 function handleLeagueLeaderboard(json) {
-  cachedLeagueEntries = getLeaderboardEntries(json);
+  const entries = getLeaderboardEntries(json);
+  reportUsableFields("/v1/league_leaderboard_xp/alltime", entries, "XPEarned", (e) => readField(e, "XPEarned"));
+  cachedLeagueEntries = entries;
   markBoardSeen("league");
   harvestPersonalSnapshots(cachedLeagueEntries);
   noteAllTimeBoardEntries(cachedLeagueEntries);
@@ -1413,35 +1450,35 @@ function handleLeagueLeaderboard(json) {
 function updatePersonalUserData(username, isStats, json) {
   const requestedHandle = normalizeHandle(username);
   const data = json?.data ?? json;
-  const responseHandle = normalizeHandle(data?.Handle);
+  const responseHandle = normalizeHandle(readField(data, "Handle"));
   // Every per-user response is an all-time observation too, whoever asked for
   // it — Boot.dev's own profile-page fetches included. Runs before the personal
   // handling below because it is independent of whether this handle is tracked.
   noteAllTimeObservation(responseHandle || requestedHandle, isStats, json);
   if (!isStats && (responseHandle || requestedHandle) === normalizeHandle(currentUserHandle)) {
-    recordCurrentUserLiveXp(data?.XP);
+    recordCurrentUserLiveXp(readNum(data, "XP"));
   }
   // My own stats response feeds the current-user karma series even when I'm not
   // a tracked handle. Both branches route through here, but only /stats carries
   // a karma field (the public profile has none), so the profile branch is a
   // harmless no-op — recordCurrentUserKarma ignores a non-numeric value.
   if ((responseHandle || requestedHandle) === currentUserHandle) {
-    recordCurrentUserKarma(data?.Karma);
+    recordCurrentUserKarma(readField(data, "Karma"));
   }
   const handle = isPersonalHandle(responseHandle) ? responseHandle : requestedHandle;
   if (!handle || !isPersonalHandle(handle)) return;
 
   const record = ensurePersonalRecord(handle);
-  record.handle = data?.Handle || record.handle || handle;
+  record.handle = readField(data, "Handle") || record.handle || handle;
   if (isStats) {
     record.stats = data;
-    recordKarmaSnapshot(record, data?.Karma);
+    recordKarmaSnapshot(record, readField(data, "Karma"));
   } else {
     // No karma snapshot here: the public profile response has no karma field
     // (see getPersonalValue). A tracked user's karma series advances on /stats
     // refreshes and karma-board sightings only.
     record.profile = data;
-    recordXpSnapshot(record, data?.XP);
+    recordXpSnapshot(record, readField(data, "XP"));
   }
   record.updatedAt = Date.now();
 
@@ -1775,7 +1812,7 @@ async function addPersonalHandle(handle) {
     return;
   }
 
-  const canonical = normalizeHandle(profile.Handle || normalized);
+  const canonical = normalizeHandle(readField(profile, "Handle") || normalized);
   if (!isValidHandle(canonical)) {
     personalPendingHandle = null;
     setPersonalFeedback("Invalid username", "error");
@@ -1789,10 +1826,10 @@ async function addPersonalHandle(handle) {
 
   personalHandles = uniqueHandles([...personalHandles, canonical]);
   const record = ensurePersonalRecord(canonical);
-  record.handle = profile.Handle || canonical;
+  record.handle = readField(profile, "Handle") || canonical;
   record.profile = profile;
   record.profileError = null;
-  recordXpSnapshot(record, profile.XP);
+  recordXpSnapshot(record, readField(profile, "XP"));
   // No karma here — the profile response has none; refreshPersonalStats below
   // is what opens the karma series.
   // The new handle may already sit on a board received earlier this session
@@ -1840,8 +1877,8 @@ function getPersonalRows(kind) {
         name: getDisplayName(profile, getPersonalDisplayHandle(handle)),
         avatar: getAvatarUrl(profile),
         Handle: record.handle || handle,
-        Level: profile.Level,
-        Role: profile.Role,
+        Level: readField(profile, "Level"),
+        Role: readField(profile, "Role"),
         value: view ? view.value : getPersonalValue(record, kind),
         note: view?.note || "",
         tooltip: view?.tooltip || "",
@@ -1858,8 +1895,8 @@ function getPersonalValue(record, kind) {
   // Karma comes from /stats only. The public profile response carries no karma
   // field in any casing (full key list checked 2026-07-31), so reading it from
   // record.profile was a fallback that could never fire.
-  if (kind === "karma") return num(record.stats?.Karma);
-  return num(record.profile?.XP);
+  if (kind === "karma") return readNum(record.stats, "Karma");
+  return readNum(record.profile, "XP");
 }
 
 // ---------------------------------------------------------------------------
@@ -1918,7 +1955,7 @@ function dailyBoardXpFor(record) {
     if (boardSeenAt[key]) {
       for (const entry of entries) {
         if (normalizeHandle(getHandle(entry)) === handle) {
-          const earned = num(entry?.XPEarned);
+          const earned = readNum(entry, "XPEarned");
           if (earned != null) return earned;
         }
       }
@@ -2045,10 +2082,10 @@ async function refreshPersonalHandle(handle) {
   if (!profile || !isPersonalHandle(normalized)) return;
 
   const record = ensurePersonalRecord(normalized);
-  record.handle = profile.Handle || record.handle || normalized;
+  record.handle = readField(profile, "Handle") || record.handle || normalized;
   record.profile = profile;
   record.profileError = null;
-  recordXpSnapshot(record, profile.XP);
+  recordXpSnapshot(record, readField(profile, "XP"));
   // Karma comes from the /stats refresh below, not from the profile response.
   savePersonalCache();
   schedulePersonalLeaderboardRender();
@@ -2065,7 +2102,7 @@ async function refreshPersonalStats(handle) {
   if (result.status >= 200 && result.status < 300) {
     const record = ensurePersonalRecord(normalized);
     record.stats = result.json?.data ?? result.json;
-    recordKarmaSnapshot(record, record.stats?.Karma);
+    recordKarmaSnapshot(record, readField(record.stats, "Karma"));
     record.statsError = null;
     record.updatedAt = Date.now();
     savePersonalCache();
@@ -2126,9 +2163,11 @@ function handlePersonalHeatmap(username, json) {
 // is ~350 entries per user and everything else it says is derivable again.
 function distillHeatmap(json) {
   const data = json?.data ?? json;
-  const calendar = Array.isArray(data?.Calendar) ? data.Calendar : null;
+  const calendarField = readField(data, "Calendar");
+  const calendar = Array.isArray(calendarField) ? calendarField : null;
   if (!calendar) return null;
-  const commits = Array.isArray(data?.GithubCommits) ? data.GithubCommits : [];
+  const commitsField = readField(data, "GithubCommits");
+  const commits = Array.isArray(commitsField) ? commitsField : [];
 
   // Dates arrive as "YYYY-MM-DDT00:00:00Z" but are bucketed by the timezone we
   // requested (the viewer's), so the YYYY-MM-DD prefix compares against the
@@ -2138,8 +2177,8 @@ function distillHeatmap(json) {
   let lessonsToday = 0;
   let readable = 0; // entries that yielded BOTH a date and a numeric count
   for (const entry of calendar) {
-    const key = String(entry?.Date || "").slice(0, 10);
-    const count = num(entry?.Count);
+    const key = String(readField(entry, "Date") || "").slice(0, 10);
+    const count = readNum(entry, "Count");
     if (key && count != null) readable += 1;
     if (!key || !count) continue;
     activeDays.add(key);
@@ -2160,8 +2199,8 @@ function distillHeatmap(json) {
     return null;
   }
   for (const entry of commits) {
-    const key = String(entry?.Date || "").slice(0, 10);
-    if (key && num(entry?.Count)) activeDays.add(key);
+    const key = String(readField(entry, "Date") || "").slice(0, 10);
+    if (key && readNum(entry, "Count")) activeDays.add(key);
   }
 
   // Streak = consecutive active days ending today, or ending yesterday when
@@ -2212,7 +2251,7 @@ async function loadPublicUserProfile(handle, options = {}) {
   }
 
   const profile = result.json?.data ?? result.json;
-  if (!isPlainObject(profile) || !isValidHandle(profile.Handle || normalized)) {
+  if (!isPlainObject(profile) || !isValidHandle(readField(profile, "Handle") || normalized)) {
     setPersonalFeedback("Invalid username", "error");
     return null;
   }
@@ -2352,5 +2391,11 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     getRoleFrameIndex,
     getRoleFrameUrl,
     getAvatarUrl,
+    getLeaderboardEntries,
+    getHandle,
+    getDisplayName,
+    mapByHandle,
+    leagueMyValueOrZero,
+    distillHeatmap,
   };
 }
