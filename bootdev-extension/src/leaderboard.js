@@ -729,7 +729,7 @@ function _applyAllTimeContent(panel, entries) {
       entry: e,
       handle,
       displayName: getDisplayName(e, handle),
-      xp: readNum(e, "XP") ?? readNum(e, "XPEarned") ?? 0,
+      xp: readNum(e, "XP"),
       rank: readField(e, "Position") ?? e.Rank ?? i + 1,
       isCurrentUser: isCurrentLeaderboardEntry(e, currentIdentity),
       href: handle ? `/u/${encodeURIComponent(handle)}` : "#",
@@ -1040,8 +1040,17 @@ function augmentNativeLeagueStanding() {
 // Our own value on a league board. Absence means 0 (small pool), but only once
 // the board data has actually loaded — with an empty cache there are no cards to
 // annotate anyway, so returning null there avoids a misleading "0" comparison.
+//
+// "I am not on this board" and "this field moved" are indistinguishable from a
+// single missing read, and only the first is genuinely 0. So if NO entry on a
+// non-empty board yields the field, treat it as unreadable and return null:
+// otherwise a rename tells the user they are exactly each league-mate's entire
+// score behind, which is the plausible-wrong-value failure that is harder to
+// notice than a blank.
 function leagueMyValueOrZero(entries, ...fields) {
   if (!entries.length) return null;
+  const readable = entries.some((entry) => fields.some((field) => readNum(entry, field) != null));
+  if (!readable) return null;
   return myValueFromEntries(entries, ...fields) ?? 0;
 }
 
