@@ -341,6 +341,39 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
 }
 
 {
+  // Priming: the first sweep runs hot so a fresh install stops showing
+  // seed-vintage order within a minute instead of twenty. It MUST terminate —
+  // a permanently-priming roster would poll every 20 seconds forever.
+  const roster = fullRoster();
+  check("a new roster starts unprimed", !R.rosterIsPrimed(roster));
+  check("priming uses a much shorter cooldown",
+    R.constants.ROSTER_PRIMING_COOLDOWN_MS < R.constants.ROSTER_REFRESH_COOLDOWN_MS);
+  check("priming uses a bigger slice",
+    R.constants.ROSTER_XP_PRIMING_SLICE > R.constants.ROSTER_XP_SLICE);
+
+  let passes = 0;
+  let wraps = 0;
+  while (wraps === 0 && passes < 50) {
+    const result = R.pickXpRefreshTargets(roster, { slice: R.constants.ROSTER_XP_PRIMING_SLICE, now: NOW });
+    roster.xpCursor = result.cursor;
+    if (result.wrapped) wraps += 1;
+    passes += 1;
+  }
+  roster.xpWraps = wraps;
+  check("the cursor wraps within ceil(entries / slice) passes",
+    passes <= Math.ceil(30 / R.constants.ROSTER_XP_PRIMING_SLICE), `took ${passes} passes`);
+  check("a wrap ends priming for good", R.rosterIsPrimed(roster));
+
+  // The termination guarantee has to hold even when nothing is requested —
+  // otherwise a 404ing handle, or a roster fully covered by the personal pass,
+  // would prime forever.
+  const skipped = fullRoster({ profileAt: NOW });
+  const result = R.pickXpRefreshTargets(skipped, { slice: R.constants.ROSTER_XP_PRIMING_SLICE, now: NOW });
+  eq("a pass that requests nothing still advances", result.targets.length, 0);
+  check("and still reports the wrap", result.wrapped);
+}
+
+{
   const roster = fullRoster();
   const { targets } = R.pickXpRefreshTargets(roster, { skip: ["user1", "user2"], now: NOW });
   check("skipped handles are not requested", !targets.includes("user1") && !targets.includes("user2"));

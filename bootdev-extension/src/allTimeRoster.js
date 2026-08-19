@@ -47,6 +47,22 @@ const ROSTER_XP_SLICE = 6;
 const ROSTER_RANK_SLICE = 3;
 const ROSTER_REQUEST_CEILING = 12;
 const ROSTER_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
+
+// PRIMING. Until Catalyst has walked the roster once, every row still carries
+// the bundled seed's XP — which is release-day accurate and then drifts, so a
+// fresh install can show two neighbours in the wrong order until the sweep
+// reaches them. At the steady-state pace that first sweep takes five visits
+// spread over 20+ minutes, which is a long time to look wrong.
+//
+// So the first sweep runs hot: a bigger slice and a much shorter cooldown, and
+// consecutive loads converge the board in about a minute. It is bounded by
+// construction — the cursor advances every pass whether or not it issues
+// requests, so it wraps within ceil(entries / slice) passes and priming ends
+// for good. Deliberately keyed on the WRAP COUNT rather than on "does any row
+// still look seed-vintage": a handle that 404s would never refresh, and that
+// would leave a state-based check priming forever.
+const ROSTER_XP_PRIMING_SLICE = 10;
+const ROSTER_PRIMING_COOLDOWN_MS = 20 * 1000;
 // A handle seen this recently needs no request; covers the overlap with the
 // Personal Leaderboards pass, which refreshes its own handles every visit.
 const ROSTER_RECENT_SIGHTING_MS = 2 * 60 * 1000;
@@ -63,7 +79,15 @@ let rosterRankSuspects = new Set();
 let rosterLastPassAt = 0;
 
 function emptyRoster() {
-  return { version: ALLTIME_ROSTER_VERSION, updatedAt: 0, xpCursor: 0, self: {}, entries: {} };
+  return { version: ALLTIME_ROSTER_VERSION, updatedAt: 0, xpCursor: 0, xpWraps: 0, self: {}, entries: {} };
+}
+
+// True once the XP cursor has been all the way round at least once, i.e. every
+// row has had a chance to be read live rather than inherited from the seed.
+// A replacement seed in a later release does NOT un-prime the roster: that seed
+// is fresh at release time, so there is nothing to catch up on.
+function rosterIsPrimed(roster) {
+  return (rosterNum(roster?.xpWraps) || 0) >= 1;
 }
 
 // num(null) is 0 — a documented trap in this codebase (it already made the boss
@@ -470,15 +494,19 @@ function detectOvertakes(roster, handle, freshXp) {
 function pickXpRefreshTargets(roster, { slice = ROSTER_XP_SLICE, skip = [], now = Date.now() } = {}) {
   const ordered = Object.values(roster?.entries || {})
     .sort((a, b) => (rosterNum(a.rank) ?? Number.MAX_SAFE_INTEGER) - (rosterNum(b.rank) ?? Number.MAX_SAFE_INTEGER));
-  if (!ordered.length) return { targets: [], cursor: 0 };
+  if (!ordered.length) return { targets: [], cursor: 0, wrapped: false };
 
   const skipSet = new Set(skip.map(normalizeHandle));
   const start = clamp(rosterNum(roster.xpCursor) || 0, 0, Math.max(0, ordered.length - 1));
   const targets = [];
   let cursor = start;
+  let wrapped = false;
 
   for (let step = 0; step < ordered.length && targets.length < slice; step++) {
     const entry = ordered[(start + step) % ordered.length];
+    // The cursor advances whether or not this entry is requested, which is what
+    // guarantees the wrap — and so guarantees priming terminates.
+    if (start + step + 1 >= ordered.length) wrapped = true;
     cursor = (start + step + 1) % ordered.length;
     const handle = normalizeHandle(entry.Handle);
     if (!handle || skipSet.has(handle)) continue;
@@ -487,7 +515,7 @@ function pickXpRefreshTargets(roster, { slice = ROSTER_XP_SLICE, skip = [], now 
     targets.push(handle);
   }
 
-  return { targets, cursor };
+  return { targets, cursor, wrapped };
 }
 
 // Queue B — rank. Event-driven first: candidates close a gap, and a suspect
@@ -547,6 +575,7 @@ function normalizeStoredRoster(stored) {
   if (!isPlainObject(stored)) return roster;
   roster.updatedAt = rosterNum(stored.updatedAt) || 0;
   roster.xpCursor = rosterNum(stored.xpCursor) || 0;
+  roster.xpWraps = rosterNum(stored.xpWraps) || 0;
   if (isPlainObject(stored.self)) {
     roster.self = {
       handle: normalizeHandle(stored.self.handle),
@@ -735,7 +764,8 @@ function requestAllTimeRosterRefresh() {
   if (!isLeaderboardPage() || !isFeatureEnabled("allTimeLeaderboard")) return 0;
 
   const now = Date.now();
-  if (now - rosterLastPassAt < ROSTER_REFRESH_COOLDOWN_MS) return 0;
+  const priming = !rosterIsPrimed(allTimeRoster);
+  if (now - rosterLastPassAt < (priming ? ROSTER_PRIMING_COOLDOWN_MS : ROSTER_REFRESH_COOLDOWN_MS)) return 0;
   rosterLastPassAt = now;
 
   let budget = ROSTER_REQUEST_CEILING;
@@ -785,8 +815,8 @@ function requestAllTimeRosterRefresh() {
   // 6. The XP sweep. Handles the Personal Leaderboards pass already refreshes
   //    this load are skipped rather than fetched twice.
   const skip = anyPersonalBoardEnabled() ? personalHandles : [];
-  const { targets, cursor } = pickXpRefreshTargets(allTimeRoster, {
-    slice: Math.min(ROSTER_XP_SLICE, budget),
+  const { targets, cursor, wrapped } = pickXpRefreshTargets(allTimeRoster, {
+    slice: Math.min(priming ? ROSTER_XP_PRIMING_SLICE : ROSTER_XP_SLICE, budget),
     skip,
     now,
   });
@@ -794,6 +824,7 @@ function requestAllTimeRosterRefresh() {
     spend(() => requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(handle)}`));
   }
   allTimeRoster.xpCursor = cursor;
+  if (wrapped) allTimeRoster.xpWraps = (rosterNum(allTimeRoster.xpWraps) || 0) + 1;
   saveAllTimeRoster();
 
   // 7. Whatever routine rank work the ceiling still allows.
@@ -819,6 +850,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
   window.__BOOTDEV_ENHANCER_TEST__.allTimeRoster = {
     emptyRoster,
     blankEntry,
+    rosterIsPrimed,
     mergeRosterObservation,
     applyRosterObservation,
     applySeedToRoster,
@@ -839,7 +871,10 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
       ROSTER_MAX_ENTRIES,
       ROSTER_CANDIDATE_MAX,
       ROSTER_XP_SLICE,
+      ROSTER_XP_PRIMING_SLICE,
       ROSTER_RANK_SLICE,
+      ROSTER_PRIMING_COOLDOWN_MS,
+      ROSTER_REFRESH_COOLDOWN_MS,
       ROSTER_REQUEST_CEILING,
       ROSTER_ANCHOR_MAX_AGE_MS,
       RANK_TTL_BOUNDARY_MS,
