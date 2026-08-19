@@ -165,7 +165,7 @@ function isLeaderboardPage() {
 function getHandle(entry) {
   return (
     entry?.handle ||
-    entry?.Handle ||
+    readField(entry, "Handle") ||
     entry?.Username ||
     entry?.UserHandle ||
     entry?.User?.Handle ||
@@ -177,7 +177,7 @@ function getHandle(entry) {
 function getDisplayName(entry, handle) {
   return (
     entry?.name ||
-    entry?.FirstName ||
+    readField(entry, "FirstName") ||
     entry?.Name ||
     entry?.DisplayName ||
     entry?.User?.FirstName ||
@@ -190,7 +190,7 @@ function getDisplayName(entry, handle) {
 function getAvatarUrl(entry) {
   return (
     entry?.avatar ||
-    entry?.ProfileImageURL ||
+    readField(entry, "ProfileImageURL") ||
     entry?.ProfileImageUrl ||
     entry?.ProfilePictureURL ||
     entry?.AvatarURL ||
@@ -230,12 +230,12 @@ function getExplicitFrameUrl(entry) {
 }
 
 function getRoleFrameIndex(entry) {
-  const role = normalizeText(entry?.Role || entry?.User?.Role)
+  const role = normalizeText(readField(entry, "Role") || entry?.User?.Role)
     .toLowerCase()
     .replace(/[\s_-]+/g, "");
   if (ROLE_FRAME_INDEX_BY_ROLE[role] != null) return ROLE_FRAME_INDEX_BY_ROLE[role];
 
-  const level = num(entry?.Level ?? entry?.User?.Level);
+  const level = num(readField(entry, "Level") ?? entry?.User?.Level);
   if (level != null) {
     const idx = Math.floor(level / 10) - 1;
     if (idx < 0) return -1;
@@ -519,7 +519,7 @@ function handleAllTimeLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
   if (!entries.length) return;
   // A renamed XP would render 25 rows of "0 xp" rather than failing outright.
-  reportUsableFields("/v1/leaderboard_xp/alltime", entries, "XP", (e) => e?.XP);
+  reportUsableFields("/v1/leaderboard_xp/alltime", entries, "XP", (e) => readField(e, "XP"));
   cachedAllTimeEntries = entries;
   markBoardSeen("alltime");
   chromeSet(LEADERBOARD_CACHE_KEY, { entries, updatedAt: Date.now() });
@@ -716,8 +716,8 @@ function _applyAllTimeContent(panel, entries) {
       entry: e,
       handle,
       displayName: getDisplayName(e, handle),
-      xp: e.XP ?? e.XPEarned ?? 0,
-      rank: e.Position ?? e.Rank ?? i + 1,
+      xp: readNum(e, "XP") ?? readNum(e, "XPEarned") ?? 0,
+      rank: readField(e, "Position") ?? e.Rank ?? i + 1,
       isCurrentUser: isCurrentLeaderboardEntry(e, currentIdentity),
       href: handle ? `/u/${encodeURIComponent(handle)}` : "#",
     };
@@ -782,7 +782,7 @@ function updateAllTimeSubtitle(panel, entries, currentIdentity) {
 function currentUserAllTimePosition(entries, currentIdentity) {
   if (!normalizeHandle(currentIdentity.handle)) return null;
   const current = entries.find((e) => isCurrentLeaderboardEntry(e, currentIdentity));
-  return current ? num(current.Position ?? current.Rank) : null;
+  return current ? (readNum(current, "Position") ?? num(current.Rank)) : null;
 }
 
 // The platform-wide student count is only in the server-rendered page payload,
@@ -807,7 +807,7 @@ function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdent
   const current = entries.find((entry) => isCurrentLeaderboardEntry(entry, currentIdentity));
   if (!current) return top25;
 
-  const currentRank = num(current.Position ?? current.Rank);
+  const currentRank = readNum(current, "Position") ?? num(current.Rank);
   if (currentRank != null && currentRank > 25) {
     const top24 = entries
       .filter((entry) => !isCurrentLeaderboardEntry(entry, currentIdentity))
@@ -949,7 +949,7 @@ function mapByHandle(entries, ...fields) {
     if (!handle) continue;
     let value = null;
     for (const field of fields) {
-      value = num(entry[field]);
+      value = readNum(entry, field);
       if (value != null) break;
     }
     if (value != null) map[handle] = value;
@@ -962,7 +962,7 @@ function myValueFromEntries(entries, ...fields) {
   const mine = entries.find((entry) => isCurrentLeaderboardEntry(entry, identity));
   if (!mine) return null;
   for (const field of fields) {
-    const value = num(mine[field]);
+    const value = readNum(mine, field);
     if (value != null) return value;
   }
   return null;
@@ -1195,13 +1195,13 @@ function harvestPersonalSnapshots(entries, { backdate = false, asOf = 0 } = {}) 
     const handle = normalizeHandle(getHandle(entry));
     if (!handle || !isPersonalHandle(handle)) continue;
 
-    const total = num(entry?.XP);
+    const total = readNum(entry, "XP");
     if (total == null) continue;
 
     const record = ensurePersonalRecord(handle);
     recordXpSnapshot(record, total, at);
     if (backdate) {
-      const earned = num(entry?.XPEarned);
+      const earned = readNum(entry, "XPEarned");
       if (earned != null && earned >= 0 && earned <= total) {
         recordXpSnapshot(record, total - earned, at - DAY_WINDOW_MS);
       }
@@ -1237,7 +1237,7 @@ function persistDailyBoardLookup(boardKey, entries) {
   const byHandle = {};
   for (const entry of entries) {
     const handle = normalizeHandle(getHandle(entry));
-    const earned = num(entry?.XPEarned);
+    const earned = readNum(entry, "XPEarned");
     if (handle && earned != null) byHandle[handle] = earned;
   }
   persistedDailyBoards[boardKey] = { byHandle, seenAt: Date.now() };
@@ -1246,7 +1246,7 @@ function persistDailyBoardLookup(boardKey, entries) {
 
 function handleDailyXpLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
-  reportUsableFields("/v1/leaderboard_xp/day", entries, "XPEarned", (e) => e?.XPEarned);
+  reportUsableFields("/v1/leaderboard_xp/day", entries, "XPEarned", (e) => readField(e, "XPEarned"));
   cachedDailyEntries = entries;
   markBoardSeen("daily");
   persistDailyBoardLookup("daily", entries);
@@ -1259,7 +1259,7 @@ function handleKarmaLeaderboard(json) {
   if (!entries.length) return;
   // Karma has no second source, so a rename here shows up as a permanent
   // "Not enough data yet" — indistinguishable from a normal cold start.
-  reportUsableFields("/v1/leaderboard_karma/alltime", entries, "Karma", (e) => e?.Karma);
+  reportUsableFields("/v1/leaderboard_karma/alltime", entries, "Karma", (e) => readField(e, "Karma"));
   cachedKarmaEntries = entries;
   markBoardSeen("karma");
   harvestPersonalKarmaSnapshots(entries);
@@ -1288,7 +1288,7 @@ async function refreshCurrentUserKarma() {
   );
   if (result.status < 200 || result.status >= 300) return;
   const data = result.json?.data ?? result.json;
-  recordCurrentUserKarma(data?.Karma);
+  recordCurrentUserKarma(readField(data, "Karma"));
 }
 
 // Harvest karma snapshots for tracked users from the all-time karma board.
@@ -1304,7 +1304,7 @@ function harvestPersonalKarmaSnapshots(entries, { asOf = 0 } = {}) {
     const handle = normalizeHandle(getHandle(entry));
     if (!handle || !isPersonalHandle(handle)) continue;
 
-    const total = num(entry?.Karma);
+    const total = readNum(entry, "Karma");
     if (total == null) continue;
 
     const record = ensurePersonalRecord(handle);
@@ -1340,28 +1340,28 @@ function handleLeagueLeaderboard(json) {
 function updatePersonalUserData(username, isStats, json) {
   const requestedHandle = normalizeHandle(username);
   const data = json?.data ?? json;
-  const responseHandle = normalizeHandle(data?.Handle);
+  const responseHandle = normalizeHandle(readField(data, "Handle"));
   // My own stats response feeds the current-user karma series even when I'm not
   // a tracked handle. Both branches route through here, but only /stats carries
   // a karma field (the public profile has none), so the profile branch is a
   // harmless no-op — recordCurrentUserKarma ignores a non-numeric value.
   if ((responseHandle || requestedHandle) === currentUserHandle) {
-    recordCurrentUserKarma(data?.Karma);
+    recordCurrentUserKarma(readField(data, "Karma"));
   }
   const handle = isPersonalHandle(responseHandle) ? responseHandle : requestedHandle;
   if (!handle || !isPersonalHandle(handle)) return;
 
   const record = ensurePersonalRecord(handle);
-  record.handle = data?.Handle || record.handle || handle;
+  record.handle = readField(data, "Handle") || record.handle || handle;
   if (isStats) {
     record.stats = data;
-    recordKarmaSnapshot(record, data?.Karma);
+    recordKarmaSnapshot(record, readField(data, "Karma"));
   } else {
     // No karma snapshot here: the public profile response has no karma field
     // (see getPersonalValue). A tracked user's karma series advances on /stats
     // refreshes and karma-board sightings only.
     record.profile = data;
-    recordXpSnapshot(record, data?.XP);
+    recordXpSnapshot(record, readField(data, "XP"));
   }
   record.updatedAt = Date.now();
 
@@ -1714,7 +1714,7 @@ async function addPersonalHandle(handle) {
     return;
   }
 
-  const canonical = normalizeHandle(profile.Handle || normalized);
+  const canonical = normalizeHandle(readField(profile, "Handle") || normalized);
   if (!isValidHandle(canonical)) {
     personalPendingHandle = null;
     setPersonalFeedback("Invalid username", "error");
@@ -1728,10 +1728,10 @@ async function addPersonalHandle(handle) {
 
   personalHandles = uniqueHandles([...personalHandles, canonical]);
   const record = ensurePersonalRecord(canonical);
-  record.handle = profile.Handle || canonical;
+  record.handle = readField(profile, "Handle") || canonical;
   record.profile = profile;
   record.profileError = null;
-  recordXpSnapshot(record, profile.XP);
+  recordXpSnapshot(record, readField(profile, "XP"));
   // No karma here — the profile response has none; refreshPersonalStats below
   // is what opens the karma series.
   // The new handle may already sit on a board received earlier this session
@@ -1779,8 +1779,8 @@ function getPersonalRows(kind) {
         name: getDisplayName(profile, getPersonalDisplayHandle(handle)),
         avatar: getAvatarUrl(profile),
         Handle: record.handle || handle,
-        Level: profile.Level,
-        Role: profile.Role,
+        Level: readField(profile, "Level"),
+        Role: readField(profile, "Role"),
         value: view ? view.value : getPersonalValue(record, kind),
         note: view?.note || "",
         tooltip: view?.tooltip || "",
@@ -1797,8 +1797,8 @@ function getPersonalValue(record, kind) {
   // Karma comes from /stats only. The public profile response carries no karma
   // field in any casing (full key list checked 2026-07-31), so reading it from
   // record.profile was a fallback that could never fire.
-  if (kind === "karma") return num(record.stats?.Karma);
-  return num(record.profile?.XP);
+  if (kind === "karma") return readNum(record.stats, "Karma");
+  return readNum(record.profile, "XP");
 }
 
 // ---------------------------------------------------------------------------
@@ -1857,7 +1857,7 @@ function dailyBoardXpFor(record) {
     if (boardSeenAt[key]) {
       for (const entry of entries) {
         if (normalizeHandle(getHandle(entry)) === handle) {
-          const earned = num(entry?.XPEarned);
+          const earned = readNum(entry, "XPEarned");
           if (earned != null) return earned;
         }
       }
@@ -1984,10 +1984,10 @@ async function refreshPersonalHandle(handle) {
   if (!profile || !isPersonalHandle(normalized)) return;
 
   const record = ensurePersonalRecord(normalized);
-  record.handle = profile.Handle || record.handle || normalized;
+  record.handle = readField(profile, "Handle") || record.handle || normalized;
   record.profile = profile;
   record.profileError = null;
-  recordXpSnapshot(record, profile.XP);
+  recordXpSnapshot(record, readField(profile, "XP"));
   // Karma comes from the /stats refresh below, not from the profile response.
   savePersonalCache();
   schedulePersonalLeaderboardRender();
@@ -2004,7 +2004,7 @@ async function refreshPersonalStats(handle) {
   if (result.status >= 200 && result.status < 300) {
     const record = ensurePersonalRecord(normalized);
     record.stats = result.json?.data ?? result.json;
-    recordKarmaSnapshot(record, record.stats?.Karma);
+    recordKarmaSnapshot(record, readField(record.stats, "Karma"));
     record.statsError = null;
     record.updatedAt = Date.now();
     savePersonalCache();
@@ -2065,9 +2065,11 @@ function handlePersonalHeatmap(username, json) {
 // is ~350 entries per user and everything else it says is derivable again.
 function distillHeatmap(json) {
   const data = json?.data ?? json;
-  const calendar = Array.isArray(data?.Calendar) ? data.Calendar : null;
+  const calendarField = readField(data, "Calendar");
+  const calendar = Array.isArray(calendarField) ? calendarField : null;
   if (!calendar) return null;
-  const commits = Array.isArray(data?.GithubCommits) ? data.GithubCommits : [];
+  const commitsField = readField(data, "GithubCommits");
+  const commits = Array.isArray(commitsField) ? commitsField : [];
 
   // Dates arrive as "YYYY-MM-DDT00:00:00Z" but are bucketed by the timezone we
   // requested (the viewer's), so the YYYY-MM-DD prefix compares against the
@@ -2077,8 +2079,8 @@ function distillHeatmap(json) {
   let lessonsToday = 0;
   let readable = 0; // entries that yielded BOTH a date and a numeric count
   for (const entry of calendar) {
-    const key = String(entry?.Date || "").slice(0, 10);
-    const count = num(entry?.Count);
+    const key = String(readField(entry, "Date") || "").slice(0, 10);
+    const count = readNum(entry, "Count");
     if (key && count != null) readable += 1;
     if (!key || !count) continue;
     activeDays.add(key);
@@ -2099,8 +2101,8 @@ function distillHeatmap(json) {
     return null;
   }
   for (const entry of commits) {
-    const key = String(entry?.Date || "").slice(0, 10);
-    if (key && num(entry?.Count)) activeDays.add(key);
+    const key = String(readField(entry, "Date") || "").slice(0, 10);
+    if (key && readNum(entry, "Count")) activeDays.add(key);
   }
 
   // Streak = consecutive active days ending today, or ending yesterday when
@@ -2151,7 +2153,7 @@ async function loadPublicUserProfile(handle, options = {}) {
   }
 
   const profile = result.json?.data ?? result.json;
-  if (!isPlainObject(profile) || !isValidHandle(profile.Handle || normalized)) {
+  if (!isPlainObject(profile) || !isValidHandle(readField(profile, "Handle") || normalized)) {
     setPersonalFeedback("Invalid username", "error");
     return null;
   }
