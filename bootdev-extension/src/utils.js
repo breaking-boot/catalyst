@@ -106,11 +106,17 @@ function isPlainObject(value) {
 // never gated on the shape of the whole response: a mixed response (some fields
 // flipped, some not) is the case that slips past a whole-object gate and freezes
 // a value while everything still looks healthy. PascalCase wins when both are
-// present. Used by boss.js (boss_events_progress) and nextLesson.js
-// (dashboard_content); check_boss_normalizer.mjs pins the behavior.
+// present, but only when it actually carries a value: a legacy key left behind
+// as an explicit null must not beat the live camelCase one, because null reads
+// as 0 through num() and a fabricated 0 is harder to notice than a blank. Other
+// falsy values (0, false, "") are real answers and still win. Used by boss.js
+// (boss_events_progress), nextLesson.js (dashboard_content), submitConfirm.js
+// (users/lessons) and the leaderboard readers below;
+// check_boss_normalizer.mjs pins the behavior.
 function pickField(obj, pascal, camel) {
   if (!isPlainObject(obj)) return undefined;
-  return obj[pascal] !== undefined ? obj[pascal] : obj[camel];
+  const value = obj[pascal] != null ? obj[pascal] : obj[camel];
+  return value == null ? undefined : value;
 }
 
 // The camelCase spelling of every API field Catalyst reads off a leaderboard

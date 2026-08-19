@@ -168,6 +168,19 @@ check("pickField reads a legitimate false", pickField({ isUnlocked: false }, "Is
 check("pickField on a non-object", pickField(null, "A", "a"), undefined);
 check("pickField with neither spelling", pickField({ other: 1 }, "A", "a"), undefined);
 
+// A legacy key left behind as an explicit null must not beat the live
+// camelCase one. null reads as 0 through num(), so letting it win would freeze
+// the aura at a fabricated 0 while the real value sat in the next key along —
+// the plausible-wrong-value failure this file exists to catch. Falsy values
+// that are real answers (0, false, "") still win.
+check("pickField skips a null PascalCase key", pickField({ XPBonus: null, xpBonus: 32 }, "XPBonus", "xpBonus"), 32);
+check("pickField skips a null camelCase key", pickField({ xpBonus: null }, "XPBonus", "xpBonus"), undefined);
+check("pickField with only a null PascalCase key", pickField({ XPBonus: null }, "XPBonus", "xpBonus"), undefined);
+check("pickField still prefers a PascalCase 0 over camelCase", pickField({ XPBonus: 0, xpBonus: 32 }, "XPBonus", "xpBonus"), 0);
+check("pickField still prefers a PascalCase false", pickField({ IsUnlocked: false, isUnlocked: true }, "IsUnlocked", "isUnlocked"), false);
+check("pickField still prefers a PascalCase empty string", pickField({ Name: "", name: "x" }, "Name", "name"), "");
+check("a null-only key yields null through num(), not 0", utilsSandbox.num(pickField({ XPBonus: null }, "XPBonus", "xpBonus")), null);
+
 // --- the S3 regression: a MIXED response must still normalize ----------------
 // The old gate was `if (json.Event) return json` — with Event present but the
 // scalars renamed, XPBonus read undefined, the `!= null` guard in
