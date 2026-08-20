@@ -457,14 +457,18 @@ async function loadCurrentUserHandle() {
   const karmaStored = await chromeGet(CURRENT_USER_KARMA_KEY);
   if (enhancerStopped) return;
   currentUserHandle = normalizeHandle(stored.handle || stored);
-  // The karma series is only valid for the handle it was recorded for.
-  currentUserKarmaSnapshots =
+  // The karma series is only valid for the handle it was recorded for, and is
+  // repaired on the way in — see dropFabricatedZeros. The repaired copy is
+  // persisted by the next observation rather than written back here, so a load
+  // stays a load.
+  currentUserKarmaSnapshots = dropFabricatedZeros(
     currentUserHandle &&
     isPlainObject(karmaStored) &&
     normalizeHandle(karmaStored.handle) === currentUserHandle &&
     Array.isArray(karmaStored.snapshots)
       ? karmaStored.snapshots
-      : [];
+      : []
+  );
 }
 
 async function rememberCurrentUserHandle(handle) {
@@ -2285,6 +2289,16 @@ function recordKarmaSnapshot(record, karma, atMs = Date.now()) {
 // runs, and caps length. Returns the new array, or null when `value` isn't a
 // usable total (caller keeps its existing series).
 function updateSnapshotSeries(existing, value, atMs) {
+  // A nullish observation means "not observed", never "observed as zero".
+  // num(null) is 0 — the documented trap in this codebase — so without this
+  // guard a caller that legitimately found nothing writes a real 0 point.
+  // myValueFromEntries returns null when I am not on a board, and being absent
+  // from the top-25 karma board means "below 25th", not "zero karma". That
+  // fabricated 0 then anchors the 24-hour window, and the next genuine reading
+  // is reported as a same-day GAIN of the entire lifetime total: the Daily
+  // Karma comparison read the viewer's whole all-time karma (measured
+  // 2026-08-20, present since v0.14.1).
+  if (value == null) return null;
   const total = num(value);
   if (total == null || total < 0) return null;
 
@@ -2320,6 +2334,21 @@ function updateSnapshotSeries(existing, value, atMs) {
     snaps = snaps.filter((s, i, arr) => i === 0 || i === arr.length - 1 || i % 2 === 1);
   }
   return snaps;
+}
+
+// One-off repair for series poisoned by the num(null) trap before
+// updateSnapshotSeries guarded against it. A running total of 0 sitting beside
+// a positive total in the same 24-hour window would mean the user earned their
+// entire lifetime karma today; in reality it is a fabricated zero. Dropping it
+// costs at most one measurement window, which rebuilds within ~30 minutes.
+//
+// An all-zero series is left alone, so a genuinely zero-karma user still gets
+// an honest measured "0 karma today" rather than being pushed to "unavailable".
+// Idempotent, so it can run on every load and needs no migration flag.
+function dropFabricatedZeros(snapshots) {
+  const snaps = Array.isArray(snapshots) ? snapshots : [];
+  if (!snaps.some((s) => Array.isArray(s) && num(s[1]) > 0)) return snaps;
+  return snaps.filter((s) => Array.isArray(s) && num(s[1]) !== 0);
 }
 
 function ensurePersonalRecord(handle) {
