@@ -556,6 +556,18 @@ function handleAllTimeLeaderboard(json) {
 // My own lifetime XP, observed live. Fed by any response that reveals it: my
 // own profile, a league board carrying me, or a restored all-time board.
 function recordCurrentUserLiveXp(xp) {
+  // A nullish argument means "this response did not contain me", never "my XP
+  // is zero". num(null) is 0 — the same trap that made Daily Karma compare
+  // against a fabricated zero — and EVERY caller here can legitimately pass
+  // null: myValueFromEntries returns null when I am not on that board (I am
+  // usually absent from at least one of the league, week and month boards), and
+  // readNum returns null when the field is missing.
+  //
+  // The symptom was distinctive: my own XP read 0, so every All-Time comparison
+  // rendered as minus that learner's entire lifetime total, including for the
+  // 23 people I am ahead of. It self-healed as soon as any response containing
+  // me arrived, which is what made it look intermittent rather than broken.
+  if (xp == null) return;
   const value = num(xp);
   if (value == null) return;
   currentUserLiveXp = value;
@@ -876,8 +888,16 @@ function updateAllTimeSubtitle(panel, board) {
     // Says what the board actually is. Boot.dev publishes no positions any more,
     // so these are Catalyst's own observations ordered by lifetime XP — the
     // panel must not imply it is reproducing a Boot.dev ranking.
+    //
+    // Deliberately NO count. The roster size is not the number of learners
+    // Catalyst has observed: simply opening this page shows it a hundred-odd
+    // people across the native boards, and the roster only retains the highest
+    // XP among them. Printing 28 would understate the observation and overstate
+    // its precision at the same time. Counting truthfully would mean keeping a
+    // set of every handle ever seen, which is storage spent to print a number
+    // nobody needs.
     setTextIfChanged(coverageEl,
-      `Ordered by lifetime XP across ${board.observed} learners Catalyst has observed · updated as you browse`);
+      "Ordered by lifetime XP among the top learners Catalyst has observed · updated as you browse");
   }
 }
 

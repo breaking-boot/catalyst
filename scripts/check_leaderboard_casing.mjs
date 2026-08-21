@@ -372,6 +372,37 @@ if (existsSync(PASCAL_CAPTURE)) {
     admit({ handle: "nobody", xp: 10, firstName: "N", role: "Sage", level: 60 }), false);
 }
 
+// --- values Catalyst must never fabricate ------------------------------------
+// num(null) is 0. Every "record an observed total" helper therefore has to
+// reject a nullish argument BEFORE num() sees it, or a response that simply did
+// not contain the viewer gets written as a real zero. This has now bitten twice:
+// the Daily Karma baseline (comparing against a fabricated 0, so every row read
+// as minus its whole karma total) and the All-Time XP baseline (same shape, so
+// every comparison read as minus that learner's entire lifetime XP).
+
+{
+  const myXp = () => runInSandbox("currentUserLiveXp");
+  runInSandbox('currentUserHandle = "a-fleming"; currentUserLiveXp = null;');
+
+  // Every one of these callers can legitimately produce null: the viewer is
+  // routinely absent from the league, week and month boards.
+  runInSandbox('recordCurrentUserLiveXp(myValueFromEntries([{ handle: "someone-else", xp: 500 }], "XP"));');
+  check("a board without me does not fabricate an XP of 0", myXp(), null);
+
+  runInSandbox('recordCurrentUserLiveXp(readNum({ karma: 5 }, "XP"));');
+  check("a response with no XP field does not fabricate 0", myXp(), null);
+
+  runInSandbox("recordCurrentUserLiveXp(null); recordCurrentUserLiveXp(undefined);");
+  check("explicit nullish is ignored", myXp(), null);
+
+  // A real reading still lands, including a genuine zero.
+  runInSandbox('recordCurrentUserLiveXp(myValueFromEntries([{ handle: "a-fleming", xp: 1700011 }], "XP"));');
+  check("a board containing me records my real XP", myXp(), 1700011);
+
+  runInSandbox("currentUserLiveXp = null; recordCurrentUserLiveXp(0);");
+  check("an explicit numeric 0 is still recorded", myXp(), 0);
+}
+
 // --- report ------------------------------------------------------------------
 
 if (failures) {
