@@ -69,16 +69,7 @@ function emptyRoster() {
 // A replacement seed in a later release does NOT un-prime the roster: that seed
 // is fresh at release time, so there is nothing to catch up on.
 function rosterIsPrimed(roster) {
-  return (rosterNum(roster?.xpWraps) || 0) >= 1;
-}
-
-// num(null) is 0 — a documented trap in this codebase (it already made the boss
-// panel's alert floor unreachable in v0.14.0). Here null means "not known yet",
-// and reading it as 0 put unranked candidates at rank 0 and dropped the
-// admission floor to zero XP, which would have admitted the entire karma board.
-// Every rank / XP / level read in this file goes through this instead.
-function rosterNum(value) {
-  return value == null ? null : num(value);
+  return (observedNum(roster?.xpWraps) || 0) >= 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -113,9 +104,8 @@ function blankEntry(handle) {
 // XP is written EXACTLY as observed, including a decrease. Boot.dev staff can
 // manually reduce XP where they believe it was cheated (rare; never observed).
 // Do NOT add a Math.max guard here: it would turn that rare correction into a
-// permanently wrong row, which is far worse than the one spurious overtake a
-// decrease can cause — and that self-corrects through the rank check it
-// triggers.
+// permanently wrong row. Since ordering is now derived from XP alone, a
+// reduction simply re-sorts the board, which is the correct outcome.
 function mergeRosterObservation(existing, observation) {
   const handle = normalizeHandle(observation?.handle || existing?.Handle);
   if (!handle) return existing || null;
@@ -123,16 +113,16 @@ function mergeRosterObservation(existing, observation) {
   const entry = isPlainObject(existing) ? { ...existing } : blankEntry(handle);
   entry.Handle = observation?.Handle || entry.Handle || handle;
 
-  const rankAt = rosterNum(observation?.rankAt) || 0;
-  const rank = rosterNum(observation?.rank);
-  if (rank != null && rankAt >= (rosterNum(entry.rankAt) || 0)) {
+  const rankAt = observedNum(observation?.rankAt) || 0;
+  const rank = observedNum(observation?.rank);
+  if (rank != null && rankAt >= (observedNum(entry.rankAt) || 0)) {
     entry.rank = rank;
     entry.rankAt = rankAt;
   }
 
-  const profileAt = rosterNum(observation?.profileAt) || 0;
-  if (profileAt >= (rosterNum(entry.profileAt) || 0)) {
-    const xp = rosterNum(observation?.XP);
+  const profileAt = observedNum(observation?.profileAt) || 0;
+  if (profileAt >= (observedNum(entry.profileAt) || 0)) {
+    const xp = observedNum(observation?.XP);
     if (xp != null) {
       entry.XP = xp;
       entry.profileAt = profileAt;
@@ -140,7 +130,7 @@ function mergeRosterObservation(existing, observation) {
     for (const field of ["FirstName", "LastName", "Role", "ProfileImageURL"]) {
       if (observation?.[field] != null && observation[field] !== "") entry[field] = observation[field];
     }
-    const level = rosterNum(observation?.Level);
+    const level = observedNum(observation?.Level);
     if (level != null) entry.Level = level;
   }
 
@@ -172,7 +162,7 @@ function applyRosterObservation(roster, observation) {
   return true;
 }
 
-// Keep the store bounded. Ranked entries always outrank candidates for a slot,
+// Keep the store bounded. Ranked entries always outranked candidates for a slot,
 // and among candidates the highest XP wins — those are the ones most likely to
 // actually be in the window.
 // Keep the highest-XP entries. Ranks no longer exist to prune by, and XP is
@@ -182,7 +172,7 @@ function pruneRoster(roster) {
   const remaining = Object.entries(roster.entries);
   if (remaining.length <= ROSTER_MAX_ENTRIES) return;
   remaining
-    .sort((a, b) => (rosterNum(b[1].XP) ?? -1) - (rosterNum(a[1].XP) ?? -1))
+    .sort((a, b) => (observedNum(b[1].XP) ?? -1) - (observedNum(a[1].XP) ?? -1))
     .slice(ROSTER_MAX_ENTRIES)
     .forEach(([handle]) => delete roster.entries[handle]);
 }
@@ -201,7 +191,7 @@ function applySeedToRoster(roster, seed = typeof ALLTIME_SEED === "undefined" ? 
   let changed = false;
   for (const raw of seed.entries) {
     const handle = normalizeHandle(raw?.handle);
-    if (!isValidHandle(handle) || rosterNum(raw?.rank) == null) continue;
+    if (!isValidHandle(handle) || observedNum(raw?.rank) == null) continue;
     // A seed exported from a live roster (diagnostics/14_roster_export.js)
     // carries the date each rank was actually confirmed, which is older than the
     // export. Honour it — claiming the export date would silently make a
@@ -211,13 +201,13 @@ function applySeedToRoster(roster, seed = typeof ALLTIME_SEED === "undefined" ? 
     changed = applyRosterObservation(roster, {
       handle,
       Handle: raw.handle,
-      rank: rosterNum(raw.rank),
+      rank: observedNum(raw.rank),
       rankAt: Number.isFinite(rankAt) ? rankAt : observedAt,
-      XP: rosterNum(raw.xp),
+      XP: observedNum(raw.xp),
       FirstName: raw.firstName,
       LastName: raw.lastName,
       Role: raw.role,
-      Level: rosterNum(raw.level),
+      Level: observedNum(raw.level),
       ProfileImageURL: raw.profileImageURL,
       profileAt: observedAt,
       source: "seed",
@@ -248,7 +238,7 @@ function applySeedToRoster(roster, seed = typeof ALLTIME_SEED === "undefined" ? 
 function readAlltimeRank(json) {
   const data = json?.data ?? json;
   if (!isPlainObject(data)) return null;
-  return rosterNum(readField(data, "LeaderboardXPRankAlltime"));
+  return observedNum(readField(data, "LeaderboardXPRankAlltime"));
 }
 
 // What replaced it: an integer band, lower is better. Far too coarse to order
@@ -259,10 +249,10 @@ function readAlltimeRank(json) {
 function readAlltimePercentile(json) {
   const data = json?.data ?? json;
   if (!isPlainObject(data)) return null;
-  const direct = rosterNum(readField(data, "LeaderboardXPPercentileAlltime"));
+  const direct = observedNum(readField(data, "LeaderboardXPPercentileAlltime"));
   if (direct != null) return direct;
   for (const [key, value] of Object.entries(data)) {
-    if (key.toLowerCase() === "leaderboardxppercentilealltime") return rosterNum(value);
+    if (key.toLowerCase() === "leaderboardxppercentilealltime") return observedNum(value);
   }
   return null;
 }
@@ -278,7 +268,7 @@ function readRegisteredUsers(json) {
   const data = json?.data ?? json;
   if (!isPlainObject(data)) return null;
   for (const [key, value] of Object.entries(data)) {
-    if (key.toLowerCase() === "registeredusersalltime") return rosterNum(value);
+    if (key.toLowerCase() === "registeredusersalltime") return observedNum(value);
   }
   return null;
 }
@@ -298,7 +288,7 @@ function readRegisteredUsers(json) {
 function admissionThresholdXp(roster) {
   let floor = null;
   for (const entry of Object.values(roster?.entries || {})) {
-    const xp = rosterNum(entry.XP);
+    const xp = observedNum(entry.XP);
     if (xp == null) continue;
     if (floor == null || xp < floor) floor = xp;
   }
@@ -314,7 +304,7 @@ function admissionThresholdXp(roster) {
 function rosterCoverage(roster) {
   let observed = 0;
   for (const entry of Object.values(roster?.entries || {})) {
-    if (rosterNum(entry.XP) != null) observed += 1;
+    if (observedNum(entry.XP) != null) observed += 1;
   }
   return observed;
 }
@@ -334,7 +324,7 @@ function rosterCoverage(roster) {
 // count catches. Short by n means exactly n unknowns, and the board falls back
 // to per-entry stored ranks with gaps.
 function deriveBoardPositions(roster) {
-  const entries = Object.values(roster?.entries || {}).filter((e) => rosterNum(e.XP) != null);
+  const entries = Object.values(roster?.entries || {}).filter((e) => observedNum(e.XP) != null);
   return {
     positions: entries
       .sort(compareByObservedXp)
@@ -349,7 +339,7 @@ function deriveBoardPositions(roster) {
 // assigning arbitrary ordinals, so inventing a stable-but-meaningless order is
 // the best available behaviour: at least it does not flicker.
 function compareByObservedXp(a, b) {
-  const diff = rosterNum(b.XP) - rosterNum(a.XP);
+  const diff = observedNum(b.XP) - observedNum(a.XP);
   if (diff) return diff;
   return normalizeHandle(a.Handle).localeCompare(normalizeHandle(b.Handle));
 }
@@ -369,7 +359,7 @@ function buildAllTimeBoardRows(roster, selfHandle = "") {
   const selfNormalized = normalizeHandle(selfHandle || roster?.self?.handle);
   const onBoard = rows.some((r) => r.isCurrentUser);
   const selfEntry = selfNormalized ? roster?.entries?.[selfNormalized] : null;
-  if (selfNormalized && !onBoard && selfEntry && rosterNum(selfEntry.XP) != null) {
+  if (selfNormalized && !onBoard && selfEntry && observedNum(selfEntry.XP) != null) {
     rows.push({ ...rosterRow(selfEntry, null, selfNormalized), outsideBoard: true });
   }
 
@@ -384,9 +374,9 @@ function rosterRow(entry, position, selfHandle) {
     position,
     entry,
     handle,
-    xp: rosterNum(entry.XP),
-    rankAt: rosterNum(entry.rankAt) || 0,
-    profileAt: rosterNum(entry.profileAt) || 0,
+    xp: observedNum(entry.XP),
+    rankAt: observedNum(entry.rankAt) || 0,
+    profileAt: observedNum(entry.profileAt) || 0,
     isCurrentUser: Boolean(handle) && handle === normalizeHandle(selfHandle),
     href: handle ? `/u/${encodeURIComponent(handle)}` : "",
   };
@@ -407,7 +397,7 @@ function pickXpRefreshTargets(roster, { slice = ROSTER_XP_SLICE, skip = [], now 
   if (!ordered.length) return { targets: [], cursor: 0, wrapped: false };
 
   const skipSet = new Set(skip.map(normalizeHandle));
-  const start = clamp(rosterNum(roster.xpCursor) || 0, 0, Math.max(0, ordered.length - 1));
+  const start = clamp(observedNum(roster.xpCursor) || 0, 0, Math.max(0, ordered.length - 1));
   const targets = [];
   let cursor = start;
   let wrapped = false;
@@ -421,7 +411,7 @@ function pickXpRefreshTargets(roster, { slice = ROSTER_XP_SLICE, skip = [], now 
     const handle = normalizeHandle(entry.Handle);
     if (!handle || skipSet.has(handle)) continue;
     // Already covered by a sighting moments ago — costs a slot nothing.
-    if (now - (rosterNum(entry.profileAt) || 0) < ROSTER_RECENT_SIGHTING_MS) continue;
+    if (now - (observedNum(entry.profileAt) || 0) < ROSTER_RECENT_SIGHTING_MS) continue;
     targets.push(handle);
   }
 
@@ -454,14 +444,14 @@ async function loadAllTimeRoster() {
 function normalizeStoredRoster(stored) {
   const roster = emptyRoster();
   if (!isPlainObject(stored)) return roster;
-  roster.updatedAt = rosterNum(stored.updatedAt) || 0;
-  roster.xpCursor = rosterNum(stored.xpCursor) || 0;
-  roster.xpWraps = rosterNum(stored.xpWraps) || 0;
+  roster.updatedAt = observedNum(stored.updatedAt) || 0;
+  roster.xpCursor = observedNum(stored.xpCursor) || 0;
+  roster.xpWraps = observedNum(stored.xpWraps) || 0;
   if (isPlainObject(stored.self)) {
     roster.self = {
       handle: normalizeHandle(stored.self.handle),
-      rank: rosterNum(stored.self.rank),
-      rankAt: rosterNum(stored.self.rankAt) || 0,
+      rank: observedNum(stored.self.rank),
+      rankAt: observedNum(stored.self.rankAt) || 0,
     };
   }
   if (!isPlainObject(stored.entries)) return roster;
@@ -526,7 +516,7 @@ function noteAllTimeObservation(username, isStats, json) {
 // an unknown one that clears the admission floor. The overtake check runs here
 // because this is where a value read NOW is available to compare against.
 function noteAllTimeProfile(handle, data, now = Date.now()) {
-  const xp = rosterNum(readField(data, "XP"));
+  const xp = observedNum(readField(data, "XP"));
   if (xp == null) return false;
 
   const known = Boolean(allTimeRoster.entries[handle]);
@@ -542,7 +532,7 @@ function noteAllTimeProfile(handle, data, now = Date.now()) {
     FirstName: readField(data, "FirstName"),
     LastName: readField(data, "LastName"),
     Role: readField(data, "Role"),
-    Level: rosterNum(readField(data, "Level")),
+    Level: observedNum(readField(data, "Level")),
     ProfileImageURL: getAvatarUrl(data),
     profileAt: now,
     candidate: !known,
@@ -618,8 +608,8 @@ async function loadLeaderboardStats() {
   const stored = await chromeGet(LEADERBOARD_STATS_KEY);
   if (enhancerStopped || !isPlainObject(stored)) return;
   leaderboardStats = {
-    registeredUsers: rosterNum(stored.registeredUsers),
-    updatedAt: rosterNum(stored.updatedAt) || 0,
+    registeredUsers: observedNum(stored.registeredUsers),
+    updatedAt: observedNum(stored.updatedAt) || 0,
   };
 }
 
@@ -640,7 +630,7 @@ function handleLeaderboardStats(json) {
 }
 
 function getTotalStudents() {
-  return rosterNum(leaderboardStats.registeredUsers);
+  return observedNum(leaderboardStats.registeredUsers);
 }
 
 // ---------------------------------------------------------------------------
@@ -695,7 +685,7 @@ function requestAllTimeRosterRefresh() {
   }
 
   // 3. The student count, which the subtitle's percentile is stated against.
-  if (now - (rosterNum(leaderboardStats.updatedAt) || 0) >= LEADERBOARD_STATS_TTL_MS) {
+  if (now - (observedNum(leaderboardStats.updatedAt) || 0) >= LEADERBOARD_STATS_TTL_MS) {
     spend(() => requestApiJson(LEADERBOARD_STATS_URL));
   }
 
@@ -712,7 +702,7 @@ function requestAllTimeRosterRefresh() {
     spend(() => requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(handle)}`));
   }
   allTimeRoster.xpCursor = cursor;
-  if (wrapped) allTimeRoster.xpWraps = (rosterNum(allTimeRoster.xpWraps) || 0) + 1;
+  if (wrapped) allTimeRoster.xpWraps = (observedNum(allTimeRoster.xpWraps) || 0) + 1;
   saveAllTimeRoster();
 
   return ROSTER_REQUEST_CEILING - budget;

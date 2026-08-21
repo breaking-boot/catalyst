@@ -13,6 +13,20 @@ function num(v) {
   const n = Number(v);
   return Number.isFinite(n) ? n : null;
 }
+// num() coerces, which means num(null) is 0 (Number(null) === 0). That turns a
+// value that simply WAS NOT OBSERVED into a real zero, and it has caused three
+// separate defects in this codebase: the boss alert floor becoming unreachable
+// (v0.14.0), the Daily Karma baseline reading as the viewer's entire all-time
+// karma, and the All-Time XP baseline reading as 0 so every comparison rendered
+// as minus that learner's whole lifetime total.
+//
+// Use this instead of num() at every boundary where the value might be absent —
+// anywhere a "record an observed total" helper takes a caller's lookup result.
+// It keeps "not observed" (null) distinct from "observed as zero" (0), which is
+// a distinction every one of those bugs collapsed.
+function observedNum(v) {
+  return v == null ? null : num(v);
+}
 function pct(v) {
   const n = num(v);
   if (n == null) return null;

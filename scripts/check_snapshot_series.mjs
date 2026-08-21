@@ -50,7 +50,7 @@ for (const file of ["utils.js", "alltime-seed.js", "allTimeRoster.js", "leaderbo
   vm.runInContext(readFileSync(url, "utf8"), sandbox, { filename: fileURLToPath(url) });
 }
 
-const { updateSnapshotSeries, measuredDailyKarma, dropFabricatedZeros, num } = sandbox;
+const { updateSnapshotSeries, measuredDailyKarma, dropFabricatedZeros, num, observedNum } = sandbox;
 for (const [name, fn] of Object.entries({ updateSnapshotSeries, measuredDailyKarma, dropFabricatedZeros })) {
   if (typeof fn !== "function") {
     console.error(`FAIL: leaderboard.js did not define ${name}`);
@@ -78,6 +78,15 @@ const NOW = Date.now();
 
 check("num(null) is still 0 — the trap this guard exists for", num(null), 0);
 check("num(undefined) is null", num(undefined), null);
+
+// observedNum is the shared answer to that trap: "not observed" stays null.
+// Three separate defects came from collapsing it into 0, so it is pinned here
+// rather than left as a convention each call site re-implements.
+check("observedNum(null) is null", observedNum(null), null);
+check("observedNum(undefined) is null", observedNum(undefined), null);
+check("observedNum keeps a real zero", observedNum(0), 0);
+check("observedNum keeps a real number", observedNum(1700011), 1700011);
+check("observedNum rejects a non-number", observedNum("nope"), null);
 
 // --- 2. a nullish observation must write nothing ------------------------------
 

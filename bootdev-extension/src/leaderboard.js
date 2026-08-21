@@ -567,8 +567,7 @@ function recordCurrentUserLiveXp(xp) {
   // rendered as minus that learner's entire lifetime total, including for the
   // 23 people I am ahead of. It self-healed as soon as any response containing
   // me arrived, which is what made it look intermittent rather than broken.
-  if (xp == null) return;
-  const value = num(xp);
+  const value = observedNum(xp);
   if (value == null) return;
   currentUserLiveXp = value;
 }
@@ -2306,8 +2305,7 @@ function updateSnapshotSeries(existing, value, atMs) {
   // is reported as a same-day GAIN of the entire lifetime total: the Daily
   // Karma comparison read the viewer's whole all-time karma (measured
   // 2026-08-20, present since v0.14.1).
-  if (value == null) return null;
-  const total = num(value);
+  const total = observedNum(value);
   if (total == null || total < 0) return null;
 
   const cutoff = Date.now() - SNAPSHOT_MAX_AGE_MS;
