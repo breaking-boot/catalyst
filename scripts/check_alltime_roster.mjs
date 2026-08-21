@@ -14,10 +14,10 @@
 //   1. Entries NEVER expire. A TTL schedules a refresh; it must never turn a
 //      known learner into an unknown, or a board left alone for a month decays
 //      into a page of gaps.
-//   2. Positions are derived from XP only when a counting check PROVES no
-//      unknown sits inside the window.
-//   3. XP comparisons across different observation times are valid in one
-//      direction only. The other direction would invent swaps.
+//   2. Ordering comes from lifetime XP ALONE. Boot.dev removed the per-user
+//      rank on 2026-08-20, so a stored rank is provenance and must never
+//      influence the displayed order.
+//   3. Equal XP orders deterministically, or rows swap between renders.
 //   4. A falling XP is stored, not clamped. Staff can reduce XP for cheating;
 //      a Math.max "fix" would freeze that row wrong forever.
 
@@ -106,7 +106,7 @@ const seedTop = new Set(SEED.entries.filter((e) => e.rank <= 25).map((e) => e.ra
 eq("seed covers all 25 board positions", seedTop.size, 25);
 check("seed carries no unexpected fields", SEED.entries.every((e) =>
   Object.keys(e).every((k) =>
-    ["handle", "rank", "xp", "firstName", "lastName", "role", "level", "profileImageURL"].includes(k))));
+    ["handle", "rank", "rankAt", "xp", "firstName", "lastName", "role", "level", "profileImageURL"].includes(k))));
 
 // --- 2. merge: newest observation wins ---------------------------------------
 
@@ -139,196 +139,120 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
   eq("stale seed loses to fresher data", roster2.entries.a.rank, 9);
 }
 
-{
-  const roster = R.emptyRoster();
-  R.bootstrapRosterFromPersonalRecords(roster, { someone: { stats: { LeaderboardXPRankAlltime: 7 } } });
-  eq("bootstrap admits an in-window rank", roster.entries.someone.rank, 7);
-  eq("bootstrap claims no freshness", roster.entries.someone.rankAt, 0);
-  R.applySeedToRoster(roster, { generatedAt: new Date(NOW).toISOString(), entries: [{ handle: "someone", rank: 4 }] });
-  eq("bootstrap loses to the seed", roster.entries.someone.rank, 4);
-}
 
-// --- 3. rows, gaps and the no-decay invariant --------------------------------
+// --- 3. ordering, and the no-decay invariant ---------------------------------
 
 {
   const board = R.buildAllTimeBoardRows(fullRoster(), "user2");
-  eq("verified mode on a complete board", board.mode, "verified");
-  eq("25 slots rendered", board.rows.filter((r) => !r.outsideBoard).length, 25);
-  eq("no gaps on a complete board", board.rows.filter((r) => r.gap).length, 0);
-  eq("coverage counts every position", board.coverage, 25);
-  const positions = board.rows.map((r) => r.position);
-  eq("positions are 1..25 exactly once", new Set(positions).size, 25);
+  eq("25 rows rendered", board.rows.filter((r) => !r.outsideBoard).length, 25);
+  eq("observed count reports the whole roster", board.observed, 30);
+  eq("shown is capped at the board size", board.shown, 25);
+  eq("positions are 1..25 exactly once",
+    JSON.stringify(board.rows.filter((r) => !r.outsideBoard).map((r) => r.position)),
+    JSON.stringify(Array.from({ length: 25 }, (_, i) => i + 1)));
   check("current user is flagged", board.rows.some((r) => r.isCurrentUser && r.handle === "user2"));
+  check("no row claims a gap", board.rows.every((r) => !r.gap));
 }
 
 {
-  // THE INVARIANT: staleness schedules work, it never subtracts knowledge.
-  const ancient = fullRoster({ rankAt: 1, profileAt: 1 });
-  const board = R.buildAllTimeBoardRows(ancient, "");
-  eq("an entirely stale roster still yields 25 real rows", board.rows.filter((r) => !r.gap).length, 25);
-  eq("an entirely stale roster yields no gaps", board.rows.filter((r) => r.gap).length, 0);
+  // THE INVARIANT, unchanged by the pivot: staleness schedules work, it never
+  // subtracts knowledge. A roster nobody has refreshed still renders in full.
+  const board = R.buildAllTimeBoardRows(fullRoster({ rankAt: 1, profileAt: 1 }), "");
+  eq("an entirely stale roster still yields 25 rows", board.rows.length, 25);
 }
 
 {
+  // Ordering comes from XP alone now. A stored rank is provenance and must NOT
+  // influence the order — that is the whole pivot, so it gets a direct test.
   const roster = fullRoster();
-  delete roster.entries.user17;
+  roster.entries.user20.XP = 9999999;
+  roster.entries.user20.rank = 20;
+  eq("XP decides the order, not the stored rank",
+    R.buildAllTimeBoardRows(roster, "").rows[0].handle, "user20");
+}
+
+{
+  // Fewer than 25 known: show what there is rather than padding with gaps.
+  const roster = R.emptyRoster();
+  for (let i = 1; i <= 6; i++) {
+    roster.entries["u" + i] = { ...R.blankEntry("u" + i), XP: 1000 - i, Role: "Archmage", Level: 150 };
+  }
   const board = R.buildAllTimeBoardRows(roster, "");
-  eq("a missing occupant falls back", board.mode, "fallback");
-  const gaps = board.rows.filter((r) => r.gap);
-  eq("exactly one gap row", gaps.length, 1);
-  eq("the gap is at the vacated position", gaps[0].position, 17);
-  eq("the gap is keyed by position", gaps[0].key, "gap:17");
-  eq("coverage reports 24 of 25", board.coverage, 24);
-  check("a gap has no handle, XP or link", !gaps[0].handle && !gaps[0].xp && !gaps[0].href);
+  eq("a short roster renders only what it knows", board.rows.length, 6);
+  eq("and says how many that is", board.observed, 6);
 }
 
 {
+  // An XP tie must order deterministically or two rows swap between renders for
+  // no reason. Catalyst cannot render a tie, so it picks a stable order.
+  const a = { ...R.blankEntry("zeta"), XP: 500 };
+  const b = { ...R.blankEntry("alpha"), XP: 500 };
+  eq("ties break on handle, not insertion order", R.compareByObservedXp(a, b) > 0, true);
+  eq("and the comparator is symmetric", R.compareByObservedXp(b, a) < 0, true);
+}
+
+// --- 4. the viewer's own row --------------------------------------------------
+
+{
   const roster = fullRoster();
-  roster.self = { handle: "me", rank: 402, rankAt: NOW };
+  roster.entries.me = { ...R.blankEntry("me"), XP: 1, Role: "Sage", Level: 40 };
   const board = R.buildAllTimeBoardRows(roster, "me");
   const own = board.rows.filter((r) => r.outsideBoard);
-  eq("a viewer outside the board is appended", own.length, 1);
-  eq("appended at their true rank", own[0].position, 402);
-  eq("nothing known was displaced", board.rows.filter((r) => !r.outsideBoard).length, 25);
-
-  const inside = fullRoster();
-  inside.self = { handle: "user4", rank: 4, rankAt: NOW };
-  eq("a viewer inside the board is not appended",
-    R.buildAllTimeBoardRows(inside, "user4").rows.filter((r) => r.outsideBoard).length, 0);
+  eq("a viewer below the board is appended", own.length, 1);
+  eq("with no position, because it cannot be known", own[0].position, null);
+  eq("nothing on the board was displaced", board.rows.filter((r) => !r.outsideBoard).length, 25);
+  eq("a viewer already on the board is not appended",
+    R.buildAllTimeBoardRows(fullRoster(), "user4").rows.filter((r) => r.outsideBoard).length, 0);
+  eq("an unknown viewer adds nothing",
+    R.buildAllTimeBoardRows(fullRoster(), "stranger").rows.filter((r) => r.outsideBoard).length, 0);
 }
 
-// --- 4. gap role frame is derived, not hardcoded ------------------------------
+// --- 5. admission, eviction and caps ------------------------------------------
 
 {
   const roster = fullRoster();
-  delete roster.entries.user17;
-  const { positions } = R.deriveBoardPositions(roster, NOW);
-  eq("gap frame follows the learner below it", R.gapRoleForPosition(positions, 17), "Archmage");
-
-  const lower = fullRoster();
-  delete lower.entries.user17;
-  for (const entry of Object.values(lower.entries)) entry.Role = "Sage";
-  const derived = R.deriveBoardPositions(lower, NOW);
-  eq("gap frame is derived from the board, not fixed to Archmage",
-    R.gapRoleForPosition(derived.positions, 17), "Sage");
-}
-
-// --- 5. position derivation and the counting check ----------------------------
-
-{
-  // An unknown inside the window leaves the count one short of rank-1, which is
-  // exactly what must abandon verified mode.
-  const roster = fullRoster();
-  delete roster.entries.user20;
-  const { mode } = R.deriveBoardPositions(roster, NOW);
-  eq("an unknown inside the window forces fallback", mode, "fallback");
-}
-
-{
-  const stale = fullRoster({ rankAt: NOW - 10 * DAY });
-  eq("an anchor too old to trust forces fallback", R.deriveBoardPositions(stale, NOW).mode, "fallback");
-}
-
-{
-  // Verified mode renumbers by XP, so a swap shows with no rank request at all.
-  const roster = fullRoster();
-  roster.entries.user7.XP = roster.entries.user6.XP + 1;
-  const board = R.buildAllTimeBoardRows(roster, "");
-  eq("still verified after a swap", board.mode, "verified");
-  const sixth = board.rows.find((r) => r.position === 6);
-  eq("the overtaking learner takes the position", sixth.handle, "user7");
-  eq("positions stay unique after a swap", new Set(board.rows.map((r) => r.position)).size, 25);
-}
-
-{
-  // Fallback mode is where duplicates can appear at all; both must render.
-  const roster = fullRoster();
-  delete roster.entries.user20;
-  roster.entries.user12.rank = 11;
-  roster.entries.user12.rankAt = NOW;
-  const board = R.buildAllTimeBoardRows(roster, "");
-  eq("fallback keeps both claimants", board.rows.filter((r) => r.position === 11).length, 2);
-  eq("fresher observation renders first", board.rows.find((r) => r.position === 11).handle, "user12");
-}
-
-// --- 6. admission, eviction and caps ------------------------------------------
-
-{
-  const roster = fullRoster();
-  eq("admission floor is the deepest retained position, not rank 25",
+  eq("the admission floor is the lowest retained XP",
     R.admissionThresholdXp(roster), roster.entries.user30.XP);
-
-  const above = { handle: "climber", XP: roster.entries.user30.XP + 1, profileAt: NOW, candidate: true };
-  check("a handle above the floor is admitted", R.applyRosterObservation(roster, above));
-  eq("admitted with no rank yet", roster.entries.climber.rank, null);
+  check("a handle above the floor is admitted", R.applyRosterObservation(roster,
+    { handle: "climber", XP: roster.entries.user30.XP + 1, profileAt: NOW, candidate: true }));
 
   const roster2 = fullRoster();
-  const below = { handle: "nobody", XP: 10, profileAt: NOW };
-  check("a handle with no rank and no candidacy is refused", !R.applyRosterObservation(roster2, below));
+  check("an unknown handle with no admission decision is refused",
+    !R.applyRosterObservation(roster2, { handle: "nobody", XP: 10, profileAt: NOW }));
   check("and is not stored", !roster2.entries.nobody);
-
-  const roster3 = fullRoster();
-  R.applyRosterObservation(roster3, { handle: "user30", rank: 41, rankAt: NOW });
-  check("a rank past the window evicts", !roster3.entries.user30);
+  eq("an empty roster has no floor", R.admissionThresholdXp(R.emptyRoster()), null);
 }
 
 {
-  const roster = R.emptyRoster();
-  eq("no ranked entry means no admission floor", R.admissionThresholdXp(roster), null);
-}
-
-{
+  // Pruning keeps the highest XP now that rank cannot order the store.
   const roster = fullRoster();
-  for (let i = 0; i < 30; i++) {
-    R.applyRosterObservation(roster, { handle: `cand${i}`, XP: 5_000_000 - i, profileAt: NOW, candidate: true });
+  for (let i = 0; i < 60; i++) {
+    R.applyRosterObservation(roster, { handle: "cand" + i, XP: 1 + i, profileAt: NOW, candidate: true });
   }
-  const candidates = Object.values(roster.entries).filter((e) => e.rank == null);
-  check("candidate count is capped", candidates.length <= R.constants.ROSTER_CANDIDATE_MAX,
-    `got ${candidates.length}`);
-  check("total entries are capped", Object.keys(roster.entries).length <= R.constants.ROSTER_MAX_ENTRIES);
+  check("total entries are capped",
+    Object.keys(roster.entries).length <= R.constants.ROSTER_MAX_ENTRIES,
+    "got " + Object.keys(roster.entries).length);
+  check("the seeded top survives a flood of low-XP candidates", Boolean(roster.entries.user1));
 }
 
-// --- 7. a falling XP is stored, never clamped ---------------------------------
+// --- 6. a falling XP is stored, never clamped ---------------------------------
 
 {
-  // Boot.dev staff can reduce XP for suspected cheating. Rare, never observed,
-  // and must not corrupt anything — a Math.max guard here would freeze the row.
   const roster = fullRoster();
   const before = roster.entries.user5.XP;
-  R.applyRosterObservation(roster, { handle: "user5", XP: before - 50_000, profileAt: NOW });
-  eq("a reduced XP is written as observed", roster.entries.user5.XP, before - 50_000);
-  const board = R.buildAllTimeBoardRows(roster, "");
-  eq("the board still renders 25 slots after a reduction", board.rows.filter((r) => !r.outsideBoard).length, 25);
+  R.applyRosterObservation(roster, { handle: "user5", XP: before - 50000, profileAt: NOW });
+  eq("a reduced XP is written as observed", roster.entries.user5.XP, before - 50000);
+  eq("and the board simply re-orders",
+    R.buildAllTimeBoardRows(roster, "").rows.filter((r) => !r.outsideBoard).length, 25);
 }
 
-// --- 8. one-directional XP comparison -----------------------------------------
-
-{
-  // TRUE positive: a value read NOW exceeds a stored one from a higher-ranked
-  // learner. Stored XP is a lower bound, so the true order is proven.
-  const roster = fullRoster();
-  const fresh = roster.entries.user6.XP + 1;
-  const suspects = R.detectOvertakes(roster, "user7", fresh);
-  check("a proven overtake raises both parties", suspects.includes("user7") && suspects.includes("user6"),
-    JSON.stringify(suspects));
-
-  // FALSE positive guard: the same numbers read the other way round prove
-  // nothing, because the stale side may have grown past it since.
-  const quiet = R.detectOvertakes(roster, "user6", roster.entries.user6.XP);
-  eq("a lower-ranked learner merely being behind raises nothing", quiet.length, 0);
-
-  const alsoQuiet = R.detectOvertakes(roster, "user7", roster.entries.user7.XP);
-  eq("an unchanged XP raises nothing", alsoQuiet.length, 0);
-}
-
-// --- 9. refresh queues --------------------------------------------------------
+// --- 7. refresh queue ---------------------------------------------------------
 
 {
   const roster = fullRoster();
   const seen = new Set();
   let cursor = 0;
-  const loads = Math.ceil(30 / R.constants.ROSTER_XP_SLICE);
-  for (let load = 0; load < loads; load++) {
+  for (let load = 0; load < Math.ceil(30 / R.constants.ROSTER_XP_SLICE); load++) {
     roster.xpCursor = cursor;
     const result = R.pickXpRefreshTargets(roster, { now: NOW });
     for (const handle of result.targets) {
@@ -341,16 +265,20 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
 }
 
 {
-  // Priming: the first sweep runs hot so a fresh install stops showing
-  // seed-vintage order within a minute instead of twenty. It MUST terminate —
-  // a permanently-priming roster would poll every 20 seconds forever.
+  const { targets } = R.pickXpRefreshTargets(fullRoster(), { skip: ["user1", "user2"], now: NOW });
+  check("skipped handles are not requested", !targets.includes("user1") && !targets.includes("user2"));
+  eq("skipping does not cost a slot", targets.length, R.constants.ROSTER_XP_SLICE);
+}
+
+{
+  eq("a handle sighted moments ago is not re-requested",
+    R.pickXpRefreshTargets(fullRoster({ profileAt: NOW }), { now: NOW }).targets.length, 0);
+}
+
+{
+  // Priming must terminate, or the roster polls every 20 seconds forever.
   const roster = fullRoster();
   check("a new roster starts unprimed", !R.rosterIsPrimed(roster));
-  check("priming uses a much shorter cooldown",
-    R.constants.ROSTER_PRIMING_COOLDOWN_MS < R.constants.ROSTER_REFRESH_COOLDOWN_MS);
-  check("priming uses a bigger slice",
-    R.constants.ROSTER_XP_PRIMING_SLICE > R.constants.ROSTER_XP_SLICE);
-
   let passes = 0;
   let wraps = 0;
   while (wraps === 0 && passes < 50) {
@@ -361,82 +289,50 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
   }
   roster.xpWraps = wraps;
   check("the cursor wraps within ceil(entries / slice) passes",
-    passes <= Math.ceil(30 / R.constants.ROSTER_XP_PRIMING_SLICE), `took ${passes} passes`);
+    passes <= Math.ceil(30 / R.constants.ROSTER_XP_PRIMING_SLICE), "took " + passes + " passes");
   check("a wrap ends priming for good", R.rosterIsPrimed(roster));
 
-  // The termination guarantee has to hold even when nothing is requested —
-  // otherwise a 404ing handle, or a roster fully covered by the personal pass,
-  // would prime forever.
-  const skipped = fullRoster({ profileAt: NOW });
-  const result = R.pickXpRefreshTargets(skipped, { slice: R.constants.ROSTER_XP_PRIMING_SLICE, now: NOW });
+  const result = R.pickXpRefreshTargets(fullRoster({ profileAt: NOW }),
+    { slice: R.constants.ROSTER_XP_PRIMING_SLICE, now: NOW });
   eq("a pass that requests nothing still advances", result.targets.length, 0);
   check("and still reports the wrap", result.wrapped);
 }
 
-{
-  const roster = fullRoster();
-  const { targets } = R.pickXpRefreshTargets(roster, { skip: ["user1", "user2"], now: NOW });
-  check("skipped handles are not requested", !targets.includes("user1") && !targets.includes("user2"));
-  eq("skipping does not cost a slot", targets.length, R.constants.ROSTER_XP_SLICE);
-}
+// --- 8. field reads -----------------------------------------------------------
 
 {
-  const roster = fullRoster({ profileAt: NOW });
-  const { targets } = R.pickXpRefreshTargets(roster, { now: NOW });
-  eq("a handle sighted moments ago is not re-requested", targets.length, 0);
-}
-
-{
-  const roster = fullRoster({ rankAt: NOW });
-  roster.entries.candidate = { ...R.blankEntry("candidate"), XP: 1_000_000, profileAt: NOW };
-  roster.entries.user30.rankAt = NOW - 5 * HOUR;
-  const targets = R.pickRankRefreshTargets(roster, { suspects: ["user4"], now: NOW });
-  eq("a candidate is the first rank target", targets[0].handle, "candidate");
-  eq("and is tier 0", targets[0].tier, 0);
-  eq("a proven suspect comes next", targets[1].handle, "user4");
-  eq("the boundary TTL comes after that", targets[2].handle, "user30");
-  check("the rank slice is capped", targets.length <= R.constants.ROSTER_RANK_SLICE);
-}
-
-{
-  const roster = fullRoster({ rankAt: NOW - 3 * HOUR });
-  eq("nothing is due inside its band", R.pickRankRefreshTargets(roster, { now: NOW }).length, 0);
-
-  const midDue = fullRoster({ rankAt: NOW - 3 * DAY });
-  const targets = R.pickRankRefreshTargets(midDue, { now: NOW });
-  check("the boundary band comes due before the top band",
-    targets.every((t) => midDue.entries[t.handle].rank >= 11),
-    JSON.stringify(targets));
-}
-
-// --- 10. field reads ----------------------------------------------------------
-
-{
-  eq("rank reads PascalCase", R.readAlltimeRank({ data: { LeaderboardXPRankAlltime: 2 } }), 2);
-  eq("rank reads a bare body", R.readAlltimeRank({ LeaderboardXPRankAlltime: 9 }), 9);
-  // The measured camel spelling keeps its interior capitals. This assertion
-  // used to accept `leaderboardXpRankAlltime`, which was a guess made before the
-  // field had been observed — v0.14.2 measured the real one, and the reader now
-  // goes through API_FIELD_ALIASES rather than a case-insensitive sweep.
+  // The rank is gone from the API (0 of 26 handles, 2026-08-21). The reader is
+  // kept only so a restored field would be noticed, so it must still work.
+  eq("rank reads PascalCase if it ever returns", R.readAlltimeRank({ data: { LeaderboardXPRankAlltime: 2 } }), 2);
   eq("rank reads the measured camel spelling", R.readAlltimeRank({ data: { leaderboardXPRankAlltime: 4 } }), 4);
-  eq("a missing rank is null, never 0", R.readAlltimeRank({ data: { Karma: 5 } }), null);
+  eq("a missing rank is null, never 0", R.readAlltimeRank({ data: { karma: 5 } }), null);
 
-  // The real capture is a BARE object with no data wrapper.
-  eq("student count reads the captured shape",
-    R.readRegisteredUsers({ LessonCompletions: 68262, RegisteredUsersAlltime: 1390194 }), 1390194);
-  eq("student count reads a wrapped body", R.readRegisteredUsers({ data: { RegisteredUsersAlltime: 5 } }), 5);
-  eq("a missing student count is null", R.readRegisteredUsers({ LessonCompletions: 1 }), null);
+  // What actually ships today.
+  eq("percentile reads the live shape",
+    R.readAlltimePercentile({ data: { karma: 5, leaderboardXPPercentileAlltime: 1 } }), 1);
+  eq("percentile reads a bare body", R.readAlltimePercentile({ leaderboardXPPercentileAlltime: 17 }), 17);
+  eq("percentile reads PascalCase too",
+    R.readAlltimePercentile({ data: { LeaderboardXPPercentileAlltime: 8 } }), 8);
+  eq("a missing percentile is null, never 0", R.readAlltimePercentile({ data: { karma: 5 } }), null);
+
+  eq("student count reads the measured camelCase shape",
+    R.readRegisteredUsers({ registeredUsersAlltime: 1397179 }), 1397179);
+  eq("student count still reads the older PascalCase shape",
+    R.readRegisteredUsers({ RegisteredUsersAlltime: 1390194 }), 1390194);
+  eq("a missing student count is null", R.readRegisteredUsers({ lessonCompletions: 1 }), null);
 }
 
-// --- 11. the bundled seed produces a complete board ---------------------------
+// --- 9. the bundled seed still produces a full board --------------------------
 
 {
   const roster = R.emptyRoster();
   R.applySeedToRoster(roster);
-  eq("the seed fills the whole board", R.rosterCoverage(roster), 25);
+  check("the seed fills the board", R.rosterCoverage(roster) >= 25);
   const board = R.buildAllTimeBoardRows(roster, "");
-  eq("a fresh install has no gaps", board.rows.filter((r) => r.gap).length, 0);
-  eq("every seeded row carries XP", board.rows.filter((r) => !r.gap && r.xp == null).length, 0);
+  eq("a fresh install shows 25 rows", board.rows.length, 25);
+  eq("every seeded row carries XP", board.rows.filter((r) => r.xp == null).length, 0);
+  check("seeded rows are ordered by XP descending",
+    board.rows.every((r, i, arr) => i === 0 || arr[i - 1].xp >= r.xp));
 }
 
 if (failures) {

@@ -3,48 +3,38 @@
 // the highest-ranked learners, how it learns it, and how the board's positions
 // are worked out. leaderboard.js owns the rendering.
 //
-// WHY THIS EXISTS: /v1/leaderboard_xp/alltime was removed on 2026-08-14 (400
-// "Invalid timeframe"; 23 period names probed) and nothing lists the top 25 any
-// more. Per-user rank survives at /v1/users/public/{h}/stats ->
-// LeaderboardXPRankAlltime (45 of 45 handles resolved, cookie auth alone), so
-// the board became a ROSTER problem: keep a list of handles, learn each one's
-// true rank, and say so honestly where a position is unknown.
+// WHY THIS EXISTS, and why the design moved twice:
 //
-// Two fields, two very different refresh needs:
-//   rank  <- /v1/users/public/{h}/stats     positions are sticky, rarely worth a request
-//   XP    <- /v1/users/public/{h}, or ANY leaderboard entry
-//                                          moves daily, and is printed on every row
-// Hence two queues (see pickXpRefreshTargets / pickRankRefreshTargets) and the
-// XP-ordering derivation in deriveBoardPositions.
+//   2026-08-14  /v1/leaderboard_xp/alltime removed (400 "Invalid timeframe";
+//               23 period names probed). Nothing enumerates the top 25, so the
+//               board became a ROSTER: keep handles, learn each one's rank.
+//   2026-08-20  leaderboardXPRankAlltime removed from /stats too, replaced by
+//               leaderboardXPPercentileAlltime — a band so coarse that a single
+//               value covers lifetime XP from 930,102 to 1,741,426 (measured,
+//               probe 13). There is now NO source of an exact position.
+//
+// So ordering comes from lifetime XP alone, compared between the learners
+// Catalyst has actually observed. That is an OBSERVED ranking, not an objective
+// one, and the board is named accordingly — a position here means "Nth highest
+// XP among those Catalyst knows of", never "Nth on Boot.dev".
+//
+// The 2026-08-20 ranks are kept as provenance on seeded entries (`rank`,
+// `rankAt`). They are not reproducible and are never displayed as current.
+// Carry them forward with diagnostics/14_roster_export.js; do not re-probe.
 
 const ALLTIME_ROSTER_KEY = "be_alltime_roster";
 const ALLTIME_ROSTER_VERSION = 1;
 const ALLTIME_BOARD_SIZE = 25;
 
-// Retained window. 25 for the board plus a near-miss watchlist: an entry that
-// drops out is the earliest sign of drift, and one that climbs in is already
-// known when it arrives. A resolved rank past this is evicted on the response
-// that revealed it, so discovery cannot grow the store without bound.
-const ROSTER_RANK_LIMIT = 40;
+// Retained window: the 25 the board draws plus a watchlist underneath, so a
+// climber is already tracked before they reach the board. Pruned by XP.
 const ROSTER_MAX_ENTRIES = 60;
-const ROSTER_CANDIDATE_MAX = 12;
-
-// Rank TTLs, banded by position. Change enters at the bottom of the board and
-// cascades upward in number, so the boundary is where every change first
-// becomes visible; the top ten essentially never reorder. These are the
-// BACKSTOP — the detector is detectOvertakes(), which raises a suspect the
-// moment fresher XP proves somebody moved.
-const ROSTER_BOUNDARY_FROM_RANK = 22;
-const RANK_TTL_BOUNDARY_MS = 4 * 60 * 60 * 1000;
-const RANK_TTL_MID_MS = 48 * 60 * 60 * 1000;
-const RANK_TTL_TOP_MS = 7 * 24 * 60 * 60 * 1000;
 
 // XP has no TTL at all: the cursor advances on every leaderboard load, so the
 // whole board refreshes over ~5 loads and reloading the page IS a refresh. A
 // clock TTL would refresh a board nobody is reading and still be stale the
 // moment someone opens it.
 const ROSTER_XP_SLICE = 6;
-const ROSTER_RANK_SLICE = 3;
 const ROSTER_REQUEST_CEILING = 12;
 const ROSTER_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -67,15 +57,7 @@ const ROSTER_PRIMING_COOLDOWN_MS = 20 * 1000;
 // Personal Leaderboards pass, which refreshes its own handles every visit.
 const ROSTER_RECENT_SIGHTING_MS = 2 * 60 * 1000;
 
-// A verified-mode board is only as trustworthy as the rank observation
-// anchoring it. Past this the anchor could have been overtaken unnoticed, so
-// the board falls back to per-entry stored ranks.
-const ROSTER_ANCHOR_MAX_AGE_MS = 36 * 60 * 60 * 1000;
-
 let allTimeRoster = null;
-// Handles whose stored rank is contradicted by fresher XP. Session-only: a
-// suspicion is cheap to re-derive and must never outlive the data behind it.
-let rosterRankSuspects = new Set();
 let rosterLastPassAt = 0;
 
 function emptyRoster() {
@@ -172,20 +154,14 @@ function applyRosterObservation(roster, observation) {
   const handle = normalizeHandle(observation?.handle);
   if (!isValidHandle(handle) || !isPlainObject(roster)) return false;
 
-  const rank = rosterNum(observation?.rank);
   const existing = roster.entries[handle];
 
-  // A resolved rank outside the window is the eviction path — including the
-  // one a staff XP reduction can cause.
-  if (rank != null && rank > ROSTER_RANK_LIMIT) {
-    if (!existing) return false;
-    delete roster.entries[handle];
-    return true;
-  }
-
-  // An unknown handle only earns a slot if it has a rank in the window, or
-  // enough XP to plausibly be in it (a candidate — see noteAllTimeCandidates).
-  if (!existing && rank == null && !observation?.candidate) return false;
+  // Admission is now purely about XP. Rank used to gate this, but Boot.dev
+  // removed the field on 2026-08-20, so "is this person high enough to belong"
+  // can only be answered by comparing lifetime XP against what is already held.
+  // A handle Catalyst has never seen therefore needs an explicit admission
+  // decision from the caller (see noteAllTimeProfile), which owns the floor.
+  if (!existing && !observation?.candidate) return false;
 
   const merged = mergeRosterObservation(existing, observation);
   if (!merged) return false;
@@ -199,20 +175,14 @@ function applyRosterObservation(roster, observation) {
 // Keep the store bounded. Ranked entries always outrank candidates for a slot,
 // and among candidates the highest XP wins — those are the ones most likely to
 // actually be in the window.
+// Keep the highest-XP entries. Ranks no longer exist to prune by, and XP is
+// both the ordering signal and the admission signal, so one rule covers it.
+// An entry with no XP yet sorts last and is the first to go.
 function pruneRoster(roster) {
-  const entries = Object.entries(roster.entries);
-  const candidates = entries.filter(([, e]) => rosterNum(e.rank) == null);
-  if (candidates.length > ROSTER_CANDIDATE_MAX) {
-    candidates
-      .sort((a, b) => (rosterNum(b[1].XP) || 0) - (rosterNum(a[1].XP) || 0))
-      .slice(ROSTER_CANDIDATE_MAX)
-      .forEach(([handle]) => delete roster.entries[handle]);
-  }
-
   const remaining = Object.entries(roster.entries);
   if (remaining.length <= ROSTER_MAX_ENTRIES) return;
   remaining
-    .sort((a, b) => (rosterNum(a[1].rank) ?? Number.MAX_SAFE_INTEGER) - (rosterNum(b[1].rank) ?? Number.MAX_SAFE_INTEGER))
+    .sort((a, b) => (rosterNum(b[1].XP) ?? -1) - (rosterNum(a[1].XP) ?? -1))
     .slice(ROSTER_MAX_ENTRIES)
     .forEach(([handle]) => delete roster.entries[handle]);
 }
@@ -232,11 +202,17 @@ function applySeedToRoster(roster, seed = typeof ALLTIME_SEED === "undefined" ? 
   for (const raw of seed.entries) {
     const handle = normalizeHandle(raw?.handle);
     if (!isValidHandle(handle) || rosterNum(raw?.rank) == null) continue;
+    // A seed exported from a live roster (diagnostics/14_roster_export.js)
+    // carries the date each rank was actually confirmed, which is older than the
+    // export. Honour it — claiming the export date would silently make a
+    // months-old position look freshly verified, and ranks can no longer be
+    // re-checked to correct that.
+    const rankAt = Date.parse(raw.rankAt);
     changed = applyRosterObservation(roster, {
       handle,
       Handle: raw.handle,
       rank: rosterNum(raw.rank),
-      rankAt: observedAt,
+      rankAt: Number.isFinite(rankAt) ? rankAt : observedAt,
       XP: rosterNum(raw.xp),
       FirstName: raw.firstName,
       LastName: raw.lastName,
@@ -245,34 +221,18 @@ function applySeedToRoster(roster, seed = typeof ALLTIME_SEED === "undefined" ? 
       ProfileImageURL: raw.profileImageURL,
       profileAt: observedAt,
       source: "seed",
+      candidate: true,
     }) || changed;
   }
   return changed;
 }
 
-// Ranks Catalyst already has on disk from the Personal Leaderboards cache
-// (refreshPersonalStats stores whole /stats objects). Free, and occasionally
-// contributes a handle the seed lacks.
-//
-// rankAt is 0, not record.updatedAt: that timestamp means "last time anything
-// in the record changed", not "when the rank was read", so treating it as
-// freshness would be a fabricated observation time. Zero means oldest possible
-// — it never beats the seed, and it sorts first in the refresh queue.
-function bootstrapRosterFromPersonalRecords(roster, records) {
-  if (!isPlainObject(roster) || !isPlainObject(records)) return false;
-  let changed = false;
-  for (const [handle, record] of Object.entries(records)) {
-    const rank = readAlltimeRank(record?.stats);
-    if (rank == null) continue;
-    changed = applyRosterObservation(roster, {
-      handle: normalizeHandle(handle),
-      rank,
-      rankAt: 0,
-      source: "bootstrap",
-    }) || changed;
-  }
-  return changed;
-}
+// bootstrapRosterFromPersonalRecords was removed with the pivot. It seeded the
+// roster from ranks already sitting in be_personal_leaderboard_cache, and since
+// 2026-08-20 those caches can only hold ranks from before the field was
+// withdrawn — stale numbers that no longer decide anything. Tracked handles
+// still reach the roster the ordinary way, by XP, when their responses arrive.
+
 
 // ---------------------------------------------------------------------------
 // Field reads
@@ -281,14 +241,30 @@ function bootstrapRosterFromPersonalRecords(roster, records) {
 // /v1/leaderboard_stats was captured bare — and either could gain or lose the
 // wrapper without warning.
 //
-// The rank goes through the shared alias table (utils.js), which carries the
-// measured camel spelling `leaderboardXPRankAlltime`. A rank that silently
-// stopped resolving would freeze every row at its seed value while the board
-// still looked healthy, which is what reportAlltimeRankField watches for.
+// The exact rank is gone (2026-08-20, absent on 26 of 26 handles probed). This
+// is kept ONLY so a restored field would be noticed: it is read on every /stats
+// response and, if it ever answers again, reportAlltimeRankField stops warning
+// and the value flows back into the roster as provenance.
 function readAlltimeRank(json) {
   const data = json?.data ?? json;
   if (!isPlainObject(data)) return null;
   return rosterNum(readField(data, "LeaderboardXPRankAlltime"));
+}
+
+// What replaced it: an integer band, lower is better. Far too coarse to order
+// anyone Catalyst renders — band 1 spans 930,102 to 1,741,426 lifetime XP — so
+// it is NEVER used for ordering or converted into an estimated rank. It is
+// displayed verbatim, for the viewer only, as the one self-position signal
+// Boot.dev still publishes.
+function readAlltimePercentile(json) {
+  const data = json?.data ?? json;
+  if (!isPlainObject(data)) return null;
+  const direct = rosterNum(readField(data, "LeaderboardXPPercentileAlltime"));
+  if (direct != null) return direct;
+  for (const [key, value] of Object.entries(data)) {
+    if (key.toLowerCase() === "leaderboardxppercentilealltime") return rosterNum(value);
+  }
+  return null;
 }
 
 // /v1/leaderboard_stats is the ONE leaderboard-related endpoint that was not
@@ -315,10 +291,13 @@ function readRegisteredUsers(json) {
 // is spotted before they arrive rather than after. XP only grows, and the
 // stored floor is itself slightly stale, so this over-admits — the safe
 // direction, since a false candidate costs one /stats and is then evicted.
+// The XP a newcomer must beat to be worth tracking: the lowest XP among the
+// entries currently retained. Sitting below the retained window rather than
+// below the rendered board means a climber is picked up before they arrive,
+// and the watchlist keeps refilling from underneath.
 function admissionThresholdXp(roster) {
   let floor = null;
   for (const entry of Object.values(roster?.entries || {})) {
-    if (rosterNum(entry.rank) == null) continue;
     const xp = rosterNum(entry.XP);
     if (xp == null) continue;
     if (floor == null || xp < floor) floor = xp;
@@ -328,13 +307,16 @@ function admissionThresholdXp(roster) {
 
 // True while some position in 1..25 has no known occupant. Drives both the gap
 // rows and the week/month escalation.
+// How many learners the board can actually draw. There is no notion of a
+// "known position" any more — an unknown occupant of slot 17 is not something
+// Catalyst can detect, because nothing reports positions. What it can state
+// honestly is how many learners it is ordering.
 function rosterCoverage(roster) {
-  const covered = new Set();
+  let observed = 0;
   for (const entry of Object.values(roster?.entries || {})) {
-    const rank = rosterNum(entry.rank);
-    if (rank != null && rank >= 1 && rank <= ALLTIME_BOARD_SIZE) covered.add(rank);
+    if (rosterNum(entry.XP) != null) observed += 1;
   }
-  return covered.size;
+  return observed;
 }
 
 // ---------------------------------------------------------------------------
@@ -351,94 +333,47 @@ function rosterCoverage(roster) {
 // of the 24 places above a verified #25, leaving at most 23 of ours — which the
 // count catches. Short by n means exactly n unknowns, and the board falls back
 // to per-entry stored ranks with gaps.
-function deriveBoardPositions(roster, now = Date.now()) {
+function deriveBoardPositions(roster) {
   const entries = Object.values(roster?.entries || {}).filter((e) => rosterNum(e.XP) != null);
-
-  const anchor = entries
-    .filter((e) => rosterNum(e.rank) != null && rosterNum(e.rank) <= ALLTIME_BOARD_SIZE)
-    .filter((e) => now - (rosterNum(e.rankAt) || 0) <= ROSTER_ANCHOR_MAX_AGE_MS)
-    .sort((a, b) => rosterNum(b.rank) - rosterNum(a.rank))[0];
-
-  if (anchor) {
-    const anchorXp = rosterNum(anchor.XP);
-    const above = entries.filter((e) => e !== anchor && rosterNum(e.XP) > anchorXp);
-    if (above.length === rosterNum(anchor.rank) - 1) {
-      const ordered = [...above, anchor].sort((a, b) => rosterNum(b.XP) - rosterNum(a.XP));
-      const below = entries
-        .filter((e) => e !== anchor && rosterNum(e.XP) <= anchorXp)
-        .sort((a, b) => rosterNum(b.XP) - rosterNum(a.XP));
-      return {
-        mode: "verified",
-        positions: [...ordered, ...below].map((entry, index) => ({ entry, position: index + 1 })),
-      };
-    }
-  }
-
   return {
-    mode: "fallback",
     positions: entries
-      .filter((e) => rosterNum(e.rank) != null)
-      .sort((a, b) => rosterNum(a.rank) - rosterNum(b.rank) || (rosterNum(b.rankAt) || 0) - (rosterNum(a.rankAt) || 0))
-      .map((entry) => ({ entry, position: rosterNum(entry.rank) })),
+      .sort(compareByObservedXp)
+      .map((entry, index) => ({ entry, position: index + 1 })),
   };
 }
 
-// A gap's role frame, derived rather than assumed. Whoever holds position N
-// outranks the nearest known learner below it, so they cannot be a lower tier —
-// this is a lower bound Catalyst can justify, not a guess about who they are.
-// Resolves to Archmage for every slot today (the board's floor is 963,435 XP,
-// level 151) and stays correct on its own if the level curve or role set moves.
-function gapRoleForPosition(placed, position) {
-  const below = placed
-    .filter((p) => p.position > position && p.entry?.Role)
-    .sort((a, b) => a.position - b.position)[0];
-  if (below) return below.entry.Role;
-
-  const lowest = placed
-    .filter((p) => p.entry?.Role)
-    .sort((a, b) => b.position - a.position)[0];
-  return lowest ? lowest.entry.Role : "";
+// Ordering comparator. XP descending, then a DETERMINISTIC tiebreak on handle.
+// Without the tiebreak, two learners on identical XP would order by whatever
+// Object.values happened to yield and could swap places between renders for no
+// reason. Boot.dev itself appears to treat equal XP as a tie group rather than
+// assigning arbitrary ordinals, so inventing a stable-but-meaningless order is
+// the best available behaviour: at least it does not flicker.
+function compareByObservedXp(a, b) {
+  const diff = rosterNum(b.XP) - rosterNum(a.XP);
+  if (diff) return diff;
+  return normalizeHandle(a.Handle).localeCompare(normalizeHandle(b.Handle));
 }
+
 
 // The board: 25 fixed slots, a real row where a position is known and a gap row
 // where it is not. Never fabricates a name, an XP figure or a handle.
 function buildAllTimeBoardRows(roster, selfHandle = "") {
-  const { mode, positions } = deriveBoardPositions(roster);
-  const bySlot = new Map();
-  for (const placed of positions) {
-    if (placed.position < 1 || placed.position > ALLTIME_BOARD_SIZE) continue;
-    if (!bySlot.has(placed.position)) bySlot.set(placed.position, []);
-    bySlot.get(placed.position).push(placed);
-  }
+  const { positions } = deriveBoardPositions(roster);
+  const rows = positions
+    .filter((placed) => placed.position <= ALLTIME_BOARD_SIZE)
+    .map((placed) => rosterRow(placed.entry, placed.position, selfHandle));
 
-  const rows = [];
-  for (let position = 1; position <= ALLTIME_BOARD_SIZE; position++) {
-    const claimants = (bySlot.get(position) || [])
-      // Fresher rank observation first: in fallback mode two entries can
-      // legitimately claim one position, and the newer sighting is the better
-      // guess at which of them still holds it.
-      .sort((a, b) => (rosterNum(b.entry.rankAt) || 0) - (rosterNum(a.entry.rankAt) || 0));
-
-    if (!claimants.length) {
-      rows.push({ key: `gap:${position}`, gap: true, position, role: gapRoleForPosition(positions, position) });
-      continue;
-    }
-    for (const claimant of claimants) {
-      rows.push(rosterRow(claimant.entry, position, selfHandle));
-    }
-  }
-
-  // The viewer, when they rank below the board. Appended rather than displacing
-  // a known learner: the board is knowledge-bounded now, and hiding something
-  // real to make room is the wrong trade.
-  const selfRank = rosterNum(roster?.self?.rank);
+  // The viewer, when they are not among the observed top. Appended rather than
+  // displacing someone real. There is no rank to show any more, so the row
+  // carries no position — see renderers, which label it rather than number it.
   const selfNormalized = normalizeHandle(selfHandle || roster?.self?.handle);
-  if (selfRank != null && selfRank > ALLTIME_BOARD_SIZE && selfNormalized) {
-    const entry = roster?.entries?.[selfNormalized] || { ...blankEntry(selfNormalized), Handle: selfNormalized };
-    rows.push({ ...rosterRow(entry, selfRank, selfNormalized), outsideBoard: true });
+  const onBoard = rows.some((r) => r.isCurrentUser);
+  const selfEntry = selfNormalized ? roster?.entries?.[selfNormalized] : null;
+  if (selfNormalized && !onBoard && selfEntry && rosterNum(selfEntry.XP) != null) {
+    rows.push({ ...rosterRow(selfEntry, null, selfNormalized), outsideBoard: true });
   }
 
-  return { mode, rows, coverage: bySlot.size };
+  return { rows, observed: positions.length, shown: Math.min(positions.length, ALLTIME_BOARD_SIZE) };
 }
 
 function rosterRow(entry, position, selfHandle) {
@@ -460,43 +395,15 @@ function rosterRow(entry, position, selfHandle) {
 // ---------------------------------------------------------------------------
 // Overtake detection
 // ---------------------------------------------------------------------------
-// Comparing XP values of different ages is safe in ONE direction only, and only
-// that direction is used. XP is a lower bound on the true figure (staff
-// reductions aside), so a stored value that already exceeds a FRESHLY READ one
-// proves the true order. The reverse proves nothing — the stale side may have
-// grown past it since — so it raises nothing.
-//
-// Called with a value read in this pass: anyone stored ABOVE that handle with
-// less XP than its fresh figure has been overtaken. Conservative by
-// construction: no false positives, only late ones, which the next pass finds.
-function detectOvertakes(roster, handle, freshXp) {
-  const normalized = normalizeHandle(handle);
-  const subject = roster?.entries?.[normalized];
-  const xp = rosterNum(freshXp);
-  const subjectRank = rosterNum(subject?.rank);
-  if (!subject || xp == null || subjectRank == null) return [];
-
-  const overtaken = [];
-  for (const [otherHandle, other] of Object.entries(roster.entries)) {
-    if (otherHandle === normalized) continue;
-    const otherRank = rosterNum(other.rank);
-    const otherXp = rosterNum(other.XP);
-    if (otherRank == null || otherXp == null) continue;
-    if (otherRank < subjectRank && otherXp < xp) overtaken.push(otherHandle);
-  }
-  return overtaken.length ? [normalized, ...overtaken] : [];
-}
-
-// ---------------------------------------------------------------------------
-// Refresh queues
-// ---------------------------------------------------------------------------
 // Queue A — XP, round-robin, driven by page loads rather than a clock, so the
 // work lands where the attention is and an F5 is a refresh. `skip` carries the
 // handles the Personal Leaderboards pass already covered this load, so an
 // overlapping handle is not fetched twice.
+//
+// Walks in the board's own order — highest XP first — so the rows a reader is
+// most likely to be looking at refresh earliest in a sweep.
 function pickXpRefreshTargets(roster, { slice = ROSTER_XP_SLICE, skip = [], now = Date.now() } = {}) {
-  const ordered = Object.values(roster?.entries || {})
-    .sort((a, b) => (rosterNum(a.rank) ?? Number.MAX_SAFE_INTEGER) - (rosterNum(b.rank) ?? Number.MAX_SAFE_INTEGER));
+  const ordered = Object.values(roster?.entries || {}).sort(compareByObservedXp);
   if (!ordered.length) return { targets: [], cursor: 0, wrapped: false };
 
   const skipSet = new Set(skip.map(normalizeHandle));
@@ -521,54 +428,25 @@ function pickXpRefreshTargets(roster, { slice = ROSTER_XP_SLICE, skip = [], now 
   return { targets, cursor, wrapped };
 }
 
-// Queue B — rank. Event-driven first: candidates close a gap, and a suspect
-// means fresher XP PROVED something moved. The TTL bands are the backstop.
-function pickRankRefreshTargets(roster, { slice = ROSTER_RANK_SLICE, suspects = [], now = Date.now() } = {}) {
-  const suspectSet = new Set([...suspects].map(normalizeHandle));
-  const scored = [];
+// There is no rank queue any more. It fetched /stats to verify or discover a
+// position, and positions no longer exist — every such request would return a
+// percentile Catalyst cannot order by. detectOvertakes went with it: it existed
+// to raise a rank re-check when fresher XP proved somebody had moved, and the
+// board now simply re-sorts on the XP it already holds.
+//
+// A /stats response arriving for any other reason still updates the viewer's
+// percentile through noteAllTimeObservation.
 
-  for (const [handle, entry] of Object.entries(roster?.entries || {})) {
-    const rank = rosterNum(entry.rank);
-    const rankAt = rosterNum(entry.rankAt) || 0;
-    if (rank == null) {
-      scored.push({ handle, tier: 0, rankAt });
-      continue;
-    }
-    if (suspectSet.has(handle)) {
-      scored.push({ handle, tier: 1, rankAt });
-      continue;
-    }
-    const age = now - rankAt;
-    if (rank >= ROSTER_BOUNDARY_FROM_RANK) {
-      if (age >= RANK_TTL_BOUNDARY_MS) scored.push({ handle, tier: 2, rankAt });
-    } else if (rank >= 11) {
-      if (age >= RANK_TTL_MID_MS) scored.push({ handle, tier: 3, rankAt });
-    } else if (age >= RANK_TTL_TOP_MS) {
-      scored.push({ handle, tier: 4, rankAt });
-    }
-  }
-
-  // Tiers are returned rather than flattened so the caller can spend the
-  // per-load request ceiling in priority order: a candidate or a proven
-  // suspect is worth a request before anything else this feature does.
-  return scored
-    .sort((a, b) => a.tier - b.tier || a.rankAt - b.rankAt)
-    .slice(0, slice)
-    .map(({ handle, tier }) => ({ handle, tier }));
-}
 
 // ---------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------
-async function loadAllTimeRoster(personalRecords = null) {
+async function loadAllTimeRoster() {
   const stored = await chromeGet(ALLTIME_ROSTER_KEY);
   if (enhancerStopped) return;
 
   allTimeRoster = normalizeStoredRoster(stored);
   let changed = !isPlainObject(stored);
-  if (isPlainObject(personalRecords)) {
-    changed = bootstrapRosterFromPersonalRecords(allTimeRoster, personalRecords) || changed;
-  }
   changed = applySeedToRoster(allTimeRoster) || changed;
   if (changed) saveAllTimeRoster();
 }
@@ -618,10 +496,17 @@ function noteAllTimeObservation(username, isStats, json) {
 
   if (isStats) {
     const rank = readAlltimeRank(json);
-    noteAlltimeRankResponse(rank);
+    const percentile = readAlltimePercentile(json);
+    noteAlltimeRankResponse(rank, percentile);
+    if (handle === normalizeHandle(currentUserHandle) && percentile != null) {
+      allTimeRoster.self = { ...allTimeRoster.self, handle, percentile, percentileAt: now };
+      changed = true;
+    }
+    // A rank only arrives if Boot.dev restores the field. Stored as provenance
+    // if it does; nothing depends on it.
     if (rank != null) {
       if (handle === normalizeHandle(currentUserHandle)) {
-        allTimeRoster.self = { handle, rank, rankAt: now };
+        allTimeRoster.self = { ...allTimeRoster.self, handle, rank, rankAt: now };
         changed = true;
       }
       changed = applyRosterObservation(allTimeRoster, { handle, Handle: readField(data, "Handle"), rank, rankAt: now }) || changed;
@@ -647,9 +532,6 @@ function noteAllTimeProfile(handle, data, now = Date.now()) {
   const known = Boolean(allTimeRoster.entries[handle]);
   const floor = admissionThresholdXp(allTimeRoster);
   if (!known && (floor == null || xp < floor)) return false;
-
-  const suspects = known ? detectOvertakes(allTimeRoster, handle, xp) : [];
-  for (const suspect of suspects) rosterRankSuspects.add(suspect);
 
   return applyRosterObservation(allTimeRoster, {
     handle,
@@ -690,21 +572,34 @@ function noteAllTimeBoardEntries(entries) {
 // A renamed rank field would freeze every row at its seed value while the board
 // still looked healthy — the graceful-degradation failure mode this codebase
 // keeps meeting. Warn once after enough responses to be sure.
+// The rank's absence is now EXPECTED, so it is not what gets warned about —
+// warning on it would fire for every user forever. What is worth a line is the
+// percentile also vanishing, which would leave the viewer with no self-position
+// at all; and, on the happy side, the rank COMING BACK, which would be worth
+// redesigning around.
 const ALLTIME_RANK_FIELD_SAMPLE = 3;
 let alltimeStatsSeen = 0;
-let alltimeRanksRead = 0;
-function noteAlltimeRankResponse(rank) {
+let alltimePercentilesRead = 0;
+function noteAlltimeRankResponse(rank, percentile) {
   alltimeStatsSeen += 1;
   if (rank != null) {
-    alltimeRanksRead += 1;
+    warnOnce(
+      "alltime:rank-returned",
+      "/v1/users/public/{handle}/stats is serving LeaderboardXPRankAlltime again — " +
+      "Boot.dev removed it on 2026-08-20 and the board was rebuilt to order by XP " +
+      "alone. An exact position is available again; see allTimeRoster.js."
+    );
+  }
+  if (percentile != null) {
+    alltimePercentilesRead += 1;
     return;
   }
-  if (alltimeRanksRead || alltimeStatsSeen < ALLTIME_RANK_FIELD_SAMPLE) return;
+  if (alltimePercentilesRead || alltimeStatsSeen < ALLTIME_RANK_FIELD_SAMPLE) return;
   warnOnce(
-    "alltime:rank-field",
+    "alltime:percentile-field",
     `${alltimeStatsSeen} /v1/users/public/{handle}/stats responses carried no readable ` +
-    "LeaderboardXPRankAlltime — Boot.dev may have renamed it, and the All-Time board is " +
-    "frozen at whatever it already knew. See readAlltimeRank() in allTimeRoster.js."
+    "LeaderboardXPPercentileAlltime — the All-Time subtitle will show no position for you. " +
+    "See readAlltimePercentile() in allTimeRoster.js."
   );
 }
 
@@ -781,30 +676,17 @@ function requestAllTimeRosterRefresh() {
     return true;
   };
 
-  const rankTargets = pickRankRefreshTargets(allTimeRoster, { suspects: rosterRankSuspects, now });
-
-  // 1. Candidates and proven suspects — a request that closes a gap or
-  //    confirms a move is worth more than any amount of routine freshness.
-  for (const target of rankTargets.filter((t) => t.tier <= 1)) {
-    spend(() => refreshRosterRank(target.handle));
-  }
-
-  // 2. The week/month boards, only while a position is unknown. Someone
-  //    climbing into the top 25 is earning heavily right now, which is exactly
-  //    what puts them on those boards — and the one measured new entrant was
-  //    found on the month board.
-  if (rosterCoverage(allTimeRoster) < ALLTIME_BOARD_SIZE && now - alltimeDiscoveryAt >= ALLTIME_DISCOVERY_TTL_MS) {
+  // 1. The week/month boards. These used to run only while a board position was
+  //    unknown, but "unknown position" is no longer detectable — nothing reports
+  //    positions. They are now the standing discovery sweep, TTL-gated, because
+  //    a newcomer with enough XP to belong is exactly who appears on them and
+  //    there is no other way to notice one.
+  if (now - alltimeDiscoveryAt >= ALLTIME_DISCOVERY_TTL_MS) {
     alltimeDiscoveryAt = now;
     for (const url of ALLTIME_DISCOVERY_URLS) spend(() => requestApiJson(url));
   }
 
-  // 3. The boundary. Any new entrant anywhere in 1-25 pushes the incumbent #25
-  //    out to 26, so this doubles as a whole-board change detector.
-  for (const target of rankTargets.filter((t) => t.tier === 2)) {
-    spend(() => refreshRosterRank(target.handle));
-  }
-
-  // 4. My own XP, which the All-Time comparisons are measured against.
+  // 2. My own XP, which the All-Time comparisons are measured against.
   const selfHandle = normalizeHandle(currentUserHandle);
   if (selfHandle && now - alltimeSelfProfileAt >= ALLTIME_SELF_PROFILE_TTL_MS) {
     if (spend(() => requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(selfHandle)}`))) {
@@ -812,13 +694,14 @@ function requestAllTimeRosterRefresh() {
     }
   }
 
-  // 5. The student count.
+  // 3. The student count, which the subtitle's percentile is stated against.
   if (now - (rosterNum(leaderboardStats.updatedAt) || 0) >= LEADERBOARD_STATS_TTL_MS) {
     spend(() => requestApiJson(LEADERBOARD_STATS_URL));
   }
 
-  // 6. The XP sweep. Handles the Personal Leaderboards pass already refreshes
-  //    this load are skipped rather than fetched twice.
+  // 4. The XP sweep — now the ONLY thing keeping the board correct, since the
+  //    ordering is derived from XP alone. Handles the Personal Leaderboards
+  //    pass already refreshes this load are skipped rather than fetched twice.
   const skip = anyPersonalBoardEnabled() ? personalHandles : [];
   const { targets, cursor, wrapped } = pickXpRefreshTargets(allTimeRoster, {
     slice: Math.min(priming ? ROSTER_XP_PRIMING_SLICE : ROSTER_XP_SLICE, budget),
@@ -832,22 +715,10 @@ function requestAllTimeRosterRefresh() {
   if (wrapped) allTimeRoster.xpWraps = (rosterNum(allTimeRoster.xpWraps) || 0) + 1;
   saveAllTimeRoster();
 
-  // 7. Whatever routine rank work the ceiling still allows.
-  for (const target of rankTargets.filter((t) => t.tier >= 3)) {
-    spend(() => refreshRosterRank(target.handle));
-  }
-
   return ROSTER_REQUEST_CEILING - budget;
 }
 
 // The response is relayed and routed like any other, so it lands back through
-// noteAllTimeObservation — one write path, not two.
-function refreshRosterRank(handle) {
-  const normalized = normalizeHandle(handle);
-  if (!isValidHandle(normalized)) return;
-  rosterRankSuspects.delete(normalized);
-  requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(normalized)}/stats`);
-}
 
 // Test hook: scripts/check_alltime_roster.mjs predefines this global before
 // evaluating the file. Never defined on the real page.
@@ -859,32 +730,23 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     mergeRosterObservation,
     applyRosterObservation,
     applySeedToRoster,
-    bootstrapRosterFromPersonalRecords,
     readAlltimeRank,
+    readAlltimePercentile,
     readRegisteredUsers,
     admissionThresholdXp,
     rosterCoverage,
     deriveBoardPositions,
-    gapRoleForPosition,
+    compareByObservedXp,
     buildAllTimeBoardRows,
-    detectOvertakes,
     pickXpRefreshTargets,
-    pickRankRefreshTargets,
     constants: {
       ALLTIME_BOARD_SIZE,
-      ROSTER_RANK_LIMIT,
       ROSTER_MAX_ENTRIES,
-      ROSTER_CANDIDATE_MAX,
       ROSTER_XP_SLICE,
       ROSTER_XP_PRIMING_SLICE,
-      ROSTER_RANK_SLICE,
       ROSTER_PRIMING_COOLDOWN_MS,
       ROSTER_REFRESH_COOLDOWN_MS,
       ROSTER_REQUEST_CEILING,
-      ROSTER_ANCHOR_MAX_AGE_MS,
-      RANK_TTL_BOUNDARY_MS,
-      RANK_TTL_MID_MS,
-      RANK_TTL_TOP_MS,
     },
   };
 }

@@ -130,9 +130,7 @@ async function initEnhancer() {
   await loadNextLessonHref();
   await loadCurrentUserHandle();
   await loadPersonalLeaderboard();
-  // After loadPersonalLeaderboard: the roster bootstraps from the ranks already
-  // sitting in be_personal_leaderboard_cache, which needs those records loaded.
-  await loadAllTimeRoster(personalRecords);
+  await loadAllTimeRoster();
   await loadLeaderboardStats();
   await loadFrameDebugFlag();
   if (enhancerStopped) return;
@@ -251,10 +249,7 @@ async function applyImportedData() {
   // write-through would clobber the merged boss highs with our stale copy.
   await loadBossState({ force: true });
   await restoreBossPanel();
-  // The roster isn't in the backup, but an import can add tracked handles whose
-  // stored /stats carry an in-window rank — bootstrap those now rather than
-  // waiting for the next page load.
-  await loadAllTimeRoster(personalRecords);
+  await loadAllTimeRoster();
   if (enhancerStopped) return;
   renderAllTimeLeaderboard();
   schedulePersonalLeaderboardRender();

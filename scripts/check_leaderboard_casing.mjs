@@ -233,7 +233,12 @@ check("detection: silent on an empty response", warnsFor([]), false);
 
 // --- 6. activity heatmap -----------------------------------------------------
 
-const today = new Date().toISOString().slice(0, 10);
+// distillHeatmap buckets by the viewer's LOCAL date (localDateKey), because the
+// heatmap is requested with the viewer's timezone. Building this fixture from
+// the UTC date instead made the test fail for the hours each day where the two
+// disagree — a real flake, not a code fault, first hit 2026-08-21T00:2xZ from a
+// UTC-7 machine. Use the same helper the code uses.
+const today = sandbox.localDateKey();
 const heatmapPascal = {
   Calendar: [{ Date: `${today}T00:00:00Z`, Count: 4 }, { Date: "2026-01-01T00:00:00Z", Count: 2 }],
   GithubCommits: [{ Date: "2026-01-01T00:00:00Z", Count: 1 }],

@@ -743,7 +743,7 @@ function _applyAllTimeContent(panel) {
   let grid = panel.querySelector(".be-native-grid");
   if (!grid) {
     panel.innerHTML = `
-      <h3 class="be-native-title">Top All-Time Learners</h3>
+      <h3 class="be-native-title">Top Observed Learners</h3>
       <p class="be-native-subtitle" data-be-subtitle hidden></p>
       <p class="be-native-subtitle be-alltime-coverage" data-be-coverage hidden></p>
       <div class="be-native-grid-wrap">
@@ -759,22 +759,22 @@ function _applyAllTimeContent(panel) {
 
   const items = board.rows.map((row) => ({
     ...row,
-    displayName: row.gap ? "" : getDisplayName(row.entry, row.handle),
+    displayName: getDisplayName(row.entry, row.handle),
   }));
 
   reconcileKeyedChildren(
     grid,
     items,
     (it) => it.key,
-    (it) => elementFromHTML(it.gap ? allTimeGapCardHTML(it) : allTimeCardHTML(it, myXP)),
-    (el, it) => (it.gap ? patchAllTimeGapCard(el, it) : patchAllTimeCard(el, it, myXP))
+    (it) => elementFromHTML(allTimeCardHTML(it, myXP)),
+    (el, it) => patchAllTimeCard(el, it, myXP)
   );
 }
 
 function allTimeCardHTML(it, myXP) {
   return `<div class="be-leader-card${it.isCurrentUser ? " be-current-user" : ""}${it.outsideBoard ? " be-leader-outside" : ""}">
       <a href="${escapeHtml(it.href || "#")}" class="be-leader-link"${allTimeRowTitleAttr(it)}>
-        <span class="be-leader-rank">${escapeHtml(it.position)}</span>
+        <span class="be-leader-rank">${escapeHtml(allTimePositionText(it))}</span>
         ${renderLeaderAvatar(it.entry, it.displayName)}
         <span class="be-leader-copy">
           <span class="be-leader-name">${escapeHtml(it.displayName)}</span>
@@ -799,39 +799,21 @@ function patchAllTimeCard(el, it, myXP) {
       link.removeAttribute("title");
     }
   }
-  setTextIfChanged(el.querySelector(".be-leader-rank"), String(it.position));
+  setTextIfChanged(el.querySelector(".be-leader-rank"), allTimePositionText(it));
   patchLeaderAvatar(el, it.entry, it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-name"), it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-xp"), allTimeXpText(it));
   patchComparisonEl(el.querySelector("[data-be-comparison]"), myXP, it.xp, "xp", it.isCurrentUser || it.xp == null || !isComparisonEnabled("comparisonsAllTime"));
 }
 
-// A position Catalyst does not know the occupant of. It keeps the slot and the
-// role frame — whoever holds it outranks the learner below, so they cannot be a
-// lower tier — and leaves everything Catalyst would have to invent blank. Not a
-// link: there is nobody to link to.
-function allTimeGapCardHTML(it) {
-  const frameEntry = { Role: it.role };
-  return `<div class="be-leader-card be-leader-gap" title="${escapeHtml(ALLTIME_GAP_TOOLTIP)}">
-      <span class="be-leader-link">
-        <span class="be-leader-rank">${escapeHtml(it.position)}</span>
-        ${renderLeaderAvatar(frameEntry, "")}
-        <span class="be-leader-copy">
-          <span class="be-leader-name">Unknown learner</span>
-          <span class="be-leader-xp">rank not yet known</span>
-        </span>
-      </span>
-    </div>`;
-}
 
-function patchAllTimeGapCard(el, it) {
-  setTextIfChanged(el.querySelector(".be-leader-rank"), String(it.position));
-  patchLeaderAvatar(el, { Role: it.role }, "");
+// A number here means "Nth highest XP among the learners Catalyst has observed",
+// never a Boot.dev position — Boot.dev stopped publishing those on 2026-08-20.
+// The viewer's appended row has no position at all, because their standing
+// among people Catalyst does not track is exactly what cannot be known.
+function allTimePositionText(it) {
+  return it.outsideBoard || it.position == null ? "you" : String(it.position);
 }
-
-const ALLTIME_GAP_TOOLTIP =
-  "Boot.dev no longer publishes an all-time leaderboard, so Catalyst assembles this " +
-  "board from the ranks it can read. It learns this position as you browse.";
 
 function allTimeXpText(it) {
   return it.xp == null ? "xp unknown" : `${fmtNum(it.xp)} xp`;
@@ -871,25 +853,31 @@ function updateAllTimeSubtitle(panel, board) {
   const coverageEl = panel.querySelector("[data-be-coverage]");
 
   if (sub) {
-    const rank = num(allTimeRoster?.self?.rank);
+    // Boot.dev replaced the exact rank with a percentile band on 2026-08-20, so
+    // this is the only self-position it still publishes. Shown verbatim and
+    // never converted into an estimated rank: one band covers lifetime XP from
+    // 930,102 to 1,741,426 (measured), i.e. thousands of positions.
+    const percentile = num(allTimeRoster?.self?.percentile);
     const total = getTotalStudents();
-    if (rank == null) {
+    if (percentile == null) {
       sub.hidden = true;
       setTextIfChanged(sub, "");
     } else {
       sub.hidden = false;
       // Raw numbers (no thousands separators) to match the native subtitle exactly.
       setTextIfChanged(sub, total != null
-        ? `You are in position ${rank} of ${total} total students`
-        : `You are in position ${rank}`);
+        ? `You are in the top ${percentile}% of ${total} learners`
+        : `You are in the top ${percentile}% of learners`);
     }
   }
 
   if (coverageEl) {
     coverageEl.hidden = false;
-    setTextIfChanged(coverageEl, board.coverage >= ALLTIME_BOARD_SIZE
-      ? `All ${ALLTIME_BOARD_SIZE} positions known · updated as you browse`
-      : `Catalyst knows ${board.coverage} of the top ${ALLTIME_BOARD_SIZE} · updated as you browse`);
+    // Says what the board actually is. Boot.dev publishes no positions any more,
+    // so these are Catalyst's own observations ordered by lifetime XP — the
+    // panel must not imply it is reproducing a Boot.dev ranking.
+    setTextIfChanged(coverageEl,
+      `Ordered by lifetime XP across ${board.observed} learners Catalyst has observed · updated as you browse`);
   }
 }
 
@@ -988,7 +976,7 @@ const NATIVE_SECTION_TITLES = new Set([
   "top league learners",
   "top community members",
   "recent archmages",
-  "top all-time learners",
+  "top observed learners",
   "personal leaderboards",
 ]);
 
