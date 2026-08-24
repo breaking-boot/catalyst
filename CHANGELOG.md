@@ -1,4 +1,28 @@
 # Changelog
+## v0.15.0 - Top Observed Learners
+
+Boot.dev retired its all-time leaderboard in August 2026, and a week later removed the per-user rank from profiles as well — a profile now shows a band such as "Top 1%" rather than a position. The leaderboard and profile sources Catalyst has identified no longer publish an exact all-time standing. Rather than guess at one, Catalyst now builds the board from what it can actually verify: lifetime XP.
+
+### Added
+
+* **Top Observed Learners**, replacing the Top All-Time Learners section. It orders the learners Catalyst has seen by their lifetime XP, and the name is the honest description of what that is — a number on this board means "Nth highest XP among the learners Catalyst has observed", not "Nth on Boot.dev". Catalyst does not have a way to know the latter, and will not imply that it does.
+* **A full board from the moment you install it.** The extension bundles a seed of observed high-XP learners, so there is no waiting and no network round-trip before the board appears.
+* **It keeps its known learners current as you browse.** XP is picked up from responses Boot.dev's own pages already make — every profile you open, every native board — and each time you open or reload the leaderboard Catalyst refreshes a few more known learners. A brand-new installation can refresh the bundled roster within about a minute of use. Never more than twelve requests per load.
+* **It keeps looking for people it does not know yet.** Anyone seen with enough lifetime XP to belong is picked up automatically, and Catalyst also watches the weekly and monthly boards, where someone climbing toward the top is most likely to appear.
+* **Your own standing in the subtitle**, using the percentile Boot.dev still publishes, against the current total number of learners. It is shown as the band it is, and never converted into a position — even the narrowest band Catalyst has seen still covers well over a thousand learners.
+* **Hover any row** to see when its XP was last read.
+
+### Fixed
+
+* **Daily Karma comparisons no longer measure against your entire all-time karma.** When Catalyst could not read your karma from a board it recorded a zero, and the next real reading was then reported as if you had earned your whole lifetime total that day. Existing records are repaired automatically; the affected figure returns within about half an hour of browsing.
+* **Comparisons on the board no longer show everyone as ahead of you.** The same underlying fault could set your own XP to zero, so every learner appeared to lead you by their entire lifetime total — including the many you are ahead of. It cleared itself on a later refresh, which is why it came and went.
+
+### Notes
+
+* No new permissions, settings, dependencies, or backup-format changes. The board adds local roster and learner-count caches (`be_alltime_roster` and `be_leaderboard_stats`), holds public profile data for a few dozen handles, and is rebuilt from the bundled seed plus ordinary browsing, so it is not part of backups.
+* Your saved copy of the old board is still on disk and is still never deleted. It is not read: it holds the same people the bundled snapshot does, and its numbers were known to be out of date.
+* The positions recorded before Boot.dev withdrew them are kept as history and travel with each release. They are never shown as current, because they can no longer be checked.
+
 ## v0.14.2 - Leaderboard compatibility fix
 
 Boot.dev changed the format of its leaderboard and profile responses in mid-August 2026. Catalyst could no longer read them, and most of what it adds to the leaderboard page quietly stopped working.

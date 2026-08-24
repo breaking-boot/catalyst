@@ -8,24 +8,11 @@
 
 A Manifest V3 browser extension — for Chromium-based browsers such as Chrome and Brave (Firefox support is planned) — that augments Boot.dev with a few quality-of-life additions:
 
-1. **All-time XP leaderboard** - adds a global all-time XP section to the leaderboard page. **Temporarily unavailable** - see [Boot.dev changes](#bootdev-changes-temporarily-unavailable) below.
+1. **Top Observed Learners** - a lifetime-XP board on the leaderboard page, assembled by Catalyst after Boot.dev removed both its all-time leaderboard and its per-user rank.
 2. **Cumulative profile XP** - adds lifetime XP and current-level XP progress to public user profile pages.
 3. **Boss-event tracker** - Boots Aura (current, event high, all-time high, this event's average), your own chest progress, and your guild's progress, plus alerts when the XP bonus is worth submitting on.
 4. **Next Lesson nav button** - adds a top-nav shortcut to the current next lesson when the extension can infer it.
 5. **Personal leaderboards** - lets you save Boot.dev handles and compare them in custom Daily XP, All-Time XP, Daily Karma, and All-Time Karma boards.
-
-## Boot.dev changes (temporarily unavailable)
-
-Boot.dev changed two things in August 2026 that Catalyst was built on. The boss
-tracker has been rebuilt around the new event (see **Boss Event Tracker** below).
-The other is still pending; **a future version will remove this section**.
-
-- **Top All-Time Learners is hidden.** Boot.dev removed the all-time timeframe
-  from the leaderboard endpoint Catalyst read, so the board could no longer be
-  refreshed. It will be rebuilt using a source that still exists. Your saved copy
-  of the last board is kept, not deleted, and the setting stays in the popup.
-  Everything else on the leaderboard page — Personal Leaderboards and the
-  comparisons on Boot.dev's own boards — is unaffected.
 
 ## TL;DR
 
@@ -50,7 +37,9 @@ catalyst/
       utils.js             Shared helpers (loaded first)
       settings-schema.js   Canonical settings defaults/labels (shared with the settings pages)
       settings.js          Feature on/off model
-      leaderboard.js       All-time and personal leaderboard feature
+      alltime-seed.js      Bundled seed for Top Observed Learners
+      allTimeRoster.js     Observed-roster storage, discovery, ordering, and refresh
+      leaderboard.js       Observed-board rendering and personal leaderboards
       profile.js           Cumulative XP on public profile pages
       boss.js              Boss-event tracker
       nextLesson.js        Next Lesson nav link and Alt+N shortcut
@@ -131,7 +120,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 ### Settings
 
 - Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chromium browsers hide extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
-- The popup toggles the twelve features: Boss event tracker (off by default), Boss event reminders, boss aura alerts, Top All-Time Learners Leaderboard (temporarily has nothing to show — see [Boot.dev changes](#bootdev-changes-temporarily-unavailable)), Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds level filter, the CLI command shortcuts, the checklist step shortcuts (off by default), code submission confirmation (off by default), and leaderboard comparisons (XP/karma).
+- The popup toggles the twelve features: Boss event tracker (off by default), Boss event reminders, boss aura alerts, Top Observed Learners, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds level filter, the CLI command shortcuts, the checklist step shortcuts (off by default), code submission confirmation (off by default), and leaderboard comparisons (XP/karma).
 - The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), and per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards).
 - Settings sync across your devices (`chrome.storage.sync`; in Brave they stay on-device) and apply instantly — no page reload. Turning a feature off stops any polling or requests it owns, so it adds no load to Boot.dev.
 
@@ -174,11 +163,16 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 ### Leaderboards
 
-#### All-Time XP — temporarily unavailable
+#### Top Observed Learners
 
-- **This section does not currently appear.** Boot.dev removed the `alltime` timeframe from `/v1/leaderboard_xp/{period}` in August 2026, so Catalyst can no longer refresh the board. Rather than keep redrawing a saved copy that silently drifts out of date — wrong totals, and eventually the wrong order — Catalyst hides the panel until it can rebuild the board from a source that still exists. A future version will do that and remove this note.
-- Your last saved copy of the board is **kept, not deleted**, and the **Top All-Time Learners** setting stays in the popup. Catalyst no longer requests the removed data.
-- When it returns, the **Top All-Time Learners** section will again appear on `https://www.boot.dev/leaderboard`, with role-tier avatar frames and your own row highlighted.
+- A **Top Observed Learners** section on `https://www.boot.dev/leaderboard`, with role-tier avatar frames and your own row highlighted.
+- **Why it is called "Observed", and why that matters.** Boot.dev removed its all-time leaderboard in August 2026, and a week later removed the per-user rank from profiles too — a profile now shows a band such as "Top 1%" instead. That band is far too coarse to order anybody: when first measured, a single value covered everyone from about 930,000 to 1,740,000 lifetime XP, and even the finest band seen since still covers well over a thousand learners. The leaderboard and profile sources Catalyst has identified therefore no longer provide an exact all-time position. Catalyst orders the learners it has seen by lifetime XP instead. A number on this board means "Nth highest XP among the learners Catalyst has observed" — not "Nth on Boot.dev".
+- **It ships knowing where to start.** The extension bundles a seed of observed high-XP learners, so a new installation shows a full board immediately, with no waiting and no network round-trip.
+- **It keeps its known learners current as you browse.** XP is picked up from responses Boot.dev's own pages already make — every profile you open, every native board — and each time you open or reload the leaderboard Catalyst refreshes a few more known learners. A fresh installation can refresh the bundled roster over a handful of loads; continued browsing also discovers learners the seed did not know about. **At most 12 requests per load**, and at most one such pass every five minutes.
+- **It keeps looking for people it does not know yet.** Anyone seen with enough lifetime XP to belong is picked up automatically, and Catalyst also watches Boot.dev's weekly and monthly boards, where someone climbing toward the top is most likely to appear.
+- Learners you already know never disappear on their own. Leaving the leaderboard alone for a month changes nothing; the board is refreshed the next few times you visit.
+- The subtitle shows **your own percentile** — the remaining all-time standing signal Boot.dev publishes through public stats — against the current total number of learners. Catalyst displays it as a percentile and never converts it into an exact rank.
+- Hover any row to see when its XP was last read.
 
 #### Personal Leaderboards
 
@@ -197,8 +191,8 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 #### XP and Karma Comparisons
 
 - Every leaderboard entry other than your own shows a comparison — how far ahead (green) or behind (red) you are in the same unit as that board's value.
-- Comparisons appear on all extension panels (all four Personal Leaderboards boards, and Top All-Time Learners once it returns) and on all four native Boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. Recent Archmages is left untouched.
-- Your comparison value is read from the same API response that feeds each board, with a fallback to your saved personal record when absent.
+- Comparisons appear on all extension panels (all four Personal Leaderboards boards, and Top Observed Learners) and on all four native Boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. Recent Archmages is left untouched.
+- Native-board comparisons use your value from the same response that feeds that board when available. Top Observed Learners uses XP observed for you in the current session rather than restoring your value from the stored roster, so stale roster data cannot become the comparison baseline.
 - Comparisons are toggleable per board from the options page (see **Settings**), with a master switch in the popup to hide them all at once.
 
 ### Boss Event Tracker
@@ -241,7 +235,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 ## How It Works
 
-Boot.dev is a Nuxt/Vue single-page app with rebuilt CSS class names, so the extension reads its data from intercepted API responses rather than scraping the DOM (DOM scraping is a last resort, used only for the one value Boot.dev exposes nowhere else — the platform-wide student count). The main flow:
+Boot.dev is a Nuxt/Vue single-page app with rebuilt CSS class names, so Catalyst gets feature data from intercepted or explicitly requested API responses wherever possible and treats DOM reads as a last resort. The platform-wide learner count now comes from `/v1/leaderboard_stats`; rendered page data is used only where no suitable API source is available. The main flow:
 
 ```text
 page fetch/XHR -> injected.js clone -> window.postMessage -> content.js router -> UI/storage
@@ -256,7 +250,7 @@ For Next Lesson, `/v1/dashboard_content` is treated as the authoritative source 
 Catalyst is built to keep your data on your device:
 
 - **It reads only your own Boot.dev session data.** The extension observes the JSON responses that the Boot.dev page already fetches with your existing session (leaderboards, public profiles, boss progress, dashboard content, lesson history) and, when a feature needs data the page has not already fetched, requests the relevant Boot.dev endpoint itself. That includes public leaderboard/profile data and, if submit confirmation is enabled and a lesson's risk state is still unknown, that lesson's own history endpoint. It never asks for or handles your password, and your auth token is never stored, logged, or copied out of the page.
-- **It stores only settings and small caches locally.** Feature on/off flags live in `chrome.storage.sync` (so they roam across your browser profile; Brave keeps them on-device) as plain booleans — no personal data. Small caches (boss state, saved personal-leaderboard handles, your current handle, the next-lesson link) live in `chrome.storage.local` on your machine.
+- **It stores only settings and small caches locally.** Feature on/off flags live in `chrome.storage.sync` (so they roam across your browser profile; Brave keeps them on-device) as plain booleans — no personal data. Small caches (boss state, saved personal-leaderboard handles, the observed lifetime-XP roster and learner count, your current handle, and the next-lesson link) live in `chrome.storage.local` on your machine.
 - **It transmits nothing off-device** — with one opt-in exception: if you enable **Automatic update checks**, it makes one request a day to GitHub's public API to compare version numbers. That request contains no personal data. It is off by default.
 - **Permissions are minimal:** `storage`, and host access to `https://www.boot.dev/*` only. Catalyst adds no analytics and no tracking.
 
@@ -275,6 +269,8 @@ cd bootdev-extension
 node --check src/utils.js
 node --check src/settings-schema.js
 node --check src/settings.js
+node --check src/alltime-seed.js
+node --check src/allTimeRoster.js
 node --check src/leaderboard.js
 node --check src/profile.js
 node --check src/boss.js
@@ -294,7 +290,10 @@ node ../scripts/check_lesson_features.mjs
 node ../scripts/check_boss_normalizer.mjs
 node ../scripts/check_next_lesson.mjs
 node ../scripts/check_leaderboard_avatar.mjs
+node ../scripts/check_leaderboard_casing.mjs
 node ../scripts/check_endpoint_tripwire.mjs
+node ../scripts/check_alltime_roster.mjs
+node ../scripts/check_snapshot_series.mjs
 ```
 
 To build a release zip, run `bash scripts/package-extension.sh` from the repo root. See [CLAUDE.md](CLAUDE.md) for architecture details and agent guidance.

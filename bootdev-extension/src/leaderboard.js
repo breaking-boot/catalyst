@@ -2,8 +2,12 @@
 // All-time XP leaderboard injection and personal leaderboard feature.
 // Handles: handleAllTimeLeaderboard, personal leaderboard UI and storage.
 
-const LEADERBOARD_CACHE_KEY = "be_alltime_leaderboard_cache";
-const ALL_TIME_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/alltime";
+// be_alltime_leaderboard_cache (the pre-v0.15.0 frozen board) is deliberately
+// NOT read any more, and equally deliberately never deleted. It is a snapshot
+// of the same GLOBAL board the July 2026 capture holds, so it contains no
+// handle the bundled seed lacks, while resolving its 25 stale handles would
+// cost 25 /stats requests competing with fresher work. Its stored Position and
+// XP were already known wrong (a-fleming at rank 1 while katcodes led on XP).
 const DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_xp/day";
 const KARMA_LEADERBOARD_URL = "https://api.boot.dev/v1/leaderboard_karma/alltime";
 // `limit=25` is an upper bound, not an expectation. Boot.dev resized leagues
@@ -120,12 +124,6 @@ const FRAME_INNER_PCT = [96, 92, 80, 77, 77, 69, 70, 64, 59, 57];
 const DEFAULT_INNER_PCT = 62.5; // legacy fixed size, for an unrecognized frame
 
 // Live boards only: each of these holds a response received in this session.
-// cachedAllTimeEntries in particular is NOT seeded from storage — see
-// loadCachedAllTimeLeaderboard for why that distinction is load-bearing.
-let cachedAllTimeEntries = [];
-// The restored be_alltime_leaderboard_cache. Retained (in memory and in
-// storage) as the v0.15.0 seed; nothing renders or compares against it.
-let storedAllTimeCache = [];
 let cachedDailyEntries = [];
 let cachedKarmaEntries = [];
 let cachedLeagueDailyEntries = [];
@@ -153,6 +151,11 @@ let currentUserHandle = "";
 // My own karma series ([t, karma] pairs), kept apart from personal records so
 // Daily Karma comparisons have a baseline without me tracking my own handle.
 let currentUserKarmaSnapshots = [];
+// My own lifetime XP, from a response received THIS SESSION. Session-only and
+// never restored from storage, which is the whole point: v0.13.1's defect was
+// getMyValue("xp") reading a stored board first, so every All-Time comparison
+// was computed against a stale copy of me. The roster must never feed this.
+let currentUserLiveXp = null;
 let allTimeRenderVersion = 0;
 let personalRenderVersion = 0;
 let personalRenderTimer = null;
@@ -454,14 +457,18 @@ async function loadCurrentUserHandle() {
   const karmaStored = await chromeGet(CURRENT_USER_KARMA_KEY);
   if (enhancerStopped) return;
   currentUserHandle = normalizeHandle(stored.handle || stored);
-  // The karma series is only valid for the handle it was recorded for.
-  currentUserKarmaSnapshots =
+  // The karma series is only valid for the handle it was recorded for, and is
+  // repaired on the way in — see dropFabricatedZeros. The repaired copy is
+  // persisted by the next observation rather than written back here, so a load
+  // stays a load.
+  currentUserKarmaSnapshots = dropFabricatedZeros(
     currentUserHandle &&
     isPlainObject(karmaStored) &&
     normalizeHandle(karmaStored.handle) === currentUserHandle &&
     Array.isArray(karmaStored.snapshots)
       ? karmaStored.snapshots
-      : [];
+      : []
+  );
 }
 
 async function rememberCurrentUserHandle(handle) {
@@ -477,7 +484,7 @@ async function rememberCurrentUserHandle(handle) {
   await chromeSet(CURRENT_USER_HANDLE_KEY, { handle: normalized, updatedAt: Date.now() });
   if (!isLeaderboardPage()) return;
 
-  if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
+  renderAllTimeLeaderboard();
   schedulePersonalLeaderboardRender();
 }
 
@@ -504,46 +511,65 @@ function learnCurrentUserHandleFromDom() {
   if (nuxtHandle) void rememberCurrentUserHandle(nuxtHandle);
 }
 
-// ---------------------------------------------------------------------------
-// All-time leaderboard cache
-// ---------------------------------------------------------------------------
-// Restore be_alltime_leaderboard_cache WITHOUT feeding cachedAllTimeEntries.
-//
-// /v1/leaderboard_xp/alltime has returned 400 "Invalid timeframe" since
-// 2026-08-14 (23 period names tested; only day/week/month survive), and
-// content.js drops every non-2xx before routing — so a restored cache could
-// never be refreshed. Rendering it showed a frozen board that was wrong in
-// value AND in order, and getMyValue("xp") read it first, so every All-Time
-// comparison was computed against a stale "me" as well.
-//
-// Keeping the restore here, pointed at a variable nothing renders from, is the
-// whole fix: cachedAllTimeEntries can now only hold a 200 received in THIS
-// session, so the panel, the ensure pass, the comparisons and the snapshot
-// harvest all become honest without being touched — and the panel comes back by
-// itself if Boot.dev ever restores the timeframe. The key is deliberately never
-// deleted: it is the seed candidate for the v0.15.0 board rebuild.
-async function loadCachedAllTimeLeaderboard() {
-  const stored = (await chromeGet(LEADERBOARD_CACHE_KEY)) || {};
-  if (enhancerStopped) return;
-  storedAllTimeCache = Array.isArray(stored.entries) ? stored.entries : [];
-}
-
 // ===========================================================================
 // FEATURE 1: All-time XP leaderboard section
 // ===========================================================================
+// Kept and repointed. The timeframe has 400'd since 2026-08-14 so this cannot
+// fire today, but if Boot.dev ever restores it the response is the roster's
+// best possible source — 25 authoritative rank + XP observations at once — and
+// nothing else needs to change.
 function handleAllTimeLeaderboard(json) {
-  if (!isLeaderboardPage()) return;
-
   const entries = getLeaderboardEntries(json);
   if (!entries.length) return;
   // A renamed XP would render 25 rows of "0 xp" rather than failing outright.
   reportUsableFields("/v1/leaderboard_xp/alltime", entries, "XP", (e) => readField(e, "XP"));
-  cachedAllTimeEntries = entries;
   markBoardSeen("alltime");
-  chromeSet(LEADERBOARD_CACHE_KEY, { entries, updatedAt: Date.now() });
   harvestPersonalSnapshots(entries);
+  recordCurrentUserLiveXp(myValueFromEntries(entries, "XP"));
 
-  renderAllTimeLeaderboard(entries);
+  const now = Date.now();
+  let changed = false;
+  for (const entry of entries) {
+    const handle = normalizeHandle(getHandle(entry));
+    if (!isValidHandle(handle)) continue;
+    changed = applyRosterObservation(allTimeRoster, {
+      handle,
+      // Keys are the roster's own observation shape; the values are API reads,
+      // so every one goes through readField. This path cannot run today (the
+      // alltime timeframe 400s) — which is exactly why it would rot unnoticed.
+      Handle: getHandle(entry),
+      rank: readField(entry, "Position") ?? entry.Rank,
+      rankAt: now,
+      XP: readField(entry, "XP"),
+      FirstName: readField(entry, "FirstName"),
+      LastName: readField(entry, "LastName"),
+      Role: readField(entry, "Role"),
+      Level: readField(entry, "Level"),
+      ProfileImageURL: getAvatarUrl(entry),
+      profileAt: now,
+    }) || changed;
+  }
+  if (changed) saveAllTimeRoster();
+  renderAllTimeLeaderboard();
+}
+
+// My own lifetime XP, observed live. Fed by any response that reveals it: my
+// own profile, a league board carrying me, or a restored all-time board.
+function recordCurrentUserLiveXp(xp) {
+  // A nullish argument means "this response did not contain me", never "my XP
+  // is zero". num(null) is 0 — the same trap that made Daily Karma compare
+  // against a fabricated zero — and EVERY caller here can legitimately pass
+  // null: myValueFromEntries returns null when I am not on that board (I am
+  // usually absent from at least one of the league, week and month boards), and
+  // readNum returns null when the field is missing.
+  //
+  // The symptom was distinctive: my own XP read 0, so every All-Time comparison
+  // rendered as minus that learner's entire lifetime total, including for the
+  // 23 people I am ahead of. It self-healed as soon as any response containing
+  // me arrived, which is what made it look intermittent rather than broken.
+  const value = observedNum(xp);
+  if (value == null) return;
+  currentUserLiveXp = value;
 }
 
 // Our own value for a given metric. Prefer the actual leaderboard responses
@@ -561,12 +587,12 @@ function getMyValue(kind) {
     // TotalXP has never appeared on a leaderboard entry (full key list checked
     // against live responses 2026-07-31), so it is not carried as a fallback.
     //
-    // cachedAllTimeEntries stays first: it can only hold a board received this
-    // session (see loadCachedAllTimeLeaderboard), so it is both live and the
-    // exact numbers the All-Time panel is displaying — which is the point of
-    // preferring it. While the alltime timeframe stays gone it is empty, and
-    // these comparisons fall through to the live league boards.
-    value = fromEntries(cachedAllTimeEntries, "XP")
+    // THE ROSTER IS DELIBERATELY ABSENT FROM THIS CHAIN. Its rows can be days
+    // or weeks old, and reading my own row out of it would recreate v0.13.1
+    // exactly: a stale "me" silently wrong-footing every All-Time comparison,
+    // which is far harder to notice than a missing one. Only values observed
+    // THIS SESSION are eligible.
+    value = currentUserLiveXp
       ?? fromEntries(cachedLeagueEntries, "XP")
       ?? fromEntries(cachedLeagueDailyEntries, "XP");
   } else if (kind === "daily") {
@@ -674,8 +700,22 @@ function setTextIfChanged(el, text) {
   if (el && el.textContent !== text) el.textContent = text;
 }
 
-function renderAllTimeLeaderboard(entries) {
+function renderAllTimeLeaderboard() {
   if (!isFeatureEnabled("allTimeLeaderboard")) {
+    removeAllTimeLeaderboard();
+    return;
+  }
+  // Reached from the intake path too, which fires on any relayed profile
+  // response — including on a profile page, where the slow path below would
+  // otherwise start an 8-second waitFor poll per response.
+  if (!isLeaderboardPage()) {
+    removeAllTimeLeaderboard();
+    return;
+  }
+  // Nothing known yet (a cleared roster before the seed applies): show nothing
+  // rather than an empty skeleton. Absence is the honest state, and it is what
+  // v0.13.1 chose deliberately when the endpoint died.
+  if (!allTimeRoster || !rosterCoverage(allTimeRoster)) {
     removeAllTimeLeaderboard();
     return;
   }
@@ -683,7 +723,7 @@ function renderAllTimeLeaderboard(entries) {
   const existingPanel = document.getElementById("be-alltime-leaderboard");
   if (existingPanel) {
     if (!isLeaderboardPage()) return;
-    _applyAllTimeContent(existingPanel, entries);
+    _applyAllTimeContent(existingPanel);
     return;
   }
 
@@ -705,17 +745,18 @@ function renderAllTimeLeaderboard(entries) {
         host.append(panel);
       }
     }
-    _applyAllTimeContent(panel, entries);
+    _applyAllTimeContent(panel);
   });
 }
 
-function _applyAllTimeContent(panel, entries) {
+function _applyAllTimeContent(panel) {
   // Build the static skeleton once; thereafter reconcile the grid in place.
   let grid = panel.querySelector(".be-native-grid");
   if (!grid) {
     panel.innerHTML = `
-      <h3 class="be-native-title">Top All-Time Learners</h3>
+      <h3 class="be-native-title">Top Observed Learners</h3>
       <p class="be-native-subtitle" data-be-subtitle hidden></p>
+      <p class="be-native-subtitle be-alltime-coverage" data-be-coverage hidden></p>
       <div class="be-native-grid-wrap">
         <div class="be-native-grid"></div>
       </div>`;
@@ -723,23 +764,14 @@ function _applyAllTimeContent(panel, entries) {
   }
 
   const currentIdentity = getCurrentUserIdentity();
-  updateAllTimeSubtitle(panel, entries, currentIdentity);
-  const visibleEntries = getVisibleAllTimeEntries(entries, currentIdentity);
+  const board = buildAllTimeBoardRows(allTimeRoster, currentIdentity.handle);
+  updateAllTimeSubtitle(panel, board);
   const myXP = getMyValue("xp");
 
-  const items = visibleEntries.map((e, i) => {
-    const handle = getHandle(e);
-    return {
-      key: handle || `#${i}`,
-      entry: e,
-      handle,
-      displayName: getDisplayName(e, handle),
-      xp: readNum(e, "XP"),
-      rank: readField(e, "Position") ?? e.Rank ?? i + 1,
-      isCurrentUser: isCurrentLeaderboardEntry(e, currentIdentity),
-      href: handle ? `/u/${encodeURIComponent(handle)}` : "#",
-    };
-  });
+  const items = board.rows.map((row) => ({
+    ...row,
+    displayName: getDisplayName(row.entry, row.handle),
+  }));
 
   reconcileKeyedChildren(
     grid,
@@ -751,14 +783,14 @@ function _applyAllTimeContent(panel, entries) {
 }
 
 function allTimeCardHTML(it, myXP) {
-  return `<div class="be-leader-card${it.isCurrentUser ? " be-current-user" : ""}">
-      <a href="${it.href}" class="be-leader-link">
-        <span class="be-leader-rank">${escapeHtml(it.rank)}</span>
+  return `<div class="be-leader-card${it.isCurrentUser ? " be-current-user" : ""}${it.outsideBoard ? " be-leader-outside" : ""}">
+      <a href="${escapeHtml(it.href || "#")}" class="be-leader-link"${allTimeRowTitleAttr(it)}>
+        <span class="be-leader-rank">${escapeHtml(allTimePositionText(it))}</span>
         ${renderLeaderAvatar(it.entry, it.displayName)}
         <span class="be-leader-copy">
           <span class="be-leader-name">${escapeHtml(it.displayName)}</span>
-          <span class="be-leader-xp">${fmtNum(it.xp)} xp</span>
-          ${comparisonSpanHTML(myXP, it.xp, "xp", it.isCurrentUser || !isComparisonEnabled("comparisonsAllTime"))}
+          <span class="be-leader-xp">${allTimeXpText(it)}</span>
+          ${comparisonSpanHTML(myXP, it.xp, "xp", it.isCurrentUser || it.xp == null || !isComparisonEnabled("comparisonsAllTime"))}
         </span>
       </a>
     </div>`;
@@ -766,74 +798,106 @@ function allTimeCardHTML(it, myXP) {
 
 function patchAllTimeCard(el, it, myXP) {
   el.classList.toggle("be-current-user", it.isCurrentUser);
+  el.classList.toggle("be-leader-outside", Boolean(it.outsideBoard));
   const link = el.querySelector(".be-leader-link");
-  if (link && link.getAttribute("href") !== it.href) link.setAttribute("href", it.href);
-  setTextIfChanged(el.querySelector(".be-leader-rank"), String(it.rank));
+  const href = it.href || "#";
+  if (link && link.getAttribute("href") !== href) link.setAttribute("href", href);
+  const title = allTimeRowTitle(it);
+  if (link) {
+    if (title) {
+      if (link.getAttribute("title") !== title) link.setAttribute("title", title);
+    } else {
+      link.removeAttribute("title");
+    }
+  }
+  setTextIfChanged(el.querySelector(".be-leader-rank"), allTimePositionText(it));
   patchLeaderAvatar(el, it.entry, it.displayName);
   setTextIfChanged(el.querySelector(".be-leader-name"), it.displayName);
-  setTextIfChanged(el.querySelector(".be-leader-xp"), `${fmtNum(it.xp)} xp`);
-  patchComparisonEl(el.querySelector("[data-be-comparison]"), myXP, it.xp, "xp", it.isCurrentUser || !isComparisonEnabled("comparisonsAllTime"));
+  setTextIfChanged(el.querySelector(".be-leader-xp"), allTimeXpText(it));
+  patchComparisonEl(el.querySelector("[data-be-comparison]"), myXP, it.xp, "xp", it.isCurrentUser || it.xp == null || !isComparisonEnabled("comparisonsAllTime"));
 }
 
-// Mirror the native boards' "You are in position N of M total students" subtitle
-// on our All-Time panel. The position is the user's own Position from the
-// all-time response; the student count has no API source (Boot.dev only
-// server-renders it), so it's read from a native board's rendered subtitle. The
-// count falls away gracefully when that text isn't on the page yet.
-function updateAllTimeSubtitle(panel, entries, currentIdentity) {
+
+// A number here means "Nth highest XP among the learners Catalyst has observed",
+// never a Boot.dev position — Boot.dev stopped publishing those on 2026-08-20.
+// The viewer's appended row has no position at all, because their standing
+// among people Catalyst does not track is exactly what cannot be known.
+function allTimePositionText(it) {
+  return it.outsideBoard || it.position == null ? "you" : String(it.position);
+}
+
+function allTimeXpText(it) {
+  return it.xp == null ? "xp unknown" : `${fmtNum(it.xp)} xp`;
+}
+
+// Freshness is disclosed per row rather than implied. A row can legitimately be
+// weeks old, and saying when it was read is what keeps that honest.
+function allTimeRowTitle(it) {
+  const parts = [];
+  if (it.profileAt) parts.push(`XP read ${describeAge(it.profileAt)}`);
+  if (it.rankAt) parts.push(`rank confirmed ${describeAge(it.rankAt)}`);
+  return parts.join(" · ");
+}
+
+function allTimeRowTitleAttr(it) {
+  const title = allTimeRowTitle(it);
+  return title ? ` title="${escapeHtml(title)}"` : "";
+}
+
+function describeAge(atMs) {
+  const ms = Date.now() - (num(atMs) || 0);
+  if (ms < 60 * 60 * 1000) return "just now";
+  const hours = Math.round(ms / (60 * 60 * 1000));
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+// Two lines. The first mirrors the native boards' "You are in position N of M
+// total students" — the position is now the viewer's own
+// LeaderboardXPRankAlltime and the count comes from /v1/leaderboard_stats
+// (findTotalStudents, which scraped it out of a native subtitle, is gone). The
+// second states how much of the board Catalyst actually knows, because the
+// panel must not imply a completeness it cannot have.
+function updateAllTimeSubtitle(panel, board) {
   const sub = panel.querySelector("[data-be-subtitle]");
-  if (!sub) return;
-  const rank = currentUserAllTimePosition(entries, currentIdentity);
-  if (rank == null) {
-    sub.hidden = true;
-    setTextIfChanged(sub, "");
-    return;
-  }
-  const total = findTotalStudents();
-  sub.hidden = false;
-  // Raw numbers (no thousands separators) to match the native subtitle exactly.
-  setTextIfChanged(sub, total != null
-    ? `You are in position ${rank} of ${total} total students`
-    : `You are in position ${rank}`);
-}
+  const coverageEl = panel.querySelector("[data-be-coverage]");
 
-function currentUserAllTimePosition(entries, currentIdentity) {
-  if (!normalizeHandle(currentIdentity.handle)) return null;
-  const current = entries.find((e) => isCurrentLeaderboardEntry(e, currentIdentity));
-  return current ? (readNum(current, "Position") ?? num(current.Rank)) : null;
-}
-
-// The platform-wide student count is only in the server-rendered page payload,
-// never an api.boot.dev response, so read it from a native board's rendered
-// subtitle. Text-based so it survives class-name churn; skips our own panels so
-// it can't read back its own output.
-function findTotalStudents() {
-  // The count sits in a subtitle that Boot.dev renders as a <p> (League boards)
-  // or <h3> (Global boards), so search both paragraphs and headings.
-  for (const el of document.querySelectorAll("p, h1, h2, h3, h4, h5, h6")) {
-    if (el.closest("#be-alltime-leaderboard, #be-personal-leaderboards")) continue;
-    const m = /of\s+([\d,]+)\s+total students/i.exec(normalizeText(el.textContent));
-    if (m) return num(m[1].replace(/,/g, ""));
-  }
-  return null;
-}
-
-function getVisibleAllTimeEntries(entries, currentIdentity = getCurrentUserIdentity()) {
-  const top25 = entries.slice(0, 25);
-  if (!normalizeHandle(currentIdentity.handle)) return top25;
-
-  const current = entries.find((entry) => isCurrentLeaderboardEntry(entry, currentIdentity));
-  if (!current) return top25;
-
-  const currentRank = readNum(current, "Position") ?? num(current.Rank);
-  if (currentRank != null && currentRank > 25) {
-    const top24 = entries
-      .filter((entry) => !isCurrentLeaderboardEntry(entry, currentIdentity))
-      .slice(0, 24);
-    return [...top24, current];
+  if (sub) {
+    // Boot.dev replaced the exact rank with a percentile band on 2026-08-20, so
+    // this is the only self-position it still publishes. Shown verbatim and
+    // never converted into an estimated rank: one band covers lifetime XP from
+    // 930,102 to 1,741,426 (measured), i.e. thousands of positions.
+    const percentile = num(allTimeRoster?.self?.percentile);
+    const total = getTotalStudents();
+    if (percentile == null) {
+      sub.hidden = true;
+      setTextIfChanged(sub, "");
+    } else {
+      sub.hidden = false;
+      // Raw numbers (no thousands separators) to match the native subtitle exactly.
+      setTextIfChanged(sub, total != null
+        ? `You are in the top ${percentile}% of ${total} learners`
+        : `You are in the top ${percentile}% of learners`);
+    }
   }
 
-  return top25;
+  if (coverageEl) {
+    coverageEl.hidden = false;
+    // Says what the board actually is. Boot.dev publishes no positions any more,
+    // so these are Catalyst's own observations ordered by lifetime XP — the
+    // panel must not imply it is reproducing a Boot.dev ranking.
+    //
+    // Deliberately NO count. The roster size is not the number of learners
+    // Catalyst has observed: simply opening this page shows it a hundred-odd
+    // people across the native boards, and the roster only retains the highest
+    // XP among them. Printing 28 would understate the observation and overstate
+    // its precision at the same time. Counting truthfully would mean keeping a
+    // set of every handle ever seen, which is storage spent to print a number
+    // nobody needs.
+    setTextIfChanged(coverageEl,
+      "Ordered by lifetime XP among the top learners Catalyst has observed · updated as you browse");
+  }
 }
 
 // Default avatar for users with no profile image, matching Boot.dev's native
@@ -931,7 +995,7 @@ const NATIVE_SECTION_TITLES = new Set([
   "top league learners",
   "top community members",
   "recent archmages",
-  "top all-time learners",
+  "top observed learners",
   "personal leaderboards",
 ]);
 
@@ -1114,11 +1178,9 @@ function ensureLeaderboardUiState() {
   // All-Time: re-render if it's missing or its current-user highlight dropped.
   if (isFeatureEnabled("allTimeLeaderboard")) {
     const allTime = document.getElementById("be-alltime-leaderboard");
-    if (!allTime) {
-      if (cachedAllTimeEntries.length) renderAllTimeLeaderboard(cachedAllTimeEntries);
-    } else if (cachedAllTimeEntries.some((entry) => isCurrentLeaderboardEntry(entry, currentIdentity)) &&
-        !allTime.querySelector(".be-current-user")) {
-      renderAllTimeLeaderboard(cachedAllTimeEntries);
+    const meOnBoard = Boolean(allTimeRoster?.entries?.[normalizeHandle(currentIdentity.handle)]);
+    if (!allTime || (meOnBoard && !allTime.querySelector(".be-current-user"))) {
+      renderAllTimeLeaderboard();
     }
   }
 
@@ -1246,14 +1308,16 @@ function harvestPersonalSnapshots(entries, { backdate = false, asOf = 0 } = {}) 
 // Re-harvest every board response received this session. Run when a handle is
 // added: the per-response harvests only cover handles tracked at arrival time,
 // so without this a new user already sitting on a cached board (a league-mate
-// especially) would show an estimate until the next page load refetches. The
-// boardSeenAt guard matters — cachedAllTimeEntries is restored from storage,
-// and harvesting a previous session's totals with a fresh timestamp would
-// poison the measured tier with stale points.
+// especially) would show an estimate until the next page load refetches.
+//
+// The all-time board is absent here on purpose. Snapshots are timestamped
+// observations, and the roster holds stored values of unknown age — replaying
+// them with a fresh timestamp is exactly how the measured daily-XP tier gets
+// poisoned. Roster refreshes reach the snapshot store the correct way, at
+// arrival time, through updatePersonalUserData.
 function harvestCachedBoardSnapshots() {
   if (boardSeenAt.daily) harvestPersonalSnapshots(cachedDailyEntries, { backdate: true, asOf: boardSeenAt.daily });
   if (boardSeenAt.leagueDaily) harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true, asOf: boardSeenAt.leagueDaily });
-  if (boardSeenAt.alltime) harvestPersonalSnapshots(cachedAllTimeEntries, { asOf: boardSeenAt.alltime });
   if (boardSeenAt.league) harvestPersonalSnapshots(cachedLeagueEntries, { asOf: boardSeenAt.league });
   if (boardSeenAt.karma) harvestPersonalKarmaSnapshots(cachedKarmaEntries, { asOf: boardSeenAt.karma });
 }
@@ -1283,6 +1347,7 @@ function handleDailyXpLeaderboard(json) {
   markBoardSeen("daily");
   persistDailyBoardLookup("daily", entries);
   harvestPersonalSnapshots(entries, { backdate: true });
+  noteAllTimeBoardEntries(entries);
   if (isLeaderboardPage()) augmentNativeDailyLeaderboard();
 }
 
@@ -1296,6 +1361,9 @@ function handleKarmaLeaderboard(json) {
   markBoardSeen("karma");
   harvestPersonalKarmaSnapshots(entries);
   recordCurrentUserKarma(myValueFromEntries(entries, "Karma"));
+  // The karma board is the single most productive discovery source a typical
+  // install has: it surfaced 4 of the top 25 on its own (2026-08-14).
+  noteAllTimeBoardEntries(entries);
   if (isLeaderboardPage()) augmentNativeKarmaLeaderboard();
 }
 
@@ -1351,6 +1419,21 @@ function harvestPersonalKarmaSnapshots(entries, { asOf = 0 } = {}) {
   }
 }
 
+// /v1/leaderboard_xp/{week,month}: requested only while a board position is
+// unknown (see requestAllTimeRosterRefresh). DISCOVERY AND LIFETIME XP ONLY —
+// XPEarned here covers 7 or 30 days, so it must never reach computeDailyXpView,
+// the daily comparisons, or a backdated snapshot, where XP - XPEarned would
+// fabricate a total from a week ago and hand it to the 24-hour window. A plain
+// non-backdated harvest is correct and useful, exactly as for the league
+// standing board.
+function handleXpDiscoveryBoard(json) {
+  const entries = getLeaderboardEntries(json);
+  if (!entries.length) return;
+  harvestPersonalSnapshots(entries);
+  noteAllTimeBoardEntries(entries);
+  recordCurrentUserLiveXp(myValueFromEntries(entries, "XP"));
+}
+
 function handleLeagueDailyLeaderboard(json) {
   const entries = getLeaderboardEntries(json);
   if (!entries.length) return; // see handleDailyXpLeaderboard
@@ -1359,6 +1442,8 @@ function handleLeagueDailyLeaderboard(json) {
   markBoardSeen("leagueDaily");
   persistDailyBoardLookup("leagueDaily", cachedLeagueDailyEntries);
   harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true });
+  noteAllTimeBoardEntries(cachedLeagueDailyEntries);
+  recordCurrentUserLiveXp(myValueFromEntries(cachedLeagueDailyEntries, "XP"));
   if (isLeaderboardPage()) {
     augmentNativeLeagueDaily();
     augmentNativeDailyLeaderboard(); // league-daily is a fallback for our own daily value
@@ -1371,6 +1456,8 @@ function handleLeagueLeaderboard(json) {
   cachedLeagueEntries = entries;
   markBoardSeen("league");
   harvestPersonalSnapshots(cachedLeagueEntries);
+  noteAllTimeBoardEntries(cachedLeagueEntries);
+  recordCurrentUserLiveXp(myValueFromEntries(cachedLeagueEntries, "XP"));
   if (isLeaderboardPage()) augmentNativeLeagueStanding();
 }
 
@@ -1378,6 +1465,13 @@ function updatePersonalUserData(username, isStats, json) {
   const requestedHandle = normalizeHandle(username);
   const data = json?.data ?? json;
   const responseHandle = normalizeHandle(readField(data, "Handle"));
+  // Every per-user response is an all-time observation too, whoever asked for
+  // it — Boot.dev's own profile-page fetches included. Runs before the personal
+  // handling below because it is independent of whether this handle is tracked.
+  noteAllTimeObservation(responseHandle || requestedHandle, isStats, json);
+  if (!isStats && (responseHandle || requestedHandle) === normalizeHandle(currentUserHandle)) {
+    recordCurrentUserLiveXp(readNum(data, "XP"));
+  }
   // My own stats response feeds the current-user karma series even when I'm not
   // a tracked handle. Both branches route through here, but only /stats carries
   // a karma field (the public profile has none), so the profile branch is a
@@ -1470,25 +1564,6 @@ function requestPersonalLeaderboardData() {
   for (const handle of personalHandles) {
     void refreshPersonalHandle(handle);
   }
-}
-
-// The extension's own All-Time board. Boot.dev has no native all-time board, so
-// only we ever fetch this; the freshness gate collapses rapid route re-entries.
-//
-// Disabled in v0.13.1: /v1/leaderboard_xp/alltime returns 400 "Invalid
-// timeframe" (23 period names probed 2026-08-14 — a removal, not a rename, and
-// Boot.dev's own /leaderboard has never shown an all-time board), so the request
-// could only ever put a red 400 in every user's console. handleAllTimeLeaderboard
-// and the render path are left intact: v0.15.0 rebuilds this board from
-// /v1/users/public/{handle}/stats -> LeaderboardXPRankAlltime, seeded from
-// be_alltime_leaderboard_cache. Deleting the early return is all it takes to
-// probe the timeframe again.
-const ALLTIME_TIMEFRAME_AVAILABLE = false;
-function requestAllTimeLeaderboardData() {
-  if (!ALLTIME_TIMEFRAME_AVAILABLE) return;
-  if (!isLeaderboardPage() || !isFeatureEnabled("allTimeLeaderboard")) return;
-  if (boardFresh("alltime")) return;
-  requestApiJson(ALL_TIME_LEADERBOARD_URL);
 }
 
 // Source data for native-section comparisons (karma + league boards). Independent of
@@ -2221,7 +2296,16 @@ function recordKarmaSnapshot(record, karma, atMs = Date.now()) {
 // runs, and caps length. Returns the new array, or null when `value` isn't a
 // usable total (caller keeps its existing series).
 function updateSnapshotSeries(existing, value, atMs) {
-  const total = num(value);
+  // A nullish observation means "not observed", never "observed as zero".
+  // num(null) is 0 — the documented trap in this codebase — so without this
+  // guard a caller that legitimately found nothing writes a real 0 point.
+  // myValueFromEntries returns null when I am not on a board, and being absent
+  // from the top-25 karma board means "below 25th", not "zero karma". That
+  // fabricated 0 then anchors the 24-hour window, and the next genuine reading
+  // is reported as a same-day GAIN of the entire lifetime total: the Daily
+  // Karma comparison read the viewer's whole all-time karma (measured
+  // 2026-08-20, present since v0.14.1).
+  const total = observedNum(value);
   if (total == null || total < 0) return null;
 
   const cutoff = Date.now() - SNAPSHOT_MAX_AGE_MS;
@@ -2256,6 +2340,21 @@ function updateSnapshotSeries(existing, value, atMs) {
     snaps = snaps.filter((s, i, arr) => i === 0 || i === arr.length - 1 || i % 2 === 1);
   }
   return snaps;
+}
+
+// One-off repair for series poisoned by the num(null) trap before
+// updateSnapshotSeries guarded against it. A running total of 0 sitting beside
+// a positive total in the same 24-hour window would mean the user earned their
+// entire lifetime karma today; in reality it is a fabricated zero. Dropping it
+// costs at most one measurement window, which rebuilds within ~30 minutes.
+//
+// An all-zero series is left alone, so a genuinely zero-karma user still gets
+// an honest measured "0 karma today" rather than being pushed to "unavailable".
+// Idempotent, so it can run on every load and needs no migration flag.
+function dropFabricatedZeros(snapshots) {
+  const snaps = Array.isArray(snapshots) ? snapshots : [];
+  if (!snaps.some((s) => Array.isArray(s) && num(s[1]) > 0)) return snaps;
+  return snaps.filter((s) => Array.isArray(s) && num(s[1]) !== 0);
 }
 
 function ensurePersonalRecord(handle) {
