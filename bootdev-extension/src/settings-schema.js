@@ -32,7 +32,7 @@ const SETTINGS_DEFAULTS = {
   comparisons: true, // master gate for all XP/karma comparisons
 
   // Per-board comparison toggles (options page only); each is ANDed with `comparisons`.
-  comparisonsAllTime: true, // extension's All-Time Learners panel
+  comparisonsAllTime: true, // extension's Top Observed Learners panel
   comparisonsPersonal: true, // extension's Personal Leaderboards (all columns)
   comparisonsLeagueDaily: true, // native League -> Top Daily Learners
   comparisonsLeagueStanding: true, // native League -> Top League Learners
@@ -46,8 +46,9 @@ const SETTINGS_DEFAULTS = {
   personalBoardDailyKarma: true,
   personalBoardAllTimeKarma: true,
 
-  // The one default-OFF setting: opt-in GitHub release check (options page only).
-  // Default-off works within the default-on framework because normalizeSettings
+  // Opt-in GitHub release check (options page only); one of the four
+  // default-OFF settings described above. Default-off works within the
+  // default-on framework because normalizeSettings
   // seeds this key from here, so a missing value resolves to false and stays off
   // until the user explicitly enables it. See updateCheck.js.
   versionCheck: false,
@@ -63,7 +64,7 @@ const FEATURE_TOGGLES = [
   { key: "bossTracker", label: "Boss event tracker", desc: "Floating panel: Boots Aura, your chest progress, and your guild's progress." },
   { key: "bossReminders", label: "Boss event reminders", desc: "When the tracker is hidden and a boss event is live, show a small toast (at most once a day per event)." },
   { key: "bossAuraAlerts", label: "Boss aura alerts", shortDesc: "Tell me when the XP bonus is worth submitting on.", desc: "While the tracker is on, alert when the Boots Aura reaches a new all-time high, a new high for this event, close to this event's high, or simply well above this event's average. Set the minimum bonus worth interrupting you for in the tracker's settings (the gear button)." },
-  { key: "allTimeLeaderboard", label: "Top All-Time Learners Leaderboard", shortDesc: "Cumulative-XP standings Boot.dev doesn't show natively.", desc: "Cumulative-XP standings Boot.dev doesn't show natively. Boot.dev removed the data this used to come from, so Catalyst now assembles the board from each learner's own published all-time rank: it ships with the current top 25, keeps them up to date as you browse, and marks any position it can't yet confirm as unknown rather than guessing." },
+  { key: "allTimeLeaderboard", label: "Top Observed Learners", shortDesc: "A lifetime-XP board of high-XP learners Catalyst has observed.", desc: "A lifetime-XP board built from learners Catalyst has observed. Boot.dev removed its all-time leaderboard, then removed per-user ranks from profiles too, so Catalyst orders known learners by lifetime XP. A position here means 'Nth highest XP among those Catalyst has seen', not 'Nth on Boot.dev'. It ships with a seed of observed high-XP learners and keeps known entries up to date as you browse." },
   { key: "personalLeaderboards", label: "Personal Leaderboards", desc: "Your hand-picked learners to compare against." },
   { key: "profileXp", label: "Profile cumulative XP", desc: "Total XP and level progress on public profiles." },
   { key: "nextLesson", label: "Next Lesson shortcut", desc: "Top-nav link and Alt+N to jump to your next lesson." },
@@ -90,6 +91,6 @@ const COMPARISON_BOARDS = [
   { key: "comparisonsLeagueDaily", label: "League · Top Daily Learners" },
   { key: "comparisonsLeagueStanding", label: "League · Top League Learners" },
   { key: "comparisonsGlobalDaily", label: "Global · Top Daily Learners" },
-  { key: "comparisonsAllTime", label: "Global · Top All-Time Learners (Catalyst added)" },
+  { key: "comparisonsAllTime", label: "Top Observed Learners (Catalyst added)" },
   { key: "comparisonsGlobalKarma", label: "Global · Top Community Members" },
 ];
