@@ -29,9 +29,33 @@ function isPageChrome(el) {
 // ===========================================================================
 // FEATURE 2: Cumulative XP on profiles
 // ===========================================================================
-// Last non-stats public-user response, kept so the badge can be re-rendered when
-// its toggle flips back on (no fresh API call happens on a settings change).
-let lastProfileStatsJson = null;
+// Recent public-user responses, keyed by handle. Kept so the badge can be
+// re-rendered without a fresh call when its toggle flips back on — and, just as
+// importantly, so a response that arrived for a profile the user had not opened
+// YET is still there when they open it.
+//
+// That second case is Nuxt's link prefetch: hovering a profile link fetches it,
+// so the response lands while the previous profile is still on screen. Refusing
+// to RENDER it is correct (see handlePublicUserResponse); discarding it was not.
+// Boot.dev has the data in its own store by the time the click lands and does
+// not fetch again, so nothing arrived afterwards and the badge sat empty until
+// the 30-second request throttle below expired — measured at 30-35 seconds on a
+// click-through.
+const PROFILE_RESPONSE_CACHE_MAX = 8;
+const profileResponsesByHandle = new Map();
+
+function cacheProfileResponse(handle, json) {
+  if (!handle) return;
+  profileResponsesByHandle.delete(handle); // re-insert so the newest is last
+  profileResponsesByHandle.set(handle, json);
+  while (profileResponsesByHandle.size > PROFILE_RESPONSE_CACHE_MAX) {
+    profileResponsesByHandle.delete(profileResponsesByHandle.keys().next().value);
+  }
+}
+
+function cachedProfileResponse(handle) {
+  return handle ? profileResponsesByHandle.get(handle) || null : null;
+}
 
 // EVERY /v1/users/public/{handle} response reaches here, whoever asked for it:
 // Boot.dev's own page fetch, Nuxt's link prefetch when a menu item is hovered,
@@ -56,17 +80,21 @@ function handlePublicUserResponse(username, isStats, json) {
 
   const data = json?.data ?? json;
   const responseHandle = normalizeHandle(readField(data, "Handle") || username);
+  // Cached whoever it describes — a prefetch for a profile not open yet is
+  // exactly the response that will be needed a moment later.
+  cacheProfileResponse(responseHandle, json);
+
   const pageHandle = currentProfileHandle();
   if (!pageHandle || responseHandle !== pageHandle) return;
-
-  lastProfileStatsJson = json;
   handleProfileStats(json);
 }
 
 // Re-run the profile injection from cached data (used by applyFeatureSettings so
 // toggling Profile XP / Personal Leaderboards back on takes effect immediately).
 function reapplyProfileStats() {
-  if (isProfilePage() && lastProfileStatsJson) handleProfileStats(lastProfileStatsJson);
+  if (!isProfilePage()) return;
+  const cached = cachedProfileResponse(currentProfileHandle());
+  if (cached) handleProfileStats(cached);
 }
 
 // Cold page loads (F5 / direct URL) server-render the profile without firing
@@ -99,10 +127,13 @@ function ensureProfileUiState() {
   // which is one of the ways the badge could sit there describing someone else.
   if (renderedProfileHandle() === handle) return;
 
-  // A cached response for this same profile just needs a re-render.
-  const cached = lastProfileStatsJson?.data ?? lastProfileStatsJson;
-  if (normalizeHandle(readField(cached, "Handle")) === handle) {
-    handleProfileStats(lastProfileStatsJson);
+  // A response for this profile — including one prefetched before it was
+  // opened — just needs a render. Re-runs on each scan while the badge is
+  // missing, so a render that lost its race with the page rendering is retried
+  // in seconds rather than waiting out the request throttle below.
+  const cached = cachedProfileResponse(handle);
+  if (cached) {
+    handleProfileStats(cached);
     return;
   }
 
