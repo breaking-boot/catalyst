@@ -706,8 +706,12 @@ function getTotalStudents() {
 // handleXpDiscoveryBoard in leaderboard.js, and the router in content.js), on
 // the same reasoning that kept /v1/leaderboard_xp/alltime: if Boot.dev ever
 // restores them, Catalyst picks them up passively with no further change.
-const ALLTIME_SELF_PROFILE_TTL_MS = 10 * 60 * 1000;
-let alltimeSelfProfileAt = 0;
+//
+// The viewer's own XP refresh used to live in this pass too, which coupled it
+// to the Observed board being switched on — with that board off, the only
+// source for the viewer's own lifetime XP was a league board that may not carry
+// them, and every All-Time comparison then had nothing to measure against. It
+// is its own request now: see refreshCurrentUserXp in leaderboard.js.
 
 function requestAllTimeRosterRefresh() {
   if (!allTimeRoster || enhancerStopped) return 0;
@@ -726,20 +730,12 @@ function requestAllTimeRosterRefresh() {
     return true;
   };
 
-  // 1. My own XP, which the All-Time comparisons are measured against.
-  const selfHandle = normalizeHandle(currentUserHandle);
-  if (selfHandle && now - alltimeSelfProfileAt >= ALLTIME_SELF_PROFILE_TTL_MS) {
-    if (spend(() => requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(selfHandle)}`))) {
-      alltimeSelfProfileAt = now;
-    }
-  }
-
-  // 2. The student count, which the subtitle's percentile is stated against.
+  // 1. The student count, which the subtitle's percentile is stated against.
   if (now - (observedNum(leaderboardStats.updatedAt) || 0) >= LEADERBOARD_STATS_TTL_MS) {
     spend(() => requestApiJson(LEADERBOARD_STATS_URL));
   }
 
-  // 3. The XP sweep — now the ONLY thing keeping the board correct, since the
+  // 2. The XP sweep — now the ONLY thing keeping the board correct, since the
   //    ordering is derived from XP alone. Handles the Personal Leaderboards
   //    pass already refreshes this load are skipped rather than fetched twice.
   const skip = anyPersonalBoardEnabled() ? personalHandles : [];

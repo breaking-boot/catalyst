@@ -212,6 +212,12 @@ function renderRouteScopedUi() {
 // without re-pulling everything.
 function requestRouteScopedData() {
   if (!isLeaderboardPage()) return;
+  // The viewer's own figures back every comparison on the page, so they are
+  // refreshed whenever anything that compares is on — not as part of one
+  // board's pass, which is how they came to depend on that board being enabled.
+  if (isFeatureEnabled("comparisons") || isFeatureEnabled("allTimeLeaderboard") || anyPersonalBoardEnabled()) {
+    setTrackedTimeout(() => void refreshCurrentUserXp(), 120);
+  }
   setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
   setTrackedTimeout(() => requestNativeLeaderboardData(), 150);
   // Last: the personal pass above is already in flight, so its handles are

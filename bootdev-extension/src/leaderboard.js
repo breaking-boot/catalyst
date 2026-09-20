@@ -1410,6 +1410,32 @@ function recordCurrentUserKarma(karma, atMs = Date.now()) {
   schedulePersonalLeaderboardRender();
 }
 
+// My own lifetime XP, refreshed on its own schedule rather than as part of the
+// Observed board's pass. It backs every All-Time XP comparison, and while it
+// lived inside requestAllTimeRosterRefresh it was skipped entirely whenever
+// that board was switched off — leaving the league boards as the only source,
+// which do not always carry the viewer. currentUserLiveXp stays session-only
+// and is never restored from storage (v0.13.1: a stored copy of "me" silently
+// wrong-footed every comparison), so this is what refills it.
+const CURRENT_USER_XP_TTL_MS = 10 * 60 * 1000;
+let currentUserXpFetchedAt = 0;
+
+async function refreshCurrentUserXp() {
+  if (!currentUserHandle) return;
+  const now = Date.now();
+  if (now - currentUserXpFetchedAt < CURRENT_USER_XP_TTL_MS) return;
+  currentUserXpFetchedAt = now;
+  const result = await fetchApiJsonWithAuthRetry(
+    `https://api.boot.dev/v1/users/public/${encodeURIComponent(currentUserHandle)}`
+  );
+  if (result.status < 200 || result.status >= 300) {
+    currentUserXpFetchedAt = 0; // a failure must not hold the TTL open
+    return;
+  }
+  const data = result.json?.data ?? result.json;
+  recordCurrentUserLiveXp(readNum(data, "XP"));
+}
+
 // My own stats request, issued alongside the tracked-handle refreshes: my
 // karma is otherwise only visible when I'm on the top-25 karma board, and the
 // Daily Karma comparisons need a baseline of me to compare against.
