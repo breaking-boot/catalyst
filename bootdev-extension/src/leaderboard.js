@@ -608,7 +608,15 @@ function getMyValue(kind) {
     value = fromEntries(cachedDailyEntries, "XPEarned")
       ?? fromEntries(cachedLeagueDailyEntries, "XPEarned");
   } else if (kind === "karma") {
-    value = fromEntries(cachedKarmaEntries, "Karma");
+    // /stats ONLY — never the karma board. Boot.dev's two karma surfaces
+    // disagree: measured 2026-09-19, the board read 5-20 higher per person than
+    // that person's /stats, and the profile page agrees with /stats. Reading
+    // the board for the viewer while every tracked row reads /stats made each
+    // comparison wrong by that difference, which is small enough to look like
+    // rounding. Personal Leaderboards is therefore /stats on both sides, and
+    // matches what a profile page shows.
+    const latest = currentUserKarmaSnapshots[currentUserKarmaSnapshots.length - 1];
+    value = Array.isArray(latest) ? observedNum(latest[1]) : null;
   } else if (kind === "dailyKarma") {
     // No board reports daily karma; measure it from my own persisted series
     // (same policy as tracked users: gains immediately, a 0 needs 30 min).
@@ -1136,13 +1144,23 @@ function augmentNativeDailyLeaderboard() {
   );
 }
 
+// The comparison rendered ON Boot.dev's own karma board is measured against
+// that board's own figure for the viewer, because every other number in that
+// section came from the same response. The /stats value is the fallback for a
+// viewer outside the top 25, where the board has nothing to offer — it is the
+// same measure from Boot.dev's other karma surface, which currently reads a
+// few points lower (see getMyValue).
+function myKarmaForNativeBoard() {
+  return myValueFromEntries(cachedKarmaEntries, "Karma") ?? getMyValue("karma");
+}
+
 function augmentNativeKarmaLeaderboard() {
   const heading = findHeadingAfter(findHeadingByText("Global Leaderboards"), "Top Community Members");
   if (!isComparisonEnabled("comparisonsGlobalKarma")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedKarmaEntries, "Karma"),
-    getMyValue("karma"),
+    myKarmaForNativeBoard(),
     "karma"
   );
 }
@@ -1319,7 +1337,7 @@ function harvestCachedBoardSnapshots() {
   if (boardSeenAt.daily) harvestPersonalSnapshots(cachedDailyEntries, { backdate: true, asOf: boardSeenAt.daily });
   if (boardSeenAt.leagueDaily) harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true, asOf: boardSeenAt.leagueDaily });
   if (boardSeenAt.league) harvestPersonalSnapshots(cachedLeagueEntries, { asOf: boardSeenAt.league });
-  if (boardSeenAt.karma) harvestPersonalKarmaSnapshots(cachedKarmaEntries, { asOf: boardSeenAt.karma });
+
 }
 
 // Persist a distilled handle->XPEarned lookup for a daily board so the exact
@@ -1359,8 +1377,13 @@ function handleKarmaLeaderboard(json) {
   reportUsableFields("/v1/leaderboard_karma/alltime", entries, "Karma", (e) => readField(e, "Karma"));
   cachedKarmaEntries = entries;
   markBoardSeen("karma");
-  harvestPersonalKarmaSnapshots(entries);
-  recordCurrentUserKarma(myValueFromEntries(entries, "Karma"));
+  // The board no longer feeds the karma snapshot series, for the viewer or for
+  // tracked users. It reads a few points higher than the same person's /stats,
+  // so alternating sources put steps into a series whose whole purpose is
+  // measuring change — a phantom gain or loss of the size of the discrepancy,
+  // in a feature that already fabricated a value three times by other means.
+  // The series advances on /stats refreshes, which run on every leaderboard
+  // visit for every tracked handle.
   // The karma board is the single most productive discovery source a typical
   // install has: it surfaced 4 of the top 25 on its own (2026-08-14).
   noteAllTimeBoardEntries(entries);
@@ -1400,36 +1423,18 @@ async function refreshCurrentUserKarma() {
   recordCurrentUserKarma(readField(data, "Karma"));
 }
 
-// Harvest karma snapshots for tracked users from the all-time karma board.
-// Karma twin of harvestPersonalSnapshots, minus backdating (karma has no
-// daily board, so a sighting only yields the present total). `asOf` anchors
-// the timestamps when harvesting a board cached earlier in the session.
-function harvestPersonalKarmaSnapshots(entries, { asOf = 0 } = {}) {
-  let changed = false;
-  const now = Date.now();
-  const at = asOf || now;
+// harvestPersonalKarmaSnapshots was removed in v0.15.1 with its last consumer.
+// It recorded karma snapshots for tracked users from the all-time karma board;
+// that board is no longer a source for the series (see handleKarmaLeaderboard),
+// because it and /stats disagree and a series must come from one of them.
 
-  for (const entry of entries) {
-    const handle = normalizeHandle(getHandle(entry));
-    if (!handle || !isPersonalHandle(handle)) continue;
-
-    const total = readNum(entry, "Karma");
-    if (total == null) continue;
-
-    const record = ensurePersonalRecord(handle);
-    recordKarmaSnapshot(record, total, at);
-    record.updatedAt = now;
-    changed = true;
-  }
-
-  if (changed) {
-    savePersonalCache();
-    schedulePersonalLeaderboardRender();
-  }
-}
-
-// /v1/leaderboard_xp/{week,month}: requested only while a board position is
-// unknown (see requestAllTimeRosterRefresh). DISCOVERY AND LIFETIME XP ONLY —
+// /v1/leaderboard_xp/{week,month}: no longer available — confirmed returning
+// 400 "Invalid timeframe" on 2026-09-19; the date they stopped working is
+// unknown, so nothing requests these any more — see the discovery note in
+// allTimeRoster.js. The handler is kept anyway, on the same reasoning that kept
+// the all-time board's: if Boot.dev restores either timeframe, its response is
+// already relayed and routed, and the roster starts learning from it again with
+// no further change. DISCOVERY AND LIFETIME XP ONLY —
 // XPEarned here covers 7 or 30 days, so it must never reach computeDailyXpView,
 // the daily comparisons, or a backdated snapshot, where XP - XPEarned would
 // fabricate a total from a week ago and hand it to the 24-hour window. A plain
