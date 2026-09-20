@@ -34,7 +34,11 @@ const ROSTER_MAX_ENTRIES = 60;
 // whole board refreshes over ~5 loads and reloading the page IS a refresh. A
 // clock TTL would refresh a board nobody is reading and still be stale the
 // moment someone opens it.
-const ROSTER_XP_SLICE = 6;
+// 8, not 6: the week and month XP API timeframes are no longer available
+// (confirmed returning 400 "Invalid timeframe" on 2026-09-19) and the two
+// requests per pass they used to spend now go here. The per-load ceiling
+// below is unchanged.
+const ROSTER_XP_SLICE = 8;
 const ROSTER_REQUEST_CEILING = 12;
 const ROSTER_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -640,13 +644,33 @@ function getTotalStudents() {
 // verify in DevTools, and it cannot drift as the queues are tuned. Spent in
 // priority order, so when it binds the gap-closing work survives and the XP
 // sweep is what gets truncated.
-const ALLTIME_DISCOVERY_URLS = [
-  "https://api.boot.dev/v1/leaderboard_xp/week",
-  "https://api.boot.dev/v1/leaderboard_xp/month",
-];
-const ALLTIME_DISCOVERY_TTL_MS = 60 * 60 * 1000;
+// DISCOVERY IS PASSIVE-ONLY SINCE v0.15.1, and that is a platform constraint
+// rather than a choice. /v1/leaderboard_xp/{week,month} were the standing
+// discovery sweep; both were confirmed returning 400 "Invalid timeframe" on
+// 2026-09-19, the same answer `alltime` gave when it was checked on
+// 2026-08-14. The date any of them stopped working is unknown. Sixteen
+// timeframe names were tried and none answered.
+//
+// Nothing replaces them. /v1/leaderboard_archmage is alive and lists 30 full
+// user objects, but they are the most recent learners to reach level 100 —
+// measured XP 427,712-464,145 against an admission floor (the lowest XP the
+// roster already holds) of 930,102. Not one would be admitted, so relaying it
+// would cost nothing and add nothing. The daily board's own lifetime-XP range
+// that day topped out at 786,594, also below the floor; the all-time karma
+// board reached 1,813,156 and is the only remaining board that regularly
+// carries learners this one could admit.
+//
+// So an unknown learner now enters the roster through the karma board, the
+// daily board, a profile the user opens, or a refreshed bundled seed. That is
+// slower than it was. It is stated in the README rather than hidden, because
+// the board showing fewer new faces is a consequence of the platform and not a
+// defect to chase.
+//
+// The route handler for the unavailable timeframes is deliberately KEPT (see
+// handleXpDiscoveryBoard in leaderboard.js, and the router in content.js), on
+// the same reasoning that kept /v1/leaderboard_xp/alltime: if Boot.dev ever
+// restores them, Catalyst picks them up passively with no further change.
 const ALLTIME_SELF_PROFILE_TTL_MS = 10 * 60 * 1000;
-let alltimeDiscoveryAt = 0;
 let alltimeSelfProfileAt = 0;
 
 function requestAllTimeRosterRefresh() {
@@ -666,17 +690,7 @@ function requestAllTimeRosterRefresh() {
     return true;
   };
 
-  // 1. The week/month boards. These used to run only while a board position was
-  //    unknown, but "unknown position" is no longer detectable — nothing reports
-  //    positions. They are now the standing discovery sweep, TTL-gated, because
-  //    a newcomer with enough XP to belong is exactly who appears on them and
-  //    there is no other way to notice one.
-  if (now - alltimeDiscoveryAt >= ALLTIME_DISCOVERY_TTL_MS) {
-    alltimeDiscoveryAt = now;
-    for (const url of ALLTIME_DISCOVERY_URLS) spend(() => requestApiJson(url));
-  }
-
-  // 2. My own XP, which the All-Time comparisons are measured against.
+  // 1. My own XP, which the All-Time comparisons are measured against.
   const selfHandle = normalizeHandle(currentUserHandle);
   if (selfHandle && now - alltimeSelfProfileAt >= ALLTIME_SELF_PROFILE_TTL_MS) {
     if (spend(() => requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(selfHandle)}`))) {
@@ -684,12 +698,12 @@ function requestAllTimeRosterRefresh() {
     }
   }
 
-  // 3. The student count, which the subtitle's percentile is stated against.
+  // 2. The student count, which the subtitle's percentile is stated against.
   if (now - (observedNum(leaderboardStats.updatedAt) || 0) >= LEADERBOARD_STATS_TTL_MS) {
     spend(() => requestApiJson(LEADERBOARD_STATS_URL));
   }
 
-  // 4. The XP sweep — now the ONLY thing keeping the board correct, since the
+  // 3. The XP sweep — now the ONLY thing keeping the board correct, since the
   //    ordering is derived from XP alone. Handles the Personal Leaderboards
   //    pass already refreshes this load are skipped rather than fetched twice.
   const skip = anyPersonalBoardEnabled() ? personalHandles : [];
