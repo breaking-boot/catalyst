@@ -467,10 +467,46 @@ function normalizeStoredRoster(stored) {
   return roster;
 }
 
+// Per handle, the newer observation wins — the same rule mergeRosterObservation
+// applies within a tab, applied again across tabs. A roster is a set of
+// sightings, so two tabs holding different sightings must be combined; taking
+// one copy whole would throw away whichever XP reads the other tab made.
+//
+// The viewer's own percentile follows its own timestamp, and xpWraps takes the
+// larger so priming cannot restart because a second tab had seen fewer passes.
+function mergeRosters(mine, theirs) {
+  if (!isPlainObject(theirs) || !isPlainObject(theirs.entries)) return mine;
+  if (!isPlainObject(mine)) return theirs;
+
+  const merged = { ...theirs, ...mine };
+  merged.entries = { ...theirs.entries };
+  for (const [handle, entry] of Object.entries(mine.entries || {})) {
+    const other = merged.entries[handle];
+    if (!isPlainObject(other)) {
+      merged.entries[handle] = entry;
+      continue;
+    }
+    const mineAt = observedNum(entry.profileAt) || 0;
+    const theirsAt = observedNum(other.profileAt) || 0;
+    merged.entries[handle] = theirsAt > mineAt ? { ...entry, ...other } : { ...other, ...entry };
+  }
+
+  const mineSelfAt = observedNum(mine.self?.percentileAt) || 0;
+  const theirsSelfAt = observedNum(theirs.self?.percentileAt) || 0;
+  if (theirsSelfAt > mineSelfAt) merged.self = theirs.self;
+
+  merged.xpWraps = Math.max(observedNum(mine.xpWraps) || 0, observedNum(theirs.xpWraps) || 0);
+  return merged;
+}
+
 function saveAllTimeRoster() {
   if (!allTimeRoster) return;
   allTimeRoster.updatedAt = Date.now();
-  chromeSet(ALLTIME_ROSTER_KEY, allTimeRoster);
+  void mergeWrite(ALLTIME_ROSTER_KEY, (stored) => {
+    const merged = mergeRosters(allTimeRoster, stored);
+    allTimeRoster = merged;
+    return merged;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -734,6 +770,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     mergeRosterObservation,
     applyRosterObservation,
     applySeedToRoster,
+    mergeRosters,
     readAlltimeRank,
     readAlltimePercentile,
     readRegisteredUsers,

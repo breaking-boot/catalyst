@@ -147,6 +147,94 @@ async function loadBossState({ force = false } = {}) {
   return bossState;
 }
 
+// Merge this tab's copy with whatever another tab has already written. The
+// rules are the ones backup.js already uses for an imported file
+// (mergeBossState there — keep the two in sync), because it is the same
+// collision: two copies of the same event observed by different sessions.
+//
+//   * the all-time high is the highest either side has ever seen;
+//   * the event high merges only within the SAME event, and the timestamp
+//     travels with the value that won, so "when was this seen" stays true;
+//   * the aura statistics are taken whole from whichever side observed more of
+//     the event. They are never added together — two tabs watching the same
+//     hour would count it twice and drag the mean toward whichever was open
+//     longer, and the panel's "observed since" claim would stop being true;
+//   * everything else describes the live moment, so it comes from whichever
+//     copy was written more recently.
+//
+// A different eventId on the other side means it is looking at another event
+// (usually one that has since ended). Its highs are not comparable and are
+// dropped, exactly as an imported backup's are; only the all-time high crosses.
+function mergeBossStates(mine, theirs) {
+  if (!isPlainObject(theirs)) return mine;
+  if (!isPlainObject(mine)) return theirs;
+
+  const mineAt = observedNum(mine.updatedAt) || 0;
+  const theirsAt = observedNum(theirs.updatedAt) || 0;
+  const newer = theirsAt > mineAt ? theirs : mine;
+  const older = newer === mine ? theirs : mine;
+
+  // Fields absent from the newer copy survive from the older one: a partial
+  // response must not blank a value the other tab has.
+  const merged = { ...older, ...newer };
+
+  merged.allTimeHigh = Math.max(
+    observedNum(mine.allTimeHigh) || 0,
+    observedNum(theirs.allTimeHigh) || 0
+  );
+
+  const sameEvent = Boolean(mine.eventId) && mine.eventId === theirs.eventId;
+  if (sameEvent) {
+    const mineHigh = observedNum(mine.eventHigh) || 0;
+    const theirsHigh = observedNum(theirs.eventHigh) || 0;
+    const winner = theirsHigh > mineHigh ? theirs : mine;
+    merged.eventHigh = Math.max(mineHigh, theirsHigh);
+    merged.eventHighAt = winner.eventHighAt ?? null;
+    if (merged.eventHigh > merged.allTimeHigh) merged.allTimeHigh = merged.eventHigh;
+
+    const mineObserved = observedNum(mine.aura?.observedMs) || 0;
+    const theirsObserved = observedNum(theirs.aura?.observedMs) || 0;
+    merged.aura = theirsObserved > mineObserved ? theirs.aura : mine.aura;
+  } else {
+    // Keep the newer copy's own event intact rather than mixing two events.
+    merged.eventId = newer.eventId;
+    merged.eventHigh = newer.eventHigh;
+    merged.eventHighAt = newer.eventHighAt ?? null;
+    merged.aura = newer.aura;
+    merged.previousEvent = newer.previousEvent ?? older.previousEvent ?? null;
+  }
+
+  return merged;
+}
+
+// The only place boss state is written. `force` skips the merge for an action
+// the user took deliberately — the Reset button lowers the stored values on
+// purpose, and merging would hand them straight back from another tab.
+async function saveBossState(state, { force = false } = {}) {
+  bossState = state;
+  if (force) {
+    await chromeSet(BOSS_KEY, { state });
+    return;
+  }
+  await mergeWrite(BOSS_KEY, (stored) => {
+    const merged = mergeBossStates(state, isPlainObject(stored?.state) ? stored.state : null);
+    bossState = merged;
+    return { state: merged };
+  });
+}
+
+// Another tab wrote be_boss_state. Adopt it wholesale: this tab's copy is not
+// more authoritative than the one on disk, and the merge above has already
+// been applied by the writer. Re-renders so two open panels agree.
+async function adoptBossState(stored) {
+  const next = migrateBossState(isPlainObject(stored?.state) ? stored.state : null);
+  if (!next) return;
+  bossState = next;
+  bossStateLoaded = true;
+  if (enhancerStopped || !isFeatureEnabled("bossTracker")) return;
+  renderBossPanel(next);
+}
+
 async function restoreBossPanel() {
   await loadBossState();
   if (!isFeatureEnabled("bossTracker")) {
@@ -259,7 +347,7 @@ async function handleBossProgress(json) {
     if (enhancerStopped || !bossState) return;
     bossState.eventActive = false;
     bossState.updatedAt = Date.now();
-    await chromeSet(BOSS_KEY, { state: bossState });
+    await saveBossState(bossState);
     if (enhancerStopped || !visible) return;
     renderBossPanel(bossState);
     return;
@@ -355,10 +443,9 @@ async function handleBossProgress(json) {
   // persisted with everything else rather than in a second round-trip.
   if (visible && active && auraChanged) maybeNotifyAura(state, prevHighs, now);
 
-  bossState = state;
-  await chromeSet(BOSS_KEY, { state });
+  await saveBossState(state);
   if (enhancerStopped || !visible) return;
-  renderBossPanel(state);
+  renderBossPanel(bossState);
 }
 
 // Boundary checks for the fields this feature depends on. Every block here
@@ -846,8 +933,10 @@ function bindBossPanelControls(panel, state) {
     reset.onclick = async () => {
       const fresh = newEventState(state.eventId);
       fresh.allTimeHigh = state.allTimeHigh; // keep the all-time record
-      bossState = fresh;
-      await chromeSet(BOSS_KEY, { state: fresh });
+      fresh.updatedAt = Date.now();
+      // Forced: a reset lowers the stored numbers on purpose, and the merge
+      // would restore them from another tab's copy.
+      await saveBossState(fresh, { force: true });
       renderBossPanel(fresh);
     };
   }
@@ -876,10 +965,12 @@ function bindBossPanelControls(panel, state) {
   const alertDismiss = panel.querySelector("#be-boss-alert-dismiss");
   if (alertDismiss) {
     alertDismiss.onclick = async () => {
-      const next = { ...state, lastAlert: null };
-      bossState = next;
-      await chromeSet(BOSS_KEY, { state: next });
-      renderBossPanel(next);
+      // updatedAt is bumped so the merge treats the dismissal as the newest
+      // word on this state; without it another tab's copy would hand the
+      // dismissed alert straight back.
+      const next = { ...state, lastAlert: null, updatedAt: Date.now() };
+      await saveBossState(next);
+      renderBossPanel(bossState);
     };
   }
 
@@ -916,9 +1007,8 @@ function bindBossPanelControls(panel, state) {
       next.lastAlert = null;
       next.updatedAt = Date.now();
 
-      bossState = next;
-      await chromeSet(BOSS_KEY, { state: next });
-      renderBossPanel(next);
+      await saveBossState(next);
+      renderBossPanel(bossState);
     };
   }
 }
@@ -1427,6 +1517,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     getPersonalChestState,
     selectBossGuild,
     migrateBossState,
+    mergeBossStates,
     newEventState,
     renderPersonalFight,
     renderGuildFight,

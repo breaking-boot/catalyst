@@ -1374,7 +1374,16 @@ function recordCurrentUserKarma(karma, atMs = Date.now()) {
   const snaps = updateSnapshotSeries(currentUserKarmaSnapshots, karma, atMs);
   if (!snaps) return;
   currentUserKarmaSnapshots = snaps;
-  chromeSet(CURRENT_USER_KARMA_KEY, { handle: currentUserHandle, snapshots: snaps });
+  void mergeWrite(CURRENT_USER_KARMA_KEY, (stored) => {
+    // Only the same user's series can be merged; a different handle stored here
+    // belongs to a previous login and is replaced, as it is on a handle change.
+    const sameUser = isPlainObject(stored) && normalizeHandle(stored.handle) === currentUserHandle;
+    const merged = sameUser
+      ? mergeObservedSeries(snaps, stored.snapshots, atMs)
+      : snaps;
+    currentUserKarmaSnapshots = merged;
+    return { handle: currentUserHandle, snapshots: merged };
+  });
   schedulePersonalLeaderboardRender();
 }
 
@@ -2407,12 +2416,81 @@ async function savePersonalHandles() {
   return chromeSet(PERSONAL_HANDLES_KEY, { handles: validHandles });
 }
 
+// Union of two observation series, for the cross-tab merges below. Mirrors
+// mergeSnapshotSeries in backup.js — keep the two in sync; that one handles the
+// same collision arriving from a file instead of from another tab.
+//
+// A series is append-only history, so two tabs each holding part of it must be
+// combined rather than one replacing the other: dropping the other tab's points
+// would shorten the measured window, and a shorter window is exactly what makes
+// computeDailyXpView fall through to a weaker tier.
+function mergeObservedSeries(a, b, now = Date.now()) {
+  const cutoff = now - SNAPSHOT_MAX_AGE_MS;
+  const pairs = [];
+  for (const source of [a, b]) {
+    if (!Array.isArray(source)) continue;
+    for (const point of source) {
+      if (!Array.isArray(point)) continue;
+      const at = observedNum(point[0]);
+      const value = observedNum(point[1]);
+      if (at == null || value == null || value < 0) continue;
+      if (at < cutoff || at > now + 60_000) continue; // tolerate a little clock skew
+      pairs.push([at, value]);
+    }
+  }
+  pairs.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+
+  let out = [];
+  for (const point of pairs) {
+    const last = out[out.length - 1];
+    if (last && last[0] === point[0] && last[1] === point[1]) continue; // exact duplicate
+    if (last && point[1] < last[1]) continue; // contradiction: keep the higher run
+    out.push(point);
+  }
+  while (out.length > SNAPSHOT_CAP) {
+    out = out.filter((point, i, arr) => i === 0 || i === arr.length - 1 || i % 2 === 1);
+  }
+  return out;
+}
+
+// Merge one tracked user's record with another tab's copy of it. The profile
+// and stats blocks describe a moment, so the newer one wins whole; the series
+// are history and are combined.
+function mergePersonalRecords(mine, theirs, now = Date.now()) {
+  if (!isPlainObject(theirs)) return mine;
+  if (!isPlainObject(mine)) return theirs;
+  const newer = (observedNum(theirs.updatedAt) || 0) > (observedNum(mine.updatedAt) || 0) ? theirs : mine;
+  const older = newer === mine ? theirs : mine;
+  return {
+    ...older,
+    ...newer,
+    xpSnapshots: mergeObservedSeries(mine.xpSnapshots, theirs.xpSnapshots, now),
+    karmaSnapshots: mergeObservedSeries(mine.karmaSnapshots, theirs.karmaSnapshots, now),
+  };
+}
+
 function savePersonalCache() {
   const records = {};
   for (const handle of personalHandles.filter(isValidHandle)) {
     if (isPlainObject(personalRecords[handle])) records[handle] = personalRecords[handle];
   }
-  chromeSet(PERSONAL_CACHE_KEY, { records, updatedAt: Date.now() });
+  const now = Date.now();
+  // Merged rather than replaced: another tab may hold observations this one
+  // never saw, and overwriting them shortens every measured window.
+  void mergeWrite(PERSONAL_CACHE_KEY, (stored) => {
+    const theirs = isPlainObject(stored?.records) ? stored.records : {};
+    const merged = {};
+    for (const handle of personalHandles.filter(isValidHandle)) {
+      const mine = records[handle];
+      const other = theirs[handle];
+      const result = mergePersonalRecords(mine, other, now);
+      if (isPlainObject(result)) {
+        merged[handle] = result;
+        personalRecords[handle] = result;
+      }
+    }
+    return { records: merged, updatedAt: now };
+  });
 }
 
 function removePersonalLeaderboards() {
@@ -2425,6 +2503,8 @@ function removePersonalLeaderboards() {
 if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
   window.__BOOTDEV_ENHANCER_TEST__.leaderboard = {
     leaderAvatarSignature,
+    mergeObservedSeries,
+    mergePersonalRecords,
     renderLeaderAvatar,
     getRoleFrameIndex,
     getRoleFrameUrl,

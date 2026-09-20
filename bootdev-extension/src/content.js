@@ -237,10 +237,51 @@ function handleSettingsChange(changes, area) {
     applyImportedData().catch((err) => handleAsyncError(err, "import"));
     return;
   }
+  if (area === "local") {
+    adoptCrossTabWrites(changes).catch((err) => handleAsyncError(err, "crossTab"));
+    return;
+  }
   if (area !== "sync" || !changes[SETTINGS_KEY]) return;
   const before = getSettings();
   applyStoredSettings(changes[SETTINGS_KEY].newValue);
   applyFeatureSettings(before, getSettings());
+}
+
+// Another tab wrote one of the shared data keys. Until v0.15.1 tabs ignored
+// these deliberately — they write them routinely, so reacting meant looping on
+// their own writes — and the cost was that each tab kept its own divergent copy
+// and overwrote the others. Boss event highs differing per tab is the reported
+// form of it.
+//
+// Every write now carries the writing document's id (see mergeWrite in
+// utils.js), so this tab's own echo is identifiable and skipped, and the loop
+// that made this unsafe cannot form. The writer has already merged, so adopting
+// what is on disk is simply taking the newer, reconciled copy.
+async function adoptCrossTabWrites(changes) {
+  const fromAnotherTab = (key) => {
+    const change = changes[key];
+    return Boolean(change) && !isOwnStorageWrite(change.newValue);
+  };
+
+  if (fromAnotherTab(BOSS_KEY)) {
+    await adoptBossState(changes[BOSS_KEY].newValue);
+  }
+  if (fromAnotherTab(PERSONAL_CACHE_KEY) || fromAnotherTab(PERSONAL_HANDLES_KEY)) {
+    await loadPersonalLeaderboard();
+    if (enhancerStopped) return;
+    schedulePersonalLeaderboardRender();
+  }
+  if (fromAnotherTab(ALLTIME_ROSTER_KEY)) {
+    await loadAllTimeRoster();
+    if (enhancerStopped) return;
+    renderAllTimeLeaderboard();
+  }
+  if (fromAnotherTab(CURRENT_USER_KARMA_KEY)) {
+    // The karma series is loaded alongside the handle it belongs to.
+    await loadCurrentUserHandle();
+    if (enhancerStopped) return;
+    schedulePersonalLeaderboardRender();
+  }
 }
 
 // An options-page import merged data into storage.local behind this tab's back

@@ -439,6 +439,47 @@ function chromeGet(key) {
     }
   });
 }
+// ---------------------------------------------------------------------------
+// Cross-tab writes
+// ---------------------------------------------------------------------------
+// chrome.storage.local is shared by every open Boot.dev tab, while each tab
+// holds its own in-memory copy and writes that copy back. Within one tab that
+// is deliberate — it avoids a read-modify-write race between, say, the boss
+// poll, the Refresh button and the alert path. Across tabs it means the last
+// writer wins with whatever it happens to know, so a tab left open for hours
+// can overwrite what a newer tab recorded. Reported as boss event highs
+// differing per tab, with only the focused one recognising a new high.
+//
+// Two halves fix it, and both are needed:
+//   * mergeWrite (here) re-reads the stored copy and merges before writing, so
+//     a write can never lower what another tab recorded;
+//   * the storage.onChanged listener in content.js refreshes this tab's copy
+//     when another tab writes, so the screen agrees with the disk.
+//
+// Every write is stamped with this document's id so that listener can ignore
+// the echo of its own writes — which is what made reacting to these keys
+// unsafe before, since tabs write them routinely and would loop.
+const CATALYST_WRITER_ID = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+
+function isOwnStorageWrite(value) {
+  return isPlainObject(value) && value.beWriter === CATALYST_WRITER_ID;
+}
+
+// Read, merge, write. `merge` receives the stored value (possibly undefined)
+// and returns what to store; returning undefined writes nothing.
+//
+// Not atomic: chrome.storage offers no compare-and-set, so two tabs writing in
+// the same instant can still interleave. That is acceptable precisely because
+// the merges are idempotent and order-independent — a maximum stays a maximum
+// — which is why the merge rules matter more than the locking would.
+async function mergeWrite(key, merge) {
+  const stored = await chromeGet(key);
+  const merged = merge(stored);
+  if (merged === undefined) return false;
+  if (isPlainObject(merged)) merged.beWriter = CATALYST_WRITER_ID;
+  return chromeSet(key, merged);
+}
+
 function chromeSet(key, val) {
   return new Promise((resolve) => {
     if (enhancerStopped || !key || val === undefined) {
