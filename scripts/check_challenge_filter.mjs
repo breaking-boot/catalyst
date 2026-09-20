@@ -52,6 +52,11 @@ XMLHttpRequestStub.prototype.setRequestHeader = function () {};
 XMLHttpRequestStub.prototype.send = function () {};
 
 const sandbox = {
+  // injected.js starts its hydration watcher at load (see the nav displacement
+  // note there), so the sandbox needs timers even though this file tests the
+  // challenge filter.
+  setTimeout: () => 0,
+  clearTimeout() {},
   window: windowStub,
   XMLHttpRequest: XMLHttpRequestStub,
   URL,

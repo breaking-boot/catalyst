@@ -31,7 +31,12 @@ const CAPTURE = new URL(
 const testHook = {};
 const sandbox = {
   window: { __BOOTDEV_ENHANCER_TEST__: testHook },
-  document: { addEventListener() {}, removeEventListener() {}, getElementById: () => null },
+  document: {
+    addEventListener() {}, removeEventListener() {}, getElementById: () => null,
+    // Swapped per check by navCase() below. navLooksDisplaced issues exactly
+    // one query, so a flat list of anchor stand-ins is the whole DOM it needs.
+    querySelectorAll: () => [],
+  },
   location: { origin: "https://www.boot.dev", pathname: "/dashboard" },
   console,
   // vm contexts get the ECMAScript built-ins only; normalizeLessonHref needs URL.
@@ -189,6 +194,92 @@ if (existsSync(CAPTURE)) {
 } else {
   console.log("note: dashboard_content capture not present; skipped fixture checks");
 }
+
+// --- nav displacement detection ----------------------------------------------
+// Vue hydration pairs server-rendered children with vnodes BY POSITION, so an
+// injected anchor present in the nav list at hydration time shifts every later
+// label against its href. Captured 2026-09-20: the element that server-rendered
+// as Billing (/pricing) came back reading "Leaderboard", and a middle click on
+// it opened the billing page. The link now waits for hydration; this pins the
+// safety net that removes it again if the nav is displaced anyway.
+//
+// The distinction that matters: a label carrying ANOTHER known label's href is
+// displacement, while Boot.dev simply repointing one of its own items is not,
+// and must never disable the feature.
+const { navLooksDisplaced } = testHook.nextLesson;
+
+const anchor = (text, href, id = "") => ({
+  id,
+  textContent: text,
+  getAttribute: (name) => (name === "href" ? href : null),
+});
+const navCase = (anchors) => {
+  sandbox.document.querySelectorAll = (selector) =>
+    (selector === "nav a[href]" ? anchors : []);
+  return navLooksDisplaced();
+};
+
+check(
+  "healthy nav is not displaced",
+  navCase([
+    anchor("Dashboard", "/dashboard"),
+    anchor("Courses", "/courses"),
+    anchor("Training", "/training-grounds"),
+    anchor("Billing", "/pricing"),
+    anchor("Leaderboard", "/leaderboard"),
+    anchor("Community", "/community"),
+    anchor("Shop", "https://merch.boot.dev"),
+  ]),
+  false
+);
+
+check(
+  "the captured displacement is detected (Leaderboard carrying Billing's href)",
+  navCase([
+    anchor("Dashboard", "/dashboard"),
+    anchor("Courses", "/courses"),
+    anchor("Training", "/training-grounds"),
+    anchor("Next Lesson", "/lessons/78b4646f", "be-next-lesson-nav"),
+    anchor("Billing", "/training-grounds"),
+    anchor("Leaderboard", "/pricing"),
+    anchor("Community", "/leaderboard"),
+  ]),
+  true
+);
+
+check(
+  "a two-position shift is detected too",
+  navCase([
+    anchor("Billing", "/courses"),
+    anchor("Leaderboard", "/training-grounds"),
+    anchor("Community", "/pricing"),
+  ]),
+  true
+);
+
+check(
+  "Boot.dev repointing one of its own items is NOT displacement",
+  navCase([
+    anchor("Dashboard", "/dashboard"),
+    anchor("Community", "https://discord.gg/boot-dev"),
+    anchor("Leaderboard", "/leaderboards/global"),
+  ]),
+  false
+);
+
+check(
+  "our own link is never judged",
+  navCase([anchor("Next Lesson", "/dashboard", "be-next-lesson-nav")]),
+  false
+);
+
+check(
+  "an unknown label is ignored rather than guessed at",
+  navCase([anchor("Spellbook", "/pricing")]),
+  false
+);
+
+sandbox.document.querySelectorAll = () => [];
 
 // --- report ------------------------------------------------------------------
 

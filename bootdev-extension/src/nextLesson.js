@@ -8,6 +8,58 @@ let nextLessonHref = null;
 let nextLessonRefreshRequestedAt = 0;
 let nextLessonKeydownHandler = null;
 
+// The nav link is injected only after Vue has hydrated the page. See the
+// hydration watcher in injected.js for why: an extra child present in the nav
+// list at hydration time displaces every following label against its href, and
+// the measured result was Boot.dev's own "Leaderboard" item pointing at
+// /pricing. `notePageHydrated` is called from the content-script router when
+// the page context reports mount complete; it stays true for the life of the
+// document, because hydration happens once and client-side re-renders are
+// safe.
+let pageHydrated = false;
+// Set when the coherence check below finds a displaced nav anyway. The link
+// stays out for the rest of the document rather than being re-added on the
+// next scan, so a broken assumption costs this feature and nothing else.
+let navInjectionAbandoned = false;
+
+function notePageHydrated(reason) {
+  if (pageHydrated) return;
+  pageHydrated = true;
+  if (reason === "timeout") {
+    console.debug("[catalyst] hydration not detected; injecting the nav link on the timeout path");
+  }
+  renderNextLessonNav();
+}
+
+// Boot.dev's own nav items, and where each one's href should start. Used only
+// to answer "did our injection displace this nav?", never to repair it.
+const NAV_LINK_EXPECTATIONS = [
+  { label: "dashboard", href: /^\/dashboard/ },
+  { label: "courses", href: /^\/courses/ },
+  { label: "training", href: /^\/training/ },
+  { label: "billing", href: /^\/(pricing|billing|settings)/ },
+  { label: "leaderboard", href: /^\/leaderboard/ },
+  { label: "community", href: /(community|discord)/i },
+  { label: "guilds", href: /^\/guilds/ },
+];
+
+// True only for the DISPLACEMENT signature: a known nav label carrying a
+// different known label's href. Boot.dev simply changing where one of its own
+// items points is not displacement and must not disable the feature — which is
+// why a plain "href does not match its own pattern" is deliberately not enough.
+function navLooksDisplaced() {
+  for (const link of document.querySelectorAll("nav a[href]")) {
+    if (link.id === "be-next-lesson-nav") continue;
+    const label = normalizeText(link.textContent).toLowerCase();
+    const rule = NAV_LINK_EXPECTATIONS.find((item) => item.label === label);
+    if (!rule) continue;
+    const href = link.getAttribute("href") || "";
+    if (rule.href.test(href)) continue;
+    if (NAV_LINK_EXPECTATIONS.some((other) => other !== rule && other.href.test(href))) return true;
+  }
+  return false;
+}
+
 function isDashboardPage() {
   return /^\/dashboard\/?$/.test(location.pathname);
 }
@@ -87,10 +139,14 @@ function removeNextLessonNav() {
 }
 
 function renderNextLessonNav() {
-  if (!isFeatureEnabled("nextLesson")) {
+  if (!isFeatureEnabled("nextLesson") || navInjectionAbandoned) {
     removeNextLessonNav();
     return;
   }
+  // Waiting for hydration is the whole fix; injecting before it is what
+  // corrupted Boot.dev's nav. Nothing is removed here — the link simply is not
+  // placed yet, and notePageHydrated re-runs this.
+  if (!pageHydrated) return;
   const existing = document.getElementById("be-next-lesson-nav");
   if (!nextLessonHref) {
     existing?.remove();
@@ -116,6 +172,23 @@ function renderNextLessonNav() {
     link.setAttribute("aria-label", "Next Lesson (Alt+N)");
     if (link.previousElementSibling !== target || link.parentElement !== target.parentElement) {
       target.insertAdjacentElement("afterend", link);
+    }
+
+    // Belt to the hydration wait. If the nav is displaced even so, take the
+    // link back out and stay out: a missing Next Lesson link is a small loss,
+    // while a displaced nav sends Boot.dev's own middle clicks to the wrong
+    // page. Removing our element does not repair hrefs Vue has already
+    // mis-paired — only a client-side re-render does that — so this is a
+    // stop-doing-harm measure, and the breadcrumb is how it gets noticed.
+    if (navLooksDisplaced()) {
+      link.remove();
+      navInjectionAbandoned = true;
+      warnOnce(
+        "nav:displaced",
+        "Boot.dev's nav links are displaced against their labels, so Catalyst removed its " +
+        "Next Lesson link and will not re-add it on this page. This should not happen now " +
+        "that the link waits for hydration — see navLooksDisplaced() in nextLesson.js."
+      );
     }
   });
 }
@@ -249,5 +322,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     getDashboardLessonHref,
     findFirstIncompleteLesson,
     normalizeLessonHref,
+    navLooksDisplaced,
+    NAV_LINK_EXPECTATIONS,
   };
 }

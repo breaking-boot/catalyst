@@ -45,7 +45,13 @@ function handleWindowMessage(event) {
   if (event.source !== window) return;
   if (event.origin !== window.location.origin) return;
   const msg = event.data;
-  if (!msg || msg.source !== TAG || !msg.payload || !("json" in msg.payload)) {
+  if (!msg || msg.source !== TAG) return;
+  // Page-context notices carry no response body; they are not API traffic.
+  if (msg.notice === "BE_PAGE_HYDRATED") {
+    notePageHydrated(msg.reason);
+    return;
+  }
+  if (!msg.payload || !("json" in msg.payload)) {
     return;
   }
   try {
