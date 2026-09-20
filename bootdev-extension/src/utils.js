@@ -541,22 +541,9 @@ function findHeadingAfter(anchor, text) {
     return Boolean(anchor.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING);
   });
 }
-function findElementByText(text) {
-  const target = normalizeText(text).toLowerCase();
-  return Array.from(document.querySelectorAll("main *, #__nuxt *")).find(
-    (el) => normalizeText(el.textContent).toLowerCase() === target
-  );
-}
-// Longest text an element may contain and still count as a "small" leaf label
-// rather than a wrapping container.
-const SMALL_TEXT_MAX_LEN = 80;
-function findSmallTextElement(root, text, exact) {
-  const target = normalizeText(text).toLowerCase();
-  return Array.from(root.querySelectorAll("*")).find((el) => {
-    if (el.id === "be-total-xp") return false;
-    const value = normalizeText(el.textContent);
-    if (value.length > SMALL_TEXT_MAX_LEN) return false; // skip containers; want a leaf label
-    const lowered = value.toLowerCase();
-    return exact ? lowered === target : lowered.includes(target);
-  });
-}
+// findElementByText / findSmallTextElement were removed in v0.15.1 with their
+// last consumer. They existed for the profile page's text-matched anchors,
+// which the 2026-09-18 rebuild made unusable: the card has no "@handle" text
+// node and splits "LEVEL" from the number, so both lookups matched either
+// nothing or the page header. profile.js now bounds its search to the profile
+// card first (findProfileCard) and takes the name heading inside it.
