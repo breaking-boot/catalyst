@@ -169,7 +169,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 - **Why it is called "Observed", and why that matters.** Boot.dev removed its all-time leaderboard in August 2026, and a week later removed the per-user rank from profiles too — a profile now shows a band such as "Top 1%" instead. That band is far too coarse to order anybody: when first measured, a single value covered everyone from about 930,000 to 1,740,000 lifetime XP, and even the finest band seen since still covers well over a thousand learners. The leaderboard and profile sources Catalyst has identified therefore no longer provide an exact all-time position. Catalyst orders the learners it has seen by lifetime XP instead. A number on this board means "Nth highest XP among the learners Catalyst has observed" — not "Nth on Boot.dev".
 - **It ships knowing where to start.** The extension bundles a seed of observed high-XP learners, so a new installation shows a full board immediately, with no waiting and no network round-trip.
 - **It keeps its known learners current as you browse.** XP is picked up from responses Boot.dev's own pages already make — every profile you open, every native board — and each time you open or reload the leaderboard Catalyst refreshes a few more known learners. A fresh installation can refresh the bundled roster over a handful of loads; continued browsing also discovers learners the seed did not know about. **At most 12 requests per load**, and at most one such pass every five minutes.
-- **It keeps looking for people it does not know yet.** Anyone seen with enough lifetime XP to belong is picked up automatically, and Catalyst also watches Boot.dev's weekly and monthly boards, where someone climbing toward the top is most likely to appear.
+- **It still discovers new learners, but more slowly.** Any learner Catalyst sees with enough lifetime XP to belong is picked up automatically from Boot.dev's native boards or from a profile you open. Catalyst previously also used Boot.dev's `week` and `month` XP API timeframes, which were the best passive sources for learners approaching the top. Those timeframes are no longer available, and no remaining source reliably lists that group, so new high-XP learners may take longer to appear. Refreshing the bundled seed in future releases can help fill that gap.
 - Learners you already know never disappear on their own. Leaving the leaderboard alone for a month changes nothing; the board is refreshed the next few times you visit.
 - The subtitle shows **your own percentile** — the remaining all-time standing signal Boot.dev publishes through public stats — against the current total number of learners. Catalyst displays it as a percentile and never converts it into an exact rank.
 - Hover any row to see when its XP was last read.
@@ -178,7 +178,8 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 - Also on the leaderboard page, a **Personal Leaderboards** section lets you track specific Boot.dev handles across four side-by-side boards: **Daily XP**, **All-Time XP**, **Daily Karma**, and **All-Time Karma**. Handles are stored in `chrome.storage.local`. Each board can be toggled individually from the options page; all four off hides the section entirely.
 - On any public profile page (`https://www.boot.dev/u/<username>`), an **Add to Personal Leaderboards** button lets you save that user directly.
-- **All-Time XP** uses public profile XP. **All-Time Karma** uses public stats karma. Both are exact.
+- **All-Time XP** uses public profile XP. **All-Time Karma** uses public stats karma, the same figure shown on that user's profile page. Both are exact.
+- **Boot.dev exposes two slightly different karma totals for the same user.** Public profile/stats karma and the native Top Community Members board differed by 0-44 points across the accounts tested, with a stable gap per user. Catalyst uses the profile/stats figure throughout Personal Leaderboards and the native board's figure for comparisons on that board, so each comparison is internally consistent. This means Personal Leaderboards' All-Time Karma value may be a few points lower than the native board.
 - **Daily XP** is a **best-effort estimate for users other than yourself**, because Boot.dev's daily board is a rolling last-24-hours window and there is no public API for another user's daily XP unless they are on a daily leaderboard (global top-25, or your league's). Each value is labeled with how it was obtained (the label sits to the left of the value), in decreasing accuracy:
   - **Plain value** — exact: the user is on the live global or league daily leaderboard right now, so Catalyst shows the same number Boot.dev does.
   - **`past Nhr` note** — measured: the difference between Catalyst's own oldest and newest total-XP observations of that user within the last 24 hours. Accurate for what it saw, but blind to XP earned before the window started. Seeing a user on a daily board even once seeds a full 24h window (the board response reveals their total from exactly 24h ago), so these get good fast.
@@ -192,7 +193,7 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 - Every leaderboard entry other than your own shows a comparison — how far ahead (green) or behind (red) you are in the same unit as that board's value.
 - Comparisons appear on all extension panels (all four Personal Leaderboards boards, and Top Observed Learners) and on all four native Boot.dev boards: League Top Daily Learners, League Top League Learners, Global Top Daily Learners, and Global Top Community Members. Recent Archmages is left untouched.
-- Native-board comparisons use your value from the same response that feeds that board when available. Top Observed Learners uses XP observed for you in the current session rather than restoring your value from the stored roster, so stale roster data cannot become the comparison baseline.
+- Native-board comparisons use your value from the same response that feeds that board when available. This includes the karma board, whose figures differ slightly from the profile/stats karma Catalyst uses elsewhere (see **Personal Leaderboards**). Top Observed Learners uses XP observed for you in the current session rather than restoring your value from the stored roster, so stale roster data cannot become the comparison baseline.
 - Comparisons are toggleable per board from the options page (see **Settings**), with a master switch in the popup to hide them all at once.
 
 ### Boss Event Tracker
@@ -223,7 +224,9 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 ### Profile Pages
 
-- On public profile pages (`https://www.boot.dev/u/<username>`), Catalyst adds **Total XP**, current-level XP progress, and XP remaining to the next level, displayed below the native level line in the profile header.
+- On public profile pages (`https://www.boot.dev/u/<username>`), Catalyst adds **Total XP**, current-level XP progress, and XP remaining to the next level directly beneath the level progress bar.
+- Boot.dev already labels the two ends of that bar with current-level XP and the next-level threshold. While the feature is enabled, Catalyst hides those two native labels and presents the same values together with XP remaining in one line. The native labels are hidden, not removed, and reappear when the feature is switched off.
+- Total XP remains useful even though the rebuilt profile page can show an **XP EARNED** tile. That tile is not always present: profiles with several completed paths can show **PATH COMPLETED** tiles instead, leaving no native lifetime-XP total. Boot.dev also does not show XP remaining to the next level.
 
 ## Troubleshooting
 
@@ -294,6 +297,8 @@ node ../scripts/check_leaderboard_casing.mjs
 node ../scripts/check_endpoint_tripwire.mjs
 node ../scripts/check_alltime_roster.mjs
 node ../scripts/check_snapshot_series.mjs
+node ../scripts/check_profile_anchor.mjs
+node ../scripts/check_cross_tab_merge.mjs
 ```
 
 To build a release zip, run `bash scripts/package-extension.sh` from the repo root. See [CLAUDE.md](CLAUDE.md) for architecture details and agent guidance.
