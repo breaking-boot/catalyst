@@ -197,7 +197,16 @@ function handleProfileStats(json) {
         : "";
       badge.innerHTML = `<div>Total XP: <strong>${fmtNum(totalXp)}</strong></div>${progressMarkup}`;
       badge.setAttribute("data-be-handle", handle);
-      anchor.insertAdjacentElement("afterend", badge);
+      // INSIDE the level block, not after it. The block is one item in the
+      // card's flex row, so a sibling inserted after it becomes another item,
+      // wraps to a new line and renders full width at the bottom of the card —
+      // which is where the badge and the button landed, with the button
+      // stretched across the whole card.
+      if (underProgressBar) {
+        if (badge.parentElement !== anchor) anchor.appendChild(badge);
+      } else {
+        anchor.insertAdjacentElement("afterend", badge);
+      }
       if (underProgressBar && progress) hideNativeLevelXpLabels(card, progress);
       else restoreNativeLevelXpLabels();
     } else {
