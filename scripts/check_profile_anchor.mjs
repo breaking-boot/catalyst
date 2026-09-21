@@ -19,6 +19,9 @@
 //
 // The rules pinned here are the ones that failure violated:
 //   1. the card is found first, and the anchor is taken from inside it;
+//   1b. the anchor is the level progress bar's row when there is one, so the
+//       badge sits under the bar whose figures it consolidates, and the name
+//       heading only when the card carries no bar;
 //   2. nothing in the page chrome (nav / header / mobile menu) is ever chosen;
 //   3. the tightest matching container wins, so a page wrapper cannot stand in
 //      for the card;
@@ -132,7 +135,7 @@ vm.createContext(sandbox);
 for (const file of ["utils.js", "profile.js"]) {
   vm.runInContext(readFileSync(new URL(file, SRC), "utf8"), sandbox, { filename: file });
 }
-const { findProfileCard, findProfileBadgeAnchor, isPageChrome } = testHook.profile;
+const { findProfileCard, findProfileBadgeAnchor, isPageChrome, findProfileProgressRow } = testHook.profile;
 
 // --- page builders ----------------------------------------------------------
 // Mirrors the rebuilt page as measured on 2026-09-19: the viewer's own level
@@ -164,7 +167,13 @@ function profilePage({ fullName, handle, level, withBar = true, extraCardText = 
     ]),
   ]);
   const main = new El("main", {}, [card]);
-  return { body: new El("body", {}, [viewerNav(), main]), card, heading: card.querySelector("h2") };
+  const bar = card.querySelector('[role="progressbar"]');
+  return {
+    body: new El("body", {}, [viewerNav(), main]),
+    card,
+    heading: card.querySelector("h2"),
+    progressRow: bar ? bar.parentElement : null,
+  };
 }
 
 // --- checks -----------------------------------------------------------------
@@ -186,7 +195,7 @@ const check = (name, actual, expected) => {
   root = page.body;
   const profile = { Handle: "a-fleming", FirstName: "Aaron", LastName: "Fleming", Level: 209 };
   check("own profile: card is the section", findProfileCard(profile), page.card);
-  check("own profile: anchor is the name heading", findProfileBadgeAnchor(profile), page.heading);
+  check("own profile: anchor is the progress bar's row", findProfileBadgeAnchor(profile), page.progressRow);
   check("own profile: anchor is not page chrome", isPageChrome(findProfileBadgeAnchor(profile)), false);
 }
 
@@ -197,7 +206,7 @@ const check = (name, actual, expected) => {
   root = page.body;
   const profile = { Handle: "young-pancake", FirstName: "Saleh", LastName: "Rammah", Level: 45 };
   const anchor = findProfileBadgeAnchor(profile);
-  check("other profile: anchor is that user's name heading", anchor, page.heading);
+  check("other profile: anchor is that user's progress row", anchor, page.progressRow);
   check("other profile: anchor is not in the nav", isPageChrome(anchor), false);
 }
 
@@ -219,13 +228,24 @@ const check = (name, actual, expected) => {
   check("no card: no anchor", findProfileBadgeAnchor(profile), null);
 }
 
-// 5. A card without a progress bar still resolves — the bar corroborates, it is
-//    not required, so a redesign that drops it degrades rather than breaks.
+// 5. A card without a progress bar falls back to the name heading, so a
+//    redesign that drops the bar degrades rather than breaks.
 {
   const page = profilePage({ fullName: "Dan Hjartland", handle: "squashd", level: 174, withBar: false });
   root = page.body;
   const profile = { Handle: "squashd", FirstName: "Dan", LastName: "Hjartland", Level: 174 };
-  check("no progress bar: anchor still resolves", findProfileBadgeAnchor(profile), page.heading);
+  check("no progress bar: anchor falls back to the name heading", findProfileBadgeAnchor(profile), page.heading);
+}
+
+// 5b. The bar is preferred over the heading when both are present — the badge
+//     consolidates the bar's own two labels, so it belongs beneath them.
+{
+  const page = profilePage({ fullName: "Aaron Fleming", handle: "a-fleming", level: 209 });
+  root = page.body;
+  const profile = { Handle: "a-fleming", FirstName: "Aaron", LastName: "Fleming", Level: 209 };
+  const anchor = findProfileBadgeAnchor(profile);
+  check("the progress row wins over the name heading", anchor === page.heading, false);
+  check("and it is the bar's own row", anchor, page.progressRow);
 }
 
 // 6. A card whose text runs past the wrapper ceiling is not a card.
@@ -237,6 +257,17 @@ const check = (name, actual, expected) => {
   root = page.body;
   const profile = { Handle: "a-fleming", FirstName: "Aaron", LastName: "Fleming", Level: 209 };
   check("oversized container is rejected", findProfileCard(profile), null);
+}
+
+// 6b. A progress bar sitting in the page chrome is never an anchor — the nav
+//     carries its own level progress meter.
+{
+  const navBar = new El("nav", {}, [
+    new El("div", {}, [new El("div", { role: "progressbar", "aria-label": "Progress to next level" }, [])]),
+  ]);
+  const card = new El("section", {}, [new El("h2", {}, ["Aaron Fleming"])]);
+  root = new El("body", {}, [navBar, new El("main", {}, [card])]);
+  check("a progress bar in the chrome is not used as the row", findProfileProgressRow(card), null);
 }
 
 // 7. The chrome test covers all three containers.

@@ -154,6 +154,7 @@ function handleProfileStats(json) {
 
   const version = ++profileRenderVersion;
   waitFor(() => findProfileBadgeAnchor(profile)).then((anchor) => {
+    const card = findProfileCard(profile);
     if (version !== profileRenderVersion) return; // superseded
     if (!isProfilePage() || handle !== currentProfileHandle()) return;
     if (!anchor) {
@@ -183,17 +184,25 @@ function handleProfileStats(json) {
       // that tile row is a PRIORITY LIST, not a fixed set. A profile with
       // several completed paths renders PATH COMPLETED tiles instead, and shows
       // no cumulative XP anywhere (observed 2026-09-19). Remaining is never
-      // shown natively. Do not drop either without re-checking which tiles a
-      // given profile actually renders.
+      // shown natively at all.
+      //
+      // The current/needed pair IS shown natively, at the ends of the progress
+      // bar. The badge states it as one line and hides those two — so the page
+      // shows it once, not twice, and only when the badge is actually placed
+      // under the bar.
+      const underProgressBar = anchor === findProfileProgressRow(card);
       const progressMarkup = progress
-        ? `<div class="be-profile-level-xp">${fmtNum(progress.current)} / ${fmtNum(progress.total)} XP</div>
+        ? `${underProgressBar ? `<div class="be-profile-level-xp">${fmtNum(progress.current)} / ${fmtNum(progress.total)} XP</div>` : ""}
            <div class="be-profile-remaining-xp">Remaining: <strong>${fmtNum(progress.remaining)} XP</strong></div>`
         : "";
       badge.innerHTML = `<div>Total XP: <strong>${fmtNum(totalXp)}</strong></div>${progressMarkup}`;
       badge.setAttribute("data-be-handle", handle);
       anchor.insertAdjacentElement("afterend", badge);
+      if (underProgressBar && progress) hideNativeLevelXpLabels(card, progress);
+      else restoreNativeLevelXpLabels();
     } else {
       document.getElementById("be-total-xp")?.remove();
+      restoreNativeLevelXpLabels();
     }
 
     // The add button anchors after the badge when present, otherwise after the
@@ -271,9 +280,29 @@ function findProfileCard(profile) {
   return (withBar || best).el;
 }
 
+// Preferred placement is directly under the level progress bar, because that is
+// where the figures the badge carries belong: the bar shows progress toward the
+// next level and its own labels state the same two numbers the badge
+// consolidates. The bar is found by role and aria-label rather than by text,
+// which makes it the most stable anchor on the page.
+//
+// The name heading stays as the fallback, so a card that drops the bar still
+// gets a badge rather than none.
+function findProfileProgressRow(card) {
+  const bar = card.querySelector('[role="progressbar"]');
+  if (!bar) return null;
+  // The bar's own parent holds the bar and its two XP labels, so inserting
+  // after it puts the badge below the whole level block.
+  const row = bar.parentElement || bar;
+  return isPageChrome(row) ? null : row;
+}
+
 function findProfileBadgeAnchor(profile) {
   const card = findProfileCard(profile);
   if (!card) return null;
+
+  const progressRow = findProfileProgressRow(card);
+  if (progressRow) return progressRow;
 
   const fullName = getProfileFullName(profile);
   const headings = Array.from(card.querySelectorAll("h1,h2,h3,[role='heading']"));
@@ -296,16 +325,48 @@ function getProfileFullName(profile) {
 function removeProfileXpBadge() {
   document.getElementById("be-total-xp")?.remove();
   document.getElementById("be-profile-personal-add")?.remove();
+  restoreNativeLevelXpLabels();
 }
 
-// removeNativeProfileLevelXp lived here until v0.15.1. It deleted Boot.dev's own
-// "<current> XP" line by matching its rendered text, because the badge showed
-// the same figure. It is gone for two reasons, and the second one is the sharp
-// one: the rebuilt card renders the progress bar's own "7,716 XP" label as
-// exactly that text, so once the scope above was corrected to the card, the
-// removal would have deleted part of Boot.dev's new progress bar. It only ever
-// looked harmless because its scope was falling back to the header and finding
-// nothing there. Injected UI does not get to delete native UI.
+// The progress bar labels its ends with "<current> XP" and "<needed> XP" as two
+// separate elements. When the badge sits under the bar it states the same pair
+// as one line, so the native two are HIDDEN rather than removed.
+//
+// Hidden, specifically, and this is the whole point: the previous version of
+// this feature DELETED the native line, and removing a child from markup Vue
+// hydrated and patches is the same hazard that corrupted the nav — structural
+// edits to someone else's list are what shift positions. Setting display:none
+// changes no structure, is reversible when the feature is switched off, and
+// fails visibly (a duplicate) rather than destructively (a missing bar) if the
+// text ever stops matching.
+//
+// Re-applied on every render because Vue restores its own elements when it
+// re-renders the card, which it does often.
+function hideNativeLevelXpLabels(card, progress) {
+  if (!card || !progress) return;
+  const wanted = new Set([
+    `${fmtNum(progress.current)} xp`,
+    `${fmtNum(progress.total)} xp`,
+  ]);
+  for (const el of card.querySelectorAll("span, p, div")) {
+    if (el.children.length) continue; // leaf labels only
+    if (el.closest("#be-total-xp")) continue; // never our own
+    if (!wanted.has(normalizeText(el.textContent).toLowerCase())) continue;
+    if (el.getAttribute("data-be-hidden") === "1" && el.style.display === "none") continue;
+    el.setAttribute("data-be-hidden", "1");
+    el.style.display = "none";
+  }
+}
+
+// Put back everything hideNativeLevelXpLabels hid — on teardown, and whenever
+// the badge is not being rendered. Switching the feature off has to leave the
+// page exactly as Boot.dev drew it.
+function restoreNativeLevelXpLabels() {
+  for (const el of document.querySelectorAll('[data-be-hidden="1"]')) {
+    el.style.display = "";
+    el.removeAttribute("data-be-hidden");
+  }
+}
 
 function renderProfilePersonalAddButton(profile, anchor) {
   const handle = normalizeHandle(readField(profile, "Handle"));
@@ -343,6 +404,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
   window.__BOOTDEV_ENHANCER_TEST__.profile = {
     findProfileCard,
     findProfileBadgeAnchor,
+    findProfileProgressRow,
     isPageChrome,
     getLevelProgress,
     getProfileFullName,
