@@ -23,14 +23,14 @@ Boot.dev rebuilt its profile page, and two XP API timeframes Catalyst used are n
 
 ## v0.15.0 - Top Observed Learners
 
-Boot.dev retired its all-time leaderboard in August 2026, and a week later removed the per-user rank from profiles as well — a profile now shows a band such as "Top 1%" rather than a position. The leaderboard and profile sources Catalyst has identified no longer publish an exact all-time standing. Rather than guess at one, Catalyst now builds the board from what it can actually verify: lifetime XP.
+Boot.dev's visible all-time XP leaderboard was already gone before Catalyst began tracking it. In August 2026, the global `alltime` XP API timeframe also became unavailable, removing Catalyst's remaining authoritative source for the top XP rankings. Boot.dev later removed the exact all-time rank from user profiles as well, replacing it with a percentile band such as "Top 1%." The sources Catalyst has identified therefore no longer publish an exact all-time standing. Rather than guess at one, Catalyst now builds the board from what it can actually verify: lifetime XP.
 
 ### Added
 
 * **Top Observed Learners**, replacing the Top All-Time Learners section. It orders the learners Catalyst has seen by their lifetime XP, and the name is the honest description of what that is — a number on this board means "Nth highest XP among the learners Catalyst has observed", not "Nth on Boot.dev". Catalyst does not have a way to know the latter, and will not imply that it does.
 * **A full board from the moment you install it.** The extension bundles a seed of observed high-XP learners, so there is no waiting and no network round-trip before the board appears.
 * **It keeps its known learners current as you browse.** XP is picked up from responses Boot.dev's own pages already make — every profile you open, every native board — and each time you open or reload the leaderboard Catalyst refreshes a few more known learners. A brand-new installation can refresh the bundled roster within about a minute of use. Never more than twelve requests per load.
-* **It keeps looking for people it does not know yet.** Anyone seen with enough lifetime XP to belong is picked up automatically, and Catalyst also watches the weekly and monthly boards, where someone climbing toward the top is most likely to appear.
+* **It keeps looking for people it does not know yet.** Anyone seen with enough lifetime XP to belong is picked up automatically, and Catalyst also watches the `week` and `month` XP API timeframes, where someone climbing toward the top is most likely to appear.
 * **Your own standing in the subtitle**, using the percentile Boot.dev still publishes, against the current total number of learners. It is shown as the band it is, and never converted into a position — even the narrowest band Catalyst has seen still covers well over a thousand learners.
 * **Hover any row** to see when its XP was last read.
 
