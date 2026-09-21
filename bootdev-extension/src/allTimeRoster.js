@@ -10,8 +10,8 @@
 //               board became a ROSTER: keep handles, learn each one's rank.
 //   2026-08-20  leaderboardXPRankAlltime removed from /stats too, replaced by
 //               leaderboardXPPercentileAlltime — a band so coarse that a single
-//               value covers lifetime XP from 930,102 to 1,741,426 (measured,
-//               probe 13). There is now NO source of an exact position.
+//               value covers lifetime XP from 930,102 to 1,741,426 (measured
+//               2026-08-21). There is now NO source of an exact position.
 //
 // So ordering comes from lifetime XP alone, compared between the learners
 // Catalyst has actually observed. That is an OBSERVED ranking, not an objective

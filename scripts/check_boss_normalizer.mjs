@@ -25,20 +25,20 @@ const AUDIT_BODIES = new URL(
   "../reference_data/catalyst_versions/v0.12.2_api_casing_audit/api/responses/api_bodies_v3_2026-07-31.json",
   import.meta.url
 );
-// The v0.14.0 captures are named <account>_<label>_<timestamp>.json by probe
-// 01d, so they are located by PREFIX — the timestamp is evidence, not an API
-// contract, and a re-filed capture must not break the checks.
+// The v0.14.0 captures use <account>_<label>_<timestamp>.json filenames, so
+// they are located by PREFIX — the timestamp is evidence, not an API contract,
+// and a re-filed capture must not break the checks.
 const REDESIGN_BODIES = new URL(
   "../reference_data/catalyst_versions/v0.14.0_boss_event_redesign/api/responses/",
   import.meta.url
 );
-function loadProbeBody(prefix) {
+function loadCaptureBody(prefix) {
   try {
     const names = readdirSync(REDESIGN_BODIES)
       .filter((n) => n.startsWith(prefix) && n.endsWith(".json"))
       .sort();
     if (!names.length) return null;
-    // Probe 01d wraps the response under `json`, alongside account/label/etc.
+    // This capture format wraps the response under `json`, alongside account/label/etc.
     return JSON.parse(readFileSync(new URL(names[names.length - 1], REDESIGN_BODIES), "utf8"))?.json ?? null;
   } catch (_) {
     return null;
@@ -632,7 +632,7 @@ if (existsSync(AUDIT_BODIES)) {
     });
   }
 }
-// --- v0.14.0 redesign captures (probe 01d, 2026-08-16/17) --------------------
+// --- v0.14.0 redesign captures (2026-08-16/17) -------------------------------
 // These are the states that could only be produced during a live event, from
 // accounts that had not yet crossed the thresholds. They pin the new model
 // against real bodies rather than synthetic ones.
@@ -641,7 +641,7 @@ if (existsSync(AUDIT_BODIES)) {
 // IsUnlockedByUser flip per chest and agree, while the community XPTotal is
 // above 100M. Catalyst ignores both flags — this asserts the computed state
 // matches them anyway.
-const oneChest = loadProbeBody("boss_progress_villainousrent97_dummy1_one_chest_");
+const oneChest = loadCaptureBody("boss_progress_villainousrent97_dummy1_one_chest_");
 if (oneChest) {
   fixturesRun += 1;
   const n = normalizeBossProgressJson(oneChest);
@@ -670,7 +670,7 @@ if (oneChest) {
 // The moment a second member qualified: guild XP goes 0 -> 6149 (3045 + 3104),
 // still short of the 20000 goal. The mid-progress guild bar, which no earlier
 // capture contained.
-const midGuild = loadProbeBody("boss_progress_emotionalpost67_dummy2_qualified_2026-08-17T003347");
+const midGuild = loadCaptureBody("boss_progress_emotionalpost67_dummy2_qualified_2026-08-17T003347");
 if (midGuild) {
   fixturesRun += 1;
   const n = normalizeBossProgressJson(midGuild);
@@ -686,7 +686,7 @@ if (midGuild) {
 
 // One body carrying a COMPLETED guild and a MID-PROGRESS one — the fixture the
 // pin rule exists for.
-const twoGuilds = loadProbeBody("boss_progress_villainousrent97_dummy1_two_qualified_");
+const twoGuilds = loadCaptureBody("boss_progress_villainousrent97_dummy1_two_qualified_");
 if (twoGuilds) {
   fixturesRun += 1;
   const n = normalizeBossProgressJson(twoGuilds);

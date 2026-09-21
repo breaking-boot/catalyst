@@ -9,7 +9,7 @@
 // (`Backquote` is the key left of 1 on every layout) rather than by the
 // character printed on it. Alt+0 out, Alt+` back: the round trip needs no
 // stored state, and CodeMirror restores its own caret position on refocus
-// (verified — see ui/dom/focus_target_probe.json).
+// (verified against observed Boot.dev focus behavior).
 //
 // Nested steps are never interpreted. Once a shortcut focuses a checkbox the
 // learner continues with native Tab / Shift+Tab / Space, which is why nothing

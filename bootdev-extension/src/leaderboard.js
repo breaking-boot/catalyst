@@ -560,8 +560,8 @@ function recordCurrentUserLiveXp(xp) {
   // is zero". num(null) is 0 — the same trap that made Daily Karma compare
   // against a fabricated zero — and EVERY caller here can legitimately pass
   // null: myValueFromEntries returns null when I am not on that board (I am
-  // usually absent from at least one of the league, week and month boards), and
-  // readNum returns null when the field is missing.
+  // usually absent from at least one of the league, week, or month XP sources),
+  // and readNum returns null when the field is missing.
   //
   // The symptom was distinctive: my own XP read 0, so every All-Time comparison
   // rendered as minus that learner's entire lifetime total, including for the

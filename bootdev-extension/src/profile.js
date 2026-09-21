@@ -273,7 +273,7 @@ function getLevelProgress(profile) {
 // the page chrome.
 //
 // The 2026-09-18 rebuild broke the previous approach completely, and measuring
-// it (probe 16, three runs) is what this is built from:
+// it across three runs against the rebuilt page is what this is built from:
 //   * the card carries no "@handle" text node at all — the "@" is an icon — and
 //     renders the level as separate "LEVEL" and "209" elements, so the old
 //     scope lookup, which needed name + handle + "Level <n>" in one element,

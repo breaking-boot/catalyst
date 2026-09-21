@@ -433,7 +433,7 @@ function handleTrainingGroundsSubmit(event) {
 
 // Enter in the search box is the only commit trigger Boot.dev still offers.
 // It removed the Search button, and pressing Enter emits NO `submit` event
-// (probe 06, 2026-08-14: the Enter keydown, then history.replaceState, then the
+// (measured 2026-08-14: the Enter keydown, then history.replaceState, then the
 // fetch, with nothing in between), so the submit listener below stopped firing
 // and a level selection was never committed — the pills toggled and filtered
 // nothing. Matched on the keystroke rather than on the form.

@@ -99,9 +99,9 @@ function check(label, actual, expected) {
 }
 
 // The camelCase spelling of every field, written out here INDEPENDENTLY of the
-// production table so the two have to agree. These are the spellings probes 12
-// and 12b measured on 2026-08-19 — note the ones a lowercasing rule would get
-// wrong (profileImageURL, xpForLevel, githubCommits).
+// production table so the two have to agree. These spellings were measured on
+// 2026-08-19 — note the ones a lowercasing rule would get wrong
+// (profileImageURL, xpForLevel, githubCommits).
 const MEASURED_CAMEL = {
   XP: "xp", XPEarned: "xpEarned", Karma: "karma", Position: "position",
   Level: "level", Role: "role", Handle: "handle", FirstName: "firstName",
@@ -385,7 +385,7 @@ if (existsSync(PASCAL_CAPTURE)) {
   runInSandbox('currentUserHandle = "a-fleming"; currentUserLiveXp = null;');
 
   // Every one of these callers can legitimately produce null: the viewer is
-  // routinely absent from the league, week and month boards.
+  // routinely absent from the league, week, and month XP sources.
   runInSandbox('recordCurrentUserLiveXp(myValueFromEntries([{ handle: "someone-else", xp: 500 }], "XP"));');
   check("a board without me does not fabricate an XP of 0", myXp(), null);
 

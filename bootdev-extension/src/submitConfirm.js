@@ -6,7 +6,7 @@
 // or cloned, so its disabled state, loading animation, and tooltip stay as the
 // site defines them.
 //
-// Two facts make this safe (verified 2026-07-26, see the evidence bundle):
+// Two facts make this safe (verified 2026-07-26):
 //   - The Submit button carries a single bubble-phase `click` listener, so a
 //     document capture listener runs first and can cancel it.
 //   - Guarding only trusted clicks with a click count (event.detail > 0) means

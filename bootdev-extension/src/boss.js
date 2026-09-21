@@ -631,9 +631,9 @@ async function maybeTriggerBossReminderDebug() {
 // run 4-8 weeks apart). Put a captured /v1/boss_events_progress body in
 // be_boss_debug_response (chrome.storage.local) and reload Boot.dev: it runs
 // through the REAL handleBossProgress, so every production guard applies.
-// Accepts probe 01d's wrapper ({ account, label, json }) or a bare body. An
-// expired capture reads as inactive — edit expiresAt in the copy you store,
-// never in the evidence file. Unset the key when done.
+// Accepts either a wrapped capture ({ account, label, json }) or a bare body.
+// An expired capture reads as inactive — edit expiresAt in the copy you store,
+// never in the original. Unset the key when done.
 async function maybeReplayBossDebugResponse() {
   const stored = await chromeGet(BOSS_DEBUG_RESPONSE_KEY);
   if (!isPlainObject(stored) || enhancerStopped) return;
