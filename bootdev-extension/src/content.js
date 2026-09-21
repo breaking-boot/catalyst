@@ -5,7 +5,7 @@
 // Loaded last by manifest.json; all feature handlers are already in scope.
 //
 // NOTE ON FIELD NAMES: response fields are mapped from captured api.boot.dev
-// JSON under the repo-level reference_data/http_responses_from_api_endpoints.
+// JSON, read in both casings — see API_FIELD_ALIASES in utils.js.
 
 const TAG = "BOOTDEV_ENHANCER";
 const API_REQUEST_TIMEOUT_MS = 10_000;
@@ -45,7 +45,13 @@ function handleWindowMessage(event) {
   if (event.source !== window) return;
   if (event.origin !== window.location.origin) return;
   const msg = event.data;
-  if (!msg || msg.source !== TAG || !msg.payload || !("json" in msg.payload)) {
+  if (!msg || msg.source !== TAG) return;
+  // Page-context notices carry no response body; they are not API traffic.
+  if (msg.notice === "BE_PAGE_HYDRATED") {
+    notePageHydrated(msg.reason);
+    return;
+  }
+  if (!msg.payload || !("json" in msg.payload)) {
     return;
   }
   try {
@@ -206,6 +212,12 @@ function renderRouteScopedUi() {
 // without re-pulling everything.
 function requestRouteScopedData() {
   if (!isLeaderboardPage()) return;
+  // The viewer's own figures back every comparison on the page, so they are
+  // refreshed whenever anything that compares is on — not as part of one
+  // board's pass, which is how they came to depend on that board being enabled.
+  if (isFeatureEnabled("comparisons") || isFeatureEnabled("allTimeLeaderboard") || anyPersonalBoardEnabled()) {
+    setTrackedTimeout(() => void refreshCurrentUserXp(), 120);
+  }
   setTrackedTimeout(() => requestPersonalLeaderboardData(), 100);
   setTrackedTimeout(() => requestNativeLeaderboardData(), 150);
   // Last: the personal pass above is already in flight, so its handles are
@@ -231,10 +243,51 @@ function handleSettingsChange(changes, area) {
     applyImportedData().catch((err) => handleAsyncError(err, "import"));
     return;
   }
+  if (area === "local") {
+    adoptCrossTabWrites(changes).catch((err) => handleAsyncError(err, "crossTab"));
+    return;
+  }
   if (area !== "sync" || !changes[SETTINGS_KEY]) return;
   const before = getSettings();
   applyStoredSettings(changes[SETTINGS_KEY].newValue);
   applyFeatureSettings(before, getSettings());
+}
+
+// Another tab wrote one of the shared data keys. Until v0.15.1 tabs ignored
+// these deliberately — they write them routinely, so reacting meant looping on
+// their own writes — and the cost was that each tab kept its own divergent copy
+// and overwrote the others. Boss event highs differing per tab is the reported
+// form of it.
+//
+// Every write now carries the writing document's id (see mergeWrite in
+// utils.js), so this tab's own echo is identifiable and skipped, and the loop
+// that made this unsafe cannot form. The writer has already merged, so adopting
+// what is on disk is simply taking the newer, reconciled copy.
+async function adoptCrossTabWrites(changes) {
+  const fromAnotherTab = (key) => {
+    const change = changes[key];
+    return Boolean(change) && !isOwnStorageWrite(change.newValue);
+  };
+
+  if (fromAnotherTab(BOSS_KEY)) {
+    await adoptBossState(changes[BOSS_KEY].newValue);
+  }
+  if (fromAnotherTab(PERSONAL_CACHE_KEY) || fromAnotherTab(PERSONAL_HANDLES_KEY)) {
+    await loadPersonalLeaderboard();
+    if (enhancerStopped) return;
+    schedulePersonalLeaderboardRender();
+  }
+  if (fromAnotherTab(ALLTIME_ROSTER_KEY)) {
+    await loadAllTimeRoster();
+    if (enhancerStopped) return;
+    renderAllTimeLeaderboard();
+  }
+  if (fromAnotherTab(CURRENT_USER_KARMA_KEY)) {
+    // The karma series is loaded alongside the handle it belongs to.
+    await loadCurrentUserHandle();
+    if (enhancerStopped) return;
+    schedulePersonalLeaderboardRender();
+  }
 }
 
 // An options-page import merged data into storage.local behind this tab's back

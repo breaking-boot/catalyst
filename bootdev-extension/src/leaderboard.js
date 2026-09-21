@@ -560,8 +560,8 @@ function recordCurrentUserLiveXp(xp) {
   // is zero". num(null) is 0 — the same trap that made Daily Karma compare
   // against a fabricated zero — and EVERY caller here can legitimately pass
   // null: myValueFromEntries returns null when I am not on that board (I am
-  // usually absent from at least one of the league, week and month boards), and
-  // readNum returns null when the field is missing.
+  // usually absent from at least one of the league, week, or month XP sources),
+  // and readNum returns null when the field is missing.
   //
   // The symptom was distinctive: my own XP read 0, so every All-Time comparison
   // rendered as minus that learner's entire lifetime total, including for the
@@ -608,7 +608,15 @@ function getMyValue(kind) {
     value = fromEntries(cachedDailyEntries, "XPEarned")
       ?? fromEntries(cachedLeagueDailyEntries, "XPEarned");
   } else if (kind === "karma") {
-    value = fromEntries(cachedKarmaEntries, "Karma");
+    // /stats ONLY — never the karma board. Boot.dev's two karma surfaces
+    // disagree: measured 2026-09-19, the board read 5-20 higher per person than
+    // that person's /stats, and the profile page agrees with /stats. Reading
+    // the board for the viewer while every tracked row reads /stats made each
+    // comparison wrong by that difference, which is small enough to look like
+    // rounding. Personal Leaderboards is therefore /stats on both sides, and
+    // matches what a profile page shows.
+    const latest = currentUserKarmaSnapshots[currentUserKarmaSnapshots.length - 1];
+    value = Array.isArray(latest) ? observedNum(latest[1]) : null;
   } else if (kind === "dailyKarma") {
     // No board reports daily karma; measure it from my own persisted series
     // (same policy as tracked users: gains immediately, a 0 needs 30 min).
@@ -1136,13 +1144,23 @@ function augmentNativeDailyLeaderboard() {
   );
 }
 
+// The comparison rendered ON Boot.dev's own karma board is measured against
+// that board's own figure for the viewer, because every other number in that
+// section came from the same response. The /stats value is the fallback for a
+// viewer outside the top 25, where the board has nothing to offer — it is the
+// same measure from Boot.dev's other karma surface, which currently reads a
+// few points lower (see getMyValue).
+function myKarmaForNativeBoard() {
+  return myValueFromEntries(cachedKarmaEntries, "Karma") ?? getMyValue("karma");
+}
+
 function augmentNativeKarmaLeaderboard() {
   const heading = findHeadingAfter(findHeadingByText("Global Leaderboards"), "Top Community Members");
   if (!isComparisonEnabled("comparisonsGlobalKarma")) return stripNativeSection(heading);
   augmentNativeSection(
     heading,
     mapByHandle(cachedKarmaEntries, "Karma"),
-    getMyValue("karma"),
+    myKarmaForNativeBoard(),
     "karma"
   );
 }
@@ -1319,7 +1337,7 @@ function harvestCachedBoardSnapshots() {
   if (boardSeenAt.daily) harvestPersonalSnapshots(cachedDailyEntries, { backdate: true, asOf: boardSeenAt.daily });
   if (boardSeenAt.leagueDaily) harvestPersonalSnapshots(cachedLeagueDailyEntries, { backdate: true, asOf: boardSeenAt.leagueDaily });
   if (boardSeenAt.league) harvestPersonalSnapshots(cachedLeagueEntries, { asOf: boardSeenAt.league });
-  if (boardSeenAt.karma) harvestPersonalKarmaSnapshots(cachedKarmaEntries, { asOf: boardSeenAt.karma });
+
 }
 
 // Persist a distilled handle->XPEarned lookup for a daily board so the exact
@@ -1359,8 +1377,13 @@ function handleKarmaLeaderboard(json) {
   reportUsableFields("/v1/leaderboard_karma/alltime", entries, "Karma", (e) => readField(e, "Karma"));
   cachedKarmaEntries = entries;
   markBoardSeen("karma");
-  harvestPersonalKarmaSnapshots(entries);
-  recordCurrentUserKarma(myValueFromEntries(entries, "Karma"));
+  // The board no longer feeds the karma snapshot series, for the viewer or for
+  // tracked users. It reads a few points higher than the same person's /stats,
+  // so alternating sources put steps into a series whose whole purpose is
+  // measuring change — a phantom gain or loss of the size of the discrepancy,
+  // in a feature that already fabricated a value three times by other means.
+  // The series advances on /stats refreshes, which run on every leaderboard
+  // visit for every tracked handle.
   // The karma board is the single most productive discovery source a typical
   // install has: it surfaced 4 of the top 25 on its own (2026-08-14).
   noteAllTimeBoardEntries(entries);
@@ -1374,8 +1397,43 @@ function recordCurrentUserKarma(karma, atMs = Date.now()) {
   const snaps = updateSnapshotSeries(currentUserKarmaSnapshots, karma, atMs);
   if (!snaps) return;
   currentUserKarmaSnapshots = snaps;
-  chromeSet(CURRENT_USER_KARMA_KEY, { handle: currentUserHandle, snapshots: snaps });
+  void mergeWrite(CURRENT_USER_KARMA_KEY, (stored) => {
+    // Only the same user's series can be merged; a different handle stored here
+    // belongs to a previous login and is replaced, as it is on a handle change.
+    const sameUser = isPlainObject(stored) && normalizeHandle(stored.handle) === currentUserHandle;
+    const merged = sameUser
+      ? mergeObservedSeries(snaps, stored.snapshots, atMs)
+      : snaps;
+    currentUserKarmaSnapshots = merged;
+    return { handle: currentUserHandle, snapshots: merged };
+  });
   schedulePersonalLeaderboardRender();
+}
+
+// My own lifetime XP, refreshed on its own schedule rather than as part of the
+// Observed board's pass. It backs every All-Time XP comparison, and while it
+// lived inside requestAllTimeRosterRefresh it was skipped entirely whenever
+// that board was switched off — leaving the league boards as the only source,
+// which do not always carry the viewer. currentUserLiveXp stays session-only
+// and is never restored from storage (v0.13.1: a stored copy of "me" silently
+// wrong-footed every comparison), so this is what refills it.
+const CURRENT_USER_XP_TTL_MS = 10 * 60 * 1000;
+let currentUserXpFetchedAt = 0;
+
+async function refreshCurrentUserXp() {
+  if (!currentUserHandle) return;
+  const now = Date.now();
+  if (now - currentUserXpFetchedAt < CURRENT_USER_XP_TTL_MS) return;
+  currentUserXpFetchedAt = now;
+  const result = await fetchApiJsonWithAuthRetry(
+    `https://api.boot.dev/v1/users/public/${encodeURIComponent(currentUserHandle)}`
+  );
+  if (result.status < 200 || result.status >= 300) {
+    currentUserXpFetchedAt = 0; // a failure must not hold the TTL open
+    return;
+  }
+  const data = result.json?.data ?? result.json;
+  recordCurrentUserLiveXp(readNum(data, "XP"));
 }
 
 // My own stats request, issued alongside the tracked-handle refreshes: my
@@ -1391,36 +1449,18 @@ async function refreshCurrentUserKarma() {
   recordCurrentUserKarma(readField(data, "Karma"));
 }
 
-// Harvest karma snapshots for tracked users from the all-time karma board.
-// Karma twin of harvestPersonalSnapshots, minus backdating (karma has no
-// daily board, so a sighting only yields the present total). `asOf` anchors
-// the timestamps when harvesting a board cached earlier in the session.
-function harvestPersonalKarmaSnapshots(entries, { asOf = 0 } = {}) {
-  let changed = false;
-  const now = Date.now();
-  const at = asOf || now;
+// harvestPersonalKarmaSnapshots was removed in v0.15.1 with its last consumer.
+// It recorded karma snapshots for tracked users from the all-time karma board;
+// that board is no longer a source for the series (see handleKarmaLeaderboard),
+// because it and /stats disagree and a series must come from one of them.
 
-  for (const entry of entries) {
-    const handle = normalizeHandle(getHandle(entry));
-    if (!handle || !isPersonalHandle(handle)) continue;
-
-    const total = readNum(entry, "Karma");
-    if (total == null) continue;
-
-    const record = ensurePersonalRecord(handle);
-    recordKarmaSnapshot(record, total, at);
-    record.updatedAt = now;
-    changed = true;
-  }
-
-  if (changed) {
-    savePersonalCache();
-    schedulePersonalLeaderboardRender();
-  }
-}
-
-// /v1/leaderboard_xp/{week,month}: requested only while a board position is
-// unknown (see requestAllTimeRosterRefresh). DISCOVERY AND LIFETIME XP ONLY —
+// /v1/leaderboard_xp/{week,month}: no longer available — confirmed returning
+// 400 "Invalid timeframe" on 2026-09-19; the date they stopped working is
+// unknown, so nothing requests these any more — see the discovery note in
+// allTimeRoster.js. The handler is kept anyway, on the same reasoning that kept
+// the all-time board's: if Boot.dev restores either timeframe, its response is
+// already relayed and routed, and the roster starts learning from it again with
+// no further change. DISCOVERY AND LIFETIME XP ONLY —
 // XPEarned here covers 7 or 30 days, so it must never reach computeDailyXpView,
 // the daily comparisons, or a backdated snapshot, where XP - XPEarned would
 // fabricate a total from a week ago and hand it to the 24-hour window. A plain
@@ -2407,12 +2447,81 @@ async function savePersonalHandles() {
   return chromeSet(PERSONAL_HANDLES_KEY, { handles: validHandles });
 }
 
+// Union of two observation series, for the cross-tab merges below. Mirrors
+// mergeSnapshotSeries in backup.js — keep the two in sync; that one handles the
+// same collision arriving from a file instead of from another tab.
+//
+// A series is append-only history, so two tabs each holding part of it must be
+// combined rather than one replacing the other: dropping the other tab's points
+// would shorten the measured window, and a shorter window is exactly what makes
+// computeDailyXpView fall through to a weaker tier.
+function mergeObservedSeries(a, b, now = Date.now()) {
+  const cutoff = now - SNAPSHOT_MAX_AGE_MS;
+  const pairs = [];
+  for (const source of [a, b]) {
+    if (!Array.isArray(source)) continue;
+    for (const point of source) {
+      if (!Array.isArray(point)) continue;
+      const at = observedNum(point[0]);
+      const value = observedNum(point[1]);
+      if (at == null || value == null || value < 0) continue;
+      if (at < cutoff || at > now + 60_000) continue; // tolerate a little clock skew
+      pairs.push([at, value]);
+    }
+  }
+  pairs.sort((x, y) => x[0] - y[0] || x[1] - y[1]);
+
+  let out = [];
+  for (const point of pairs) {
+    const last = out[out.length - 1];
+    if (last && last[0] === point[0] && last[1] === point[1]) continue; // exact duplicate
+    if (last && point[1] < last[1]) continue; // contradiction: keep the higher run
+    out.push(point);
+  }
+  while (out.length > SNAPSHOT_CAP) {
+    out = out.filter((point, i, arr) => i === 0 || i === arr.length - 1 || i % 2 === 1);
+  }
+  return out;
+}
+
+// Merge one tracked user's record with another tab's copy of it. The profile
+// and stats blocks describe a moment, so the newer one wins whole; the series
+// are history and are combined.
+function mergePersonalRecords(mine, theirs, now = Date.now()) {
+  if (!isPlainObject(theirs)) return mine;
+  if (!isPlainObject(mine)) return theirs;
+  const newer = (observedNum(theirs.updatedAt) || 0) > (observedNum(mine.updatedAt) || 0) ? theirs : mine;
+  const older = newer === mine ? theirs : mine;
+  return {
+    ...older,
+    ...newer,
+    xpSnapshots: mergeObservedSeries(mine.xpSnapshots, theirs.xpSnapshots, now),
+    karmaSnapshots: mergeObservedSeries(mine.karmaSnapshots, theirs.karmaSnapshots, now),
+  };
+}
+
 function savePersonalCache() {
   const records = {};
   for (const handle of personalHandles.filter(isValidHandle)) {
     if (isPlainObject(personalRecords[handle])) records[handle] = personalRecords[handle];
   }
-  chromeSet(PERSONAL_CACHE_KEY, { records, updatedAt: Date.now() });
+  const now = Date.now();
+  // Merged rather than replaced: another tab may hold observations this one
+  // never saw, and overwriting them shortens every measured window.
+  void mergeWrite(PERSONAL_CACHE_KEY, (stored) => {
+    const theirs = isPlainObject(stored?.records) ? stored.records : {};
+    const merged = {};
+    for (const handle of personalHandles.filter(isValidHandle)) {
+      const mine = records[handle];
+      const other = theirs[handle];
+      const result = mergePersonalRecords(mine, other, now);
+      if (isPlainObject(result)) {
+        merged[handle] = result;
+        personalRecords[handle] = result;
+      }
+    }
+    return { records: merged, updatedAt: now };
+  });
 }
 
 function removePersonalLeaderboards() {
@@ -2425,6 +2534,8 @@ function removePersonalLeaderboards() {
 if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
   window.__BOOTDEV_ENHANCER_TEST__.leaderboard = {
     leaderAvatarSignature,
+    mergeObservedSeries,
+    mergePersonalRecords,
     renderLeaderAvatar,
     getRoleFrameIndex,
     getRoleFrameUrl,

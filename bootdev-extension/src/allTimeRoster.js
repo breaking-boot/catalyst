@@ -10,8 +10,8 @@
 //               board became a ROSTER: keep handles, learn each one's rank.
 //   2026-08-20  leaderboardXPRankAlltime removed from /stats too, replaced by
 //               leaderboardXPPercentileAlltime — a band so coarse that a single
-//               value covers lifetime XP from 930,102 to 1,741,426 (measured,
-//               probe 13). There is now NO source of an exact position.
+//               value covers lifetime XP from 930,102 to 1,741,426 (measured
+//               2026-08-21). There is now NO source of an exact position.
 //
 // So ordering comes from lifetime XP alone, compared between the learners
 // Catalyst has actually observed. That is an OBSERVED ranking, not an objective
@@ -20,7 +20,7 @@
 //
 // The 2026-08-20 ranks are kept as provenance on seeded entries (`rank`,
 // `rankAt`). They are not reproducible and are never displayed as current.
-// Carry them forward with diagnostics/14_roster_export.js; do not re-probe.
+// Carry them forward through the roster export; do not try to re-measure them.
 
 const ALLTIME_ROSTER_KEY = "be_alltime_roster";
 const ALLTIME_ROSTER_VERSION = 1;
@@ -34,7 +34,11 @@ const ROSTER_MAX_ENTRIES = 60;
 // whole board refreshes over ~5 loads and reloading the page IS a refresh. A
 // clock TTL would refresh a board nobody is reading and still be stale the
 // moment someone opens it.
-const ROSTER_XP_SLICE = 6;
+// 8, not 6: the week and month XP API timeframes are no longer available
+// (confirmed returning 400 "Invalid timeframe" on 2026-09-19) and the two
+// requests per pass they used to spend now go here. The per-load ceiling
+// below is unchanged.
+const ROSTER_XP_SLICE = 8;
 const ROSTER_REQUEST_CEILING = 12;
 const ROSTER_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -192,8 +196,8 @@ function applySeedToRoster(roster, seed = typeof ALLTIME_SEED === "undefined" ? 
   for (const raw of seed.entries) {
     const handle = normalizeHandle(raw?.handle);
     if (!isValidHandle(handle) || observedNum(raw?.rank) == null) continue;
-    // A seed exported from a live roster (diagnostics/14_roster_export.js)
-    // carries the date each rank was actually confirmed, which is older than the
+    // A seed exported from a live roster carries the date each rank was
+    // actually confirmed, which is older than the
     // export. Honour it — claiming the export date would silently make a
     // months-old position look freshly verified, and ranks can no longer be
     // re-checked to correct that.
@@ -463,10 +467,46 @@ function normalizeStoredRoster(stored) {
   return roster;
 }
 
+// Per handle, the newer observation wins — the same rule mergeRosterObservation
+// applies within a tab, applied again across tabs. A roster is a set of
+// sightings, so two tabs holding different sightings must be combined; taking
+// one copy whole would throw away whichever XP reads the other tab made.
+//
+// The viewer's own percentile follows its own timestamp, and xpWraps takes the
+// larger so priming cannot restart because a second tab had seen fewer passes.
+function mergeRosters(mine, theirs) {
+  if (!isPlainObject(theirs) || !isPlainObject(theirs.entries)) return mine;
+  if (!isPlainObject(mine)) return theirs;
+
+  const merged = { ...theirs, ...mine };
+  merged.entries = { ...theirs.entries };
+  for (const [handle, entry] of Object.entries(mine.entries || {})) {
+    const other = merged.entries[handle];
+    if (!isPlainObject(other)) {
+      merged.entries[handle] = entry;
+      continue;
+    }
+    const mineAt = observedNum(entry.profileAt) || 0;
+    const theirsAt = observedNum(other.profileAt) || 0;
+    merged.entries[handle] = theirsAt > mineAt ? { ...entry, ...other } : { ...other, ...entry };
+  }
+
+  const mineSelfAt = observedNum(mine.self?.percentileAt) || 0;
+  const theirsSelfAt = observedNum(theirs.self?.percentileAt) || 0;
+  if (theirsSelfAt > mineSelfAt) merged.self = theirs.self;
+
+  merged.xpWraps = Math.max(observedNum(mine.xpWraps) || 0, observedNum(theirs.xpWraps) || 0);
+  return merged;
+}
+
 function saveAllTimeRoster() {
   if (!allTimeRoster) return;
   allTimeRoster.updatedAt = Date.now();
-  chromeSet(ALLTIME_ROSTER_KEY, allTimeRoster);
+  void mergeWrite(ALLTIME_ROSTER_KEY, (stored) => {
+    const merged = mergeRosters(allTimeRoster, stored);
+    allTimeRoster = merged;
+    return merged;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -640,14 +680,38 @@ function getTotalStudents() {
 // verify in DevTools, and it cannot drift as the queues are tuned. Spent in
 // priority order, so when it binds the gap-closing work survives and the XP
 // sweep is what gets truncated.
-const ALLTIME_DISCOVERY_URLS = [
-  "https://api.boot.dev/v1/leaderboard_xp/week",
-  "https://api.boot.dev/v1/leaderboard_xp/month",
-];
-const ALLTIME_DISCOVERY_TTL_MS = 60 * 60 * 1000;
-const ALLTIME_SELF_PROFILE_TTL_MS = 10 * 60 * 1000;
-let alltimeDiscoveryAt = 0;
-let alltimeSelfProfileAt = 0;
+// DISCOVERY IS PASSIVE-ONLY SINCE v0.15.1, and that is a platform constraint
+// rather than a choice. /v1/leaderboard_xp/{week,month} were the standing
+// discovery sweep; both were confirmed returning 400 "Invalid timeframe" on
+// 2026-09-19, the same answer `alltime` gave when it was checked on
+// 2026-08-14. The date any of them stopped working is unknown. Sixteen
+// timeframe names were tried and none answered.
+//
+// Nothing replaces them. /v1/leaderboard_archmage is alive and lists 30 full
+// user objects, but they are the most recent learners to reach level 100 —
+// measured XP 427,712-464,145 against an admission floor (the lowest XP the
+// roster already holds) of 930,102. Not one would be admitted, so relaying it
+// would cost nothing and add nothing. The daily board's own lifetime-XP range
+// that day topped out at 786,594, also below the floor; the all-time karma
+// board reached 1,813,156 and is the only remaining board that regularly
+// carries learners this one could admit.
+//
+// So an unknown learner now enters the roster through the karma board, the
+// daily board, a profile the user opens, or a refreshed bundled seed. That is
+// slower than it was. It is stated in the README rather than hidden, because
+// the board showing fewer new faces is a consequence of the platform and not a
+// defect to chase.
+//
+// The route handler for the unavailable timeframes is deliberately KEPT (see
+// handleXpDiscoveryBoard in leaderboard.js, and the router in content.js), on
+// the same reasoning that kept /v1/leaderboard_xp/alltime: if Boot.dev ever
+// restores them, Catalyst picks them up passively with no further change.
+//
+// The viewer's own XP refresh used to live in this pass too, which coupled it
+// to the Observed board being switched on — with that board off, the only
+// source for the viewer's own lifetime XP was a league board that may not carry
+// them, and every All-Time comparison then had nothing to measure against. It
+// is its own request now: see refreshCurrentUserXp in leaderboard.js.
 
 function requestAllTimeRosterRefresh() {
   if (!allTimeRoster || enhancerStopped) return 0;
@@ -666,30 +730,12 @@ function requestAllTimeRosterRefresh() {
     return true;
   };
 
-  // 1. The week/month boards. These used to run only while a board position was
-  //    unknown, but "unknown position" is no longer detectable — nothing reports
-  //    positions. They are now the standing discovery sweep, TTL-gated, because
-  //    a newcomer with enough XP to belong is exactly who appears on them and
-  //    there is no other way to notice one.
-  if (now - alltimeDiscoveryAt >= ALLTIME_DISCOVERY_TTL_MS) {
-    alltimeDiscoveryAt = now;
-    for (const url of ALLTIME_DISCOVERY_URLS) spend(() => requestApiJson(url));
-  }
-
-  // 2. My own XP, which the All-Time comparisons are measured against.
-  const selfHandle = normalizeHandle(currentUserHandle);
-  if (selfHandle && now - alltimeSelfProfileAt >= ALLTIME_SELF_PROFILE_TTL_MS) {
-    if (spend(() => requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(selfHandle)}`))) {
-      alltimeSelfProfileAt = now;
-    }
-  }
-
-  // 3. The student count, which the subtitle's percentile is stated against.
+  // 1. The student count, which the subtitle's percentile is stated against.
   if (now - (observedNum(leaderboardStats.updatedAt) || 0) >= LEADERBOARD_STATS_TTL_MS) {
     spend(() => requestApiJson(LEADERBOARD_STATS_URL));
   }
 
-  // 4. The XP sweep — now the ONLY thing keeping the board correct, since the
+  // 2. The XP sweep — now the ONLY thing keeping the board correct, since the
   //    ordering is derived from XP alone. Handles the Personal Leaderboards
   //    pass already refreshes this load are skipped rather than fetched twice.
   const skip = anyPersonalBoardEnabled() ? personalHandles : [];
@@ -720,6 +766,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     mergeRosterObservation,
     applyRosterObservation,
     applySeedToRoster,
+    mergeRosters,
     readAlltimeRank,
     readAlltimePercentile,
     readRegisteredUsers,

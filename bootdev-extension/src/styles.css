@@ -1,7 +1,16 @@
 /* styles.css - injected UI. Prefixed with be- to avoid clashing with the site. */
 
+/* An injected element inherits the page's layout context as well as its CSS
+   reset, so both of these state their own sizing. Dropped into Boot.dev's card
+   they land inside a flex container, where the default `align-self: stretch`
+   made the button span the full width of the card on some profiles and not on
+   others — the same class of surprise as an injected <svg> inheriting
+   `display: block` from the page's reset. */
 .be-profile-total-xp {
   margin-top: 4px;
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
   color: #d1d5db;
   font-family: inherit;
   font-size: 14px;
@@ -29,6 +38,10 @@
 }
 .be-profile-personal-add {
   margin-top: 6px;
+  display: inline-block;
+  align-self: flex-start;
+  width: fit-content;
+  max-width: 100%;
   border: 1px solid rgba(229, 174, 60, 0.45);
   border-radius: 4px;
   background: rgba(229, 174, 60, 0.12);

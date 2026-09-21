@@ -4,3 +4,6 @@ releases/
 
 # local Codex/Claude/debug/reference files
 reference_data/
+
+# local agent guidance and rules (not part of the extension)
+.claude/

@@ -280,6 +280,50 @@
     window.postMessage({ source: TAG, payload }, window.location.origin);
   }
 
+  // --- hydration signal ---------------------------------------------------
+  // Catalyst injects a link into Boot.dev's top nav. Before v0.15.1 it did so
+  // as soon as the nav existed, which on a server-rendered page can be BEFORE
+  // Vue hydrates it — and hydration walks the server-rendered children by
+  // position. One extra child displaces every later label against its href:
+  // captured 2026-09-20, the anchor that server-rendered as Billing (/pricing)
+  // came back reading "Leaderboard", so a middle click on Leaderboard opened
+  // the billing page. Vue repairs mismatched TEXT during hydration and leaves
+  // static attributes alone, which is exactly that signature. A left click
+  // still worked because the click handler comes from the vnode.
+  //
+  // Client-side re-renders with the link already present are safe — in that
+  // same capture an in-page navigation repaired the nav — so only hydration
+  // has to be waited out. Vue sets `__vue_app__` on the container it mounts
+  // when mount (and therefore hydration) finishes, and this file runs in the
+  // page context, which is the only place that property is visible.
+  const HYDRATION_POLL_MS = 100;
+  const HYDRATION_TIMEOUT_MS = 15000;
+
+  function announceHydrated(reason) {
+    window.postMessage({ source: TAG, notice: "BE_PAGE_HYDRATED", reason }, window.location.origin);
+  }
+
+  (function waitForHydration(startedAt = Date.now()) {
+    let mounted = false;
+    try {
+      const root = document.getElementById("__nuxt") || document.querySelector("#__nuxt, #app");
+      mounted = Boolean(root && (root.__vue_app__ || root.__vnode));
+    } catch (_) {}
+    if (mounted) {
+      announceHydrated("vue-app");
+      return;
+    }
+    if (Date.now() - startedAt >= HYDRATION_TIMEOUT_MS) {
+      // Fail open: a renamed root container must not cost the feature outright.
+      // What makes that safe is the coherence check on the other side — see
+      // navLooksDisplaced() in nextLesson.js, which removes the link again if
+      // the nav turns out displaced after all.
+      announceHydrated("timeout");
+      return;
+    }
+    setTimeout(() => waitForHydration(startedAt), HYDRATION_POLL_MS);
+  })();
+
   function rememberApiHeaders(...sources) {
     for (const source of sources) {
       if (!source) continue;

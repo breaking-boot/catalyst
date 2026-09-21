@@ -252,13 +252,29 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
   const roster = fullRoster();
   const seen = new Set();
   let cursor = 0;
-  for (let load = 0; load < Math.ceil(30 / R.constants.ROSTER_XP_SLICE); load++) {
+  // Only the passes BEFORE the cursor wraps can promise no repeats. The slice
+  // does not have to divide the roster evenly — it stopped doing so in v0.15.1,
+  // when the week and month XP timeframes stopped answering and their two
+  // requests moved to this queue — and the wrapping pass legitimately
+  // revisits handles it has already refreshed. That is the round robin
+  // working, not a fault.
+  const cleanPasses = Math.floor(30 / R.constants.ROSTER_XP_SLICE);
+  for (let load = 0; load < cleanPasses; load++) {
     roster.xpCursor = cursor;
     const result = R.pickXpRefreshTargets(roster, { now: NOW });
     for (const handle of result.targets) {
-      check("no handle is refreshed twice before all are refreshed once", !seen.has(handle), handle);
+      check("no handle is refreshed twice before the cursor wraps", !seen.has(handle), handle);
       seen.add(handle);
     }
+    cursor = result.cursor;
+  }
+  eq("every pass before the wrap refreshes a full slice",
+    seen.size, cleanPasses * R.constants.ROSTER_XP_SLICE);
+
+  for (let load = 0; load < 5 && seen.size < 30; load++) {
+    roster.xpCursor = cursor;
+    const result = R.pickXpRefreshTargets(roster, { now: NOW });
+    for (const handle of result.targets) seen.add(handle);
     cursor = result.cursor;
   }
   eq("the whole roster is covered within a handful of loads", seen.size, 30);

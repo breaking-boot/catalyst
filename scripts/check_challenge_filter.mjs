@@ -52,6 +52,11 @@ XMLHttpRequestStub.prototype.setRequestHeader = function () {};
 XMLHttpRequestStub.prototype.send = function () {};
 
 const sandbox = {
+  // injected.js starts its hydration watcher at load (see the nav displacement
+  // note there), so the sandbox needs timers even though this file tests the
+  // challenge filter.
+  setTimeout: () => 0,
+  clearTimeout() {},
   window: windowStub,
   XMLHttpRequest: XMLHttpRequestStub,
   URL,
@@ -404,7 +409,7 @@ if (!fixturesRun) {
 
 // --- the Enter commit trigger (v0.14.1) -------------------------------------
 // Boot.dev removed the Search button and pressing Enter emits no `submit`
-// event (probe 06, 2026-08-14), so the form-submit listener never fired and no
+// event (observed 2026-08-14), so the form-submit listener never fired and no
 // level selection was ever committed. Enter in the search box is the trigger
 // now; these pin what counts as that keystroke.
 

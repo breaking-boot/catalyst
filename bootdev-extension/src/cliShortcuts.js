@@ -11,9 +11,6 @@
 // Capability comes from what the page actually renders: a lesson that shows only
 // the -s command (Boot.dev's newer "safe submission" lessons) has no run command
 // to copy, and Catalyst never derives one by editing the submit command.
-//
-// Evidence and design decisions: reference_data/catalyst_versions/
-// v0.11.0_submit_confirmation_and_cli_shortcuts/implementation_plan.md
 
 const CLI_SHORTCUT_FEATURE = "cliShortcuts";
 // A displayed command is ~55 chars; anything longer is a container element that

@@ -6,16 +6,13 @@
 // or cloned, so its disabled state, loading animation, and tooltip stay as the
 // site defines them.
 //
-// Two facts make this safe (verified 2026-07-26, see the evidence bundle):
+// Two facts make this safe (verified 2026-07-26):
 //   - The Submit button carries a single bubble-phase `click` listener, so a
 //     document capture listener runs first and can cancel it.
 //   - Guarding only trusted clicks with a click count (event.detail > 0) means
 //     keyboard activation and every programmatic .click() pass through
 //     untouched — including our own on confirm. That preserves Boot.dev's
 //     ctrl+shift+enter shortcut and makes recursion structurally impossible.
-//
-// Evidence and design decisions: reference_data/catalyst_versions/
-// v0.11.0_submit_confirmation_and_cli_shortcuts/implementation_plan.md
 
 const SUBMIT_CONFIRM_FEATURE = "submitConfirm";
 const USER_LESSON_URL = "https://api.boot.dev/v1/users/lessons/";
@@ -51,9 +48,7 @@ function isPointerActivation(event) {
 
 // Can a failed submission on this lesson still cost anything?
 //
-// Boot.dev states the rule itself (in-app panel, transcribed 2026-08-18 to
-// reference_data/catalyst_versions/v0.14.1_lesson_and_catalog_workflow/
-// bootdev_sharpshooter_rules_2026-08-18.md):
+// Boot.dev states the rule itself (in-app panel, transcribed 2026-08-18):
 //
 //   "Your streak is protected if any of the following is true:
 //      - The lesson has been completed

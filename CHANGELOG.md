@@ -1,14 +1,36 @@
 # Changelog
+## v0.15.1 - Profile, leaderboard, and cross-tab fixes
+
+Boot.dev rebuilt its profile page, and two XP API timeframes Catalyst used are no longer available, while separate Catalyst bugs were affecting the top navigation and shared state across open tabs. No new features in this release; it is entirely compatibility and correctness fixes.
+
+### Fixed
+
+* **Catalyst no longer corrupts Boot.dev's top navigation.** On a full page load, the Next Lesson link could be injected before Vue finished hydrating the server-rendered nav. That shifted later menu items onto the wrong destinations: for example, hovering **Leaderboard** showed the billing destination and middle-clicking it opened billing, even though a normal click still opened the leaderboard. Next Lesson now waits for hydration, and Catalyst removes it for that page if it detects a displaced nav item.
+* **Profile additions work again after Boot.dev's September 18 rebuild.** Total XP and the Personal Leaderboards button could anchor to the top-right site header, over Boot.dev's own level display, and sometimes failed to appear on other users' profiles. They now render directly beneath the profile's level progress bar.
+* **Profile pages no longer pick up data from a different user.** Boot.dev prefetches profiles when links are hovered, and Catalyst was treating any profile response as if it belonged to the profile currently open. Hovering **Profile** in your own avatar menu while viewing another user, for example, could replace that page's XP and Personal Leaderboards state with your own. Catalyst now caches responses by handle but only renders data for the profile in the URL.
+* **Prefetched profile data is reused immediately.** Opening a profile after Boot.dev had already prefetched it could leave Catalyst's figures missing for 30-35 seconds while it waited through its retry path. The cached response is now used as soon as that profile opens.
+* **Open tabs no longer overwrite each other's saved state.** Each Boot.dev tab kept its own copy of saved data and wrote it back wholesale, so the last tab to write won. During a boss event, different tabs could show different event highs, and a stale tab could overwrite a newer high it had never seen. Tracked-learner history and the Observed roster were exposed to the same problem. Writes now merge with the current stored copy, and changes made in one tab are adopted by the others.
+* **Catalyst no longer requests two XP API timeframes that stopped working.** Catalyst previously used Boot.dev's `week` and `month` XP API timeframes as additional discovery sources for the Observed board. Those timeframes are no longer available, so the two-request budget is now used to refresh two additional known learners on that board instead.
+* **All-Time XP comparisons no longer depend on Top Observed Learners being enabled.** Your own lifetime XP is the baseline for every All-Time XP comparison, and refreshing it had accidentally become a side effect of that panel being enabled.
+* **All-Time Karma comparisons now use a consistent source on each board.** Boot.dev's profile/stats karma and Top Community Members karma differ slightly for the same user. Personal Leaderboards now uses profile/stats karma for both sides of its comparisons, while comparisons on Boot.dev's native karma board use that board's figure for both sides.
+
+### Notes
+
+* No new permissions, settings, dependencies, or backup-format changes.
+* **Boot.dev currently reports two different karma totals for the same person.** Across eight accounts tested, the profile/stats figure and Top Community Members figure differed by 0-44 points, with a stable gap per user. The discrepancy is reproducible with Catalyst disabled. Catalyst uses the profile/stats figure in Personal Leaderboards and the native board's figure for comparisons drawn on that board, so each comparison is internally consistent. As a result, Personal Leaderboards' All-Time Karma value may sit a few points below the native board.
+* **The Observed board may discover new high-XP learners more slowly.** The `week` and `month` XP API timeframes were the best passive sources for learners approaching the top, and no remaining source reliably lists that group. Learners Catalyst already knows are refreshed as before.
+* Your recorded history is unchanged by this release.
+
 ## v0.15.0 - Top Observed Learners
 
-Boot.dev retired its all-time leaderboard in August 2026, and a week later removed the per-user rank from profiles as well — a profile now shows a band such as "Top 1%" rather than a position. The leaderboard and profile sources Catalyst has identified no longer publish an exact all-time standing. Rather than guess at one, Catalyst now builds the board from what it can actually verify: lifetime XP.
+Boot.dev's visible all-time XP leaderboard was already gone before Catalyst began tracking it. In August 2026, the global `alltime` XP API timeframe also became unavailable, removing Catalyst's remaining authoritative source for the top XP rankings. Boot.dev later removed the exact all-time rank from user profiles as well, replacing it with a percentile band such as "Top 1%." The sources Catalyst has identified therefore no longer publish an exact all-time standing. Rather than guess at one, Catalyst now builds the board from what it can actually verify: lifetime XP.
 
 ### Added
 
 * **Top Observed Learners**, replacing the Top All-Time Learners section. It orders the learners Catalyst has seen by their lifetime XP, and the name is the honest description of what that is — a number on this board means "Nth highest XP among the learners Catalyst has observed", not "Nth on Boot.dev". Catalyst does not have a way to know the latter, and will not imply that it does.
 * **A full board from the moment you install it.** The extension bundles a seed of observed high-XP learners, so there is no waiting and no network round-trip before the board appears.
 * **It keeps its known learners current as you browse.** XP is picked up from responses Boot.dev's own pages already make — every profile you open, every native board — and each time you open or reload the leaderboard Catalyst refreshes a few more known learners. A brand-new installation can refresh the bundled roster within about a minute of use. Never more than twelve requests per load.
-* **It keeps looking for people it does not know yet.** Anyone seen with enough lifetime XP to belong is picked up automatically, and Catalyst also watches the weekly and monthly boards, where someone climbing toward the top is most likely to appear.
+* **It keeps looking for people it does not know yet.** Anyone seen with enough lifetime XP to belong is picked up automatically, and Catalyst also watches the `week` and `month` XP API timeframes, where someone climbing toward the top is most likely to appear.
 * **Your own standing in the subtitle**, using the percentile Boot.dev still publishes, against the current total number of learners. It is shown as the band it is, and never converted into a position — even the narrowest band Catalyst has seen still covers well over a thousand learners.
 * **Hover any row** to see when its XP was last read.
 
@@ -155,7 +177,7 @@ information. All 11 endpoints Catalyst reads were checked against the live API.
 
 * No new permissions, API calls, storage keys, or dependencies.
 * All 11 Boot.dev endpoints Catalyst reads were verified against the live API on 2026-07-31. Only the challenge-search and boss-event responses have been observed serving camelCase; Catalyst handles both PascalCase and camelCase for those responses.
-* Maintainer-only audit notes, diagnostic tooling, and captured responses are retained locally under `reference_data/catalyst_versions/v0.12.2_api_casing_audit/`.
+* The audit notes, diagnostic tooling, and captured responses behind this release are retained by the maintainer outside the repository.
 
 ## v0.12.1 - Training Grounds difficulty filter repair
 

@@ -9,7 +9,7 @@
 // (`Backquote` is the key left of 1 on every layout) rather than by the
 // character printed on it. Alt+0 out, Alt+` back: the round trip needs no
 // stored state, and CodeMirror restores its own caret position on refocus
-// (verified — see ui/dom/focus_target_probe.json).
+// (verified against observed Boot.dev focus behavior).
 //
 // Nested steps are never interpreted. Once a shortcut focuses a checkbox the
 // learner continues with native Tab / Shift+Tab / Space, which is why nothing
@@ -41,9 +41,6 @@
 //     learner wants while typing in the editor, a terminal, or an answer box,
 //     and Boot.dev's own Ctrl+. works there too. The cost is documented: on Mac
 //     layouts where Alt+digit types a character, this claims it.
-//
-// Evidence and design decisions: reference_data/catalyst_versions/
-// v0.12.0_assignment_checkbox_shortcuts/implementation_plan.md
 
 const ASSIGNMENT_SHORTCUT_FEATURE = "assignmentShortcuts";
 // The lesson-text pane — a plain id, not a hashed class, and present on both
