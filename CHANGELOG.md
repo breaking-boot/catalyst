@@ -177,7 +177,7 @@ information. All 11 endpoints Catalyst reads were checked against the live API.
 
 * No new permissions, API calls, storage keys, or dependencies.
 * All 11 Boot.dev endpoints Catalyst reads were verified against the live API on 2026-07-31. Only the challenge-search and boss-event responses have been observed serving camelCase; Catalyst handles both PascalCase and camelCase for those responses.
-* Maintainer-only audit notes, diagnostic tooling, and captured responses are retained locally under `reference_data/catalyst_versions/v0.12.2_api_casing_audit/`.
+* The audit notes, diagnostic tooling, and captured responses behind this release are retained by the maintainer outside the repository.
 
 ## v0.12.1 - Training Grounds difficulty filter repair
 

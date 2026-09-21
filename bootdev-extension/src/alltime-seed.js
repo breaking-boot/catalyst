@@ -5,9 +5,8 @@
 // the read would be async — this file is in scope synchronously, which is what
 // lets a fresh install draw the board with no network round-trip at all.
 //
-// EXPORTED FROM A LIVE ROSTER by probe 14 (reference_data/catalyst_versions/
-// v0.15.0_all_time_board_rebuild/diagnostics/14_roster_export.js) on 2026-08-23T22:13:56.864Z.
-// Do not hand-edit — re-run the export instead.
+// EXPORTED FROM A LIVE ROSTER on 2026-08-23T22:13:56.864Z using the
+// maintainer's roster export tooling. Do not hand-edit — re-run the export.
 //
 // WHY THIS IS AN EXPORT AND NOT A PROBE OF THE API: Boot.dev removed
 // leaderboardXPRankAlltime on 2026-08-20, so a per-user rank can no longer be

@@ -20,7 +20,7 @@
 //
 // The 2026-08-20 ranks are kept as provenance on seeded entries (`rank`,
 // `rankAt`). They are not reproducible and are never displayed as current.
-// Carry them forward with diagnostics/14_roster_export.js; do not re-probe.
+// Carry them forward through the roster export; do not try to re-measure them.
 
 const ALLTIME_ROSTER_KEY = "be_alltime_roster";
 const ALLTIME_ROSTER_VERSION = 1;
@@ -196,8 +196,8 @@ function applySeedToRoster(roster, seed = typeof ALLTIME_SEED === "undefined" ? 
   for (const raw of seed.entries) {
     const handle = normalizeHandle(raw?.handle);
     if (!isValidHandle(handle) || observedNum(raw?.rank) == null) continue;
-    // A seed exported from a live roster (diagnostics/14_roster_export.js)
-    // carries the date each rank was actually confirmed, which is older than the
+    // A seed exported from a live roster carries the date each rank was
+    // actually confirmed, which is older than the
     // export. Honour it — claiming the export date would silently make a
     // months-old position look freshly verified, and ranks can no longer be
     // re-checked to correct that.

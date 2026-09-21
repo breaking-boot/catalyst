@@ -252,8 +252,7 @@ async function restoreBossPanel() {
 // the live-event capture (2026-06-26) is PascalCase, and between-events
 // captures on 2026-07-16 AND 2026-07-31 are entirely camelCase (event.uuid,
 // xpBonus, …), as is the live capture of the new event model (2026-08-14).
-// See boss_events_progress_between_events.json in reference_data and the
-// v0.12.2 audit bundle.
+// Confirmed against captured between-events and live-event responses.
 //
 // Reads go through pickField (utils.js) per FIELD, never gated on the shape of
 // the whole response — see the comment there for why a mixed response is the
@@ -1399,8 +1398,7 @@ function chestTier(index) {
 // ---------------------------------------------------------------------------
 // Boot.dev replaced the community boss goal with individual and guild progress
 // on 2026-08-14. Both helpers below are PURE so scripts/check_boss_normalizer.mjs
-// can exercise them against the real captures in
-// reference_data/catalyst_versions/v0.14.0_boss_event_redesign/api/responses/.
+// can exercise them against real captured responses when those are available.
 
 // Your own chest progress, computed from XPUser against the UserXPThreshold
 // ladder — NOT from IsUnlocked/IsUnlockedByUser. Captures on 2026-08-16 show

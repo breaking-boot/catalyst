@@ -5,7 +5,7 @@
 // Loaded last by manifest.json; all feature handlers are already in scope.
 //
 // NOTE ON FIELD NAMES: response fields are mapped from captured api.boot.dev
-// JSON under the repo-level reference_data/http_responses_from_api_endpoints.
+// JSON, read in both casings — see API_FIELD_ALIASES in utils.js.
 
 const TAG = "BOOTDEV_ENHANCER";
 const API_REQUEST_TIMEOUT_MS = 10_000;

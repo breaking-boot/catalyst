@@ -26,9 +26,6 @@
 //
 // Cold loads (F5 / pasted URL) server-render the results with NO API call, so
 // a dl-armed load needs one self-triggered refresh before the filter shows.
-//
-// Evidence and design decisions: reference_data/catalyst_versions/
-// v0.13.0_challenge_level_filter/implementation_plan.md
 
 const CHALLENGE_FILTER_FEATURE = "challengeDifficulty";
 const CHALLENGE_LEVEL_URL_PARAM = "dl";
