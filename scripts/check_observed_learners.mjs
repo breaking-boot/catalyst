@@ -5,9 +5,10 @@
 //
 // Run from anywhere:  node scripts/check_observed_learners.mjs
 //
-// One format serves three jobs — the bundled seed, the options page's
-// export/import, and the opt-in fetch of the published list — and each is read
-// by a copy of Catalyst that did not write it. What must hold:
+// One format serves four jobs — the bundled seed, the options page's
+// export/import, the observedLearners section of a backup, and the opt-in fetch
+// of the published list — and each is read by a copy of Catalyst that did not
+// write it. What must hold:
 //
 //   1. A file that is not this format and version is refused whole; a bad row
 //      is skipped and the rest are kept.
@@ -16,6 +17,10 @@
 //   3. Folding a list in follows "newest reading wins", so an old list can never
 //      overwrite a fresher local reading.
 //   4. The bundled seed and data/observed-learners.json hold the same list.
+//   5. A backup carries the observed learners, so moving to another browser
+//      takes one export and one import. Importing one reaches open Boot.dev
+//      tabs, an older backup without the section leaves the roster alone, and
+//      a bad section never blocks the rest of the backup.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -24,6 +29,8 @@ import vm from "node:vm";
 const MODULE = new URL("../bootdev-extension/src/observed-learners.js", import.meta.url);
 const SEED_FILE = new URL("../bootdev-extension/src/alltime-seed.js", import.meta.url);
 const DATA_FILE = new URL("../data/observed-learners.json", import.meta.url);
+const BACKUP = new URL("../bootdev-extension/src/backup.js", import.meta.url);
+const SRC = new URL("../bootdev-extension/src/", import.meta.url);
 
 const hook = {};
 const sandbox = { window: { __BOOTDEV_ENHANCER_TEST__: hook }, console };
@@ -221,6 +228,223 @@ check("an empty list is accepted", !L.parseObservedLearners(list([]), NOW).error
     data.learners.every((l) => JSON.stringify(Object.keys(l)) === JSON.stringify(["handle", "xp", "at"])));
   eq("its header carries nothing but the format fields",
     Object.keys(data).sort(), ["format", "generatedAt", "learners", "version"]);
+}
+
+// --- 6. backups carry the observed learners ---------------------------------------------
+
+{
+  // backup.js and observed-learners.js as options.html loads them, against a
+  // stubbed chrome.storage.
+  const store = { sync: {}, local: {} };
+  const area = (name) => ({
+    get: (key, cb) => cb({ [key]: store[name][key] === undefined ? undefined : JSON.parse(JSON.stringify(store[name][key])) }),
+    set: (obj, cb) => { Object.assign(store[name], JSON.parse(JSON.stringify(obj))); cb && cb(); },
+  });
+  const pageSandbox = {
+    console,
+    chrome: { runtime: { lastError: undefined, getManifest: () => ({ version: "0.16.0" }) }, storage: { sync: area("sync"), local: area("local") } },
+  };
+  vm.createContext(pageSandbox);
+  for (const url of [MODULE, BACKUP]) {
+    vm.runInContext(readFileSync(url, "utf8"), pageSandbox, { filename: fileURLToPath(url) });
+  }
+  const run = (code) => vm.runInContext(code, pageSandbox);
+  const T = Date.now();
+
+  store.local.be_alltime_roster = {
+    version: 1, beWriter: "tab-1",
+    entries: {
+      kat: { Handle: "kat", XP: 2000000, profileAt: T - HOUR, FirstName: "Katharina", ProfileImageURL: "k.png" },
+      dan: { Handle: "dan", XP: 1200000, profileAt: T - 2 * HOUR },
+      unread: { Handle: "unread", XP: null, profileAt: T },
+    },
+  };
+  const exported = await run("collectBackupData()");
+  const section = exported.data.observedLearners;
+  eq("a backup carries the observed learners in the list format",
+    [section?.format, section?.version, section?.learners?.map((l) => l.handle)], [FORMAT, VERSION, ["kat", "dan"]]);
+  check("with handle, XP and read time only", section.learners.every((l) =>
+    JSON.stringify(Object.keys(l)) === JSON.stringify(["handle", "xp", "at"])));
+  check("and the summary names it", run(`summarizeBackup(${JSON.stringify(exported.data)})`)
+    .some((line) => line.startsWith("Top Observed Learners — 2 learners")));
+
+  // Restore on another browser that already knows a fresher kat and a stranger.
+  store.local = {
+    be_alltime_roster: {
+      version: 1, beWriter: "tab-2",
+      entries: { kat: { Handle: "kat", XP: 2100000, profileAt: T, FirstName: "K" }, low: { Handle: "low", XP: 5, profileAt: T } },
+    },
+  };
+  const results = await run(`applyBackup(${JSON.stringify(exported.data)})`);
+  const roster = store.local.be_alltime_roster;
+  check("the import reports the learners", results.includes("Top Observed Learners: 1 learner added, 0 updated."), results.join(" | "));
+  eq("the newer local reading is kept", [roster.entries.kat.XP, roster.entries.kat.FirstName], [2100000, "K"]);
+  eq("a learner only the backup knows is added", roster.entries.dan?.XP, 1200000);
+  check("the last tab's writer stamp is cleared, so open tabs adopt it", !("beWriter" in roster));
+  check("open tabs are told to reload", Number.isFinite(store.local.be_import_broadcast?.at));
+
+  // An older backup has no section; a damaged one is skipped on its own.
+  store.local = { be_alltime_roster: { version: 1, entries: { kat: { Handle: "kat", XP: 1, profileAt: T } } } };
+  const old = { settings: { allTimeLeaderboard: true } };
+  const oldResults = await run(`applyBackup(${JSON.stringify(old)})`);
+  check("a backup without the section leaves the roster alone",
+    store.local.be_alltime_roster?.entries?.kat?.XP === 1 && !oldResults.some((r) => r.includes("Observed")));
+
+  // A bad section, whatever its shape, is skipped and said so, and every other
+  // section of the same backup still applies.
+  const badSections = [
+    null, "garbage", 42, [],
+    { format: "nope", version: 1, learners: [] },
+    { format: FORMAT, version: VERSION + 1, learners: [] },
+    { format: FORMAT, version: VERSION, learners: "x" },
+  ];
+  for (const bad of badSections) {
+    const label = JSON.stringify(bad);
+    store.sync = { be_settings: { allTimeLeaderboard: true } };
+    store.local = { be_alltime_roster: { version: 1, entries: { kat: { Handle: "kat", XP: 1, profileAt: T } } } };
+    const damaged = {
+      settings: { allTimeLeaderboard: false },
+      personalLeaderboard: { handles: ["friend"], snapshots: {} },
+      bossState: { eventId: "event-1", eventHigh: 50, allTimeHigh: 80 },
+      observedLearners: bad,
+    };
+    let damagedResults = [];
+    try {
+      damagedResults = await run(`applyBackup(${JSON.stringify(damaged)})`);
+    } catch (err) {
+      check(`a bad section (${label}) does not stop the import`, false, String(err));
+    }
+    check(`a bad section (${label}) is skipped and said so`,
+      damagedResults.some((r) => r.startsWith("Top Observed Learners skipped:")), damagedResults.join(" | "));
+    eq(`and leaves the roster alone (${label})`, Object.keys(store.local.be_alltime_roster?.entries || {}), ["kat"]);
+    eq(`while settings, tracked learners and boss stats still apply (${label})`,
+      [store.sync.be_settings?.allTimeLeaderboard, store.local.be_personal_leaderboard_handles?.handles,
+        store.local.be_boss_state?.state?.allTimeHigh],
+      [false, ["friend"], 80]);
+  }
+
+  store.local = {};
+  eq("an empty roster adds no section", (await run("collectBackupData()")).data.observedLearners, undefined);
+}
+
+// --- 7. an imported backup reaches open Boot.dev tabs -----------------------------------
+
+{
+  // The options page and a Boot.dev tab share one storage, and like Chrome each
+  // set() fires one onChanged event with the keys it wrote. The tab runs the
+  // real roster code and the real storage-change handlers from content.js. Only
+  // those three handlers are taken from content.js, because loading the file
+  // starts the whole extension, which needs every feature file and a page.
+  const store = { sync: {}, local: {} };
+  const listeners = [];
+  const copy = (v) => (v === undefined ? undefined : JSON.parse(JSON.stringify(v)));
+  const area = (name) => ({
+    get: (key, cb) => cb({ [key]: copy(store[name][key]) }),
+    set: (obj, cb) => {
+      const changes = {};
+      for (const [key, value] of Object.entries(obj)) {
+        changes[key] = { oldValue: copy(store[name][key]), newValue: copy(value) };
+        store[name][key] = copy(value);
+      }
+      cb && cb();
+      for (const listener of listeners) listener(changes, name);
+    },
+  });
+  const chrome = {
+    runtime: { lastError: undefined, getManifest: () => ({ version: "0.16.0" }) },
+    storage: { sync: area("sync"), local: area("local") },
+  };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  let renders = 0;
+  const tab = {
+    window: {}, console, URL, chrome, setTimeout, clearTimeout, setInterval: () => 0, clearInterval() {},
+    document: { addEventListener() {}, removeEventListener() {}, getElementById: () => null },
+    location: { origin: "https://www.boot.dev", pathname: "/leaderboard" },
+    isFeatureEnabled: () => true, currentUserHandle: "", personalHandles: [], anyPersonalBoardEnabled: () => false,
+    renderAllTimeLeaderboard: () => { renders += 1; },
+    // What the handlers also reach, which this check is not about.
+    SETTINGS_KEY: "be_settings", BOSS_KEY: "be_boss_state", PERSONAL_CACHE_KEY: "be_personal_leaderboard_cache",
+    PERSONAL_HANDLES_KEY: "be_personal_leaderboard_handles", CURRENT_USER_KARMA_KEY: "be_current_user_karma",
+    adoptBossState: async () => {}, loadPersonalLeaderboard: async () => {}, loadCurrentUserHandle: async () => {},
+    loadBossState: async () => {}, restoreBossPanel: async () => {}, schedulePersonalLeaderboardRender() {},
+    isLeaderboardPage: () => true, personalDataMissing: () => false, requestPersonalLeaderboardData() {},
+    getSettings: () => ({}), applyStoredSettings() {}, applyFeatureSettings() {},
+    handleAsyncError: (err) => { failures += 1; console.error("FAIL: tab handler threw —", err); },
+  };
+  vm.createContext(tab);
+  for (const file of ["utils.js", "observed-learners.js", "alltime-seed.js", "allTimeRoster.js"]) {
+    const url = new URL(file, SRC);
+    vm.runInContext(readFileSync(url, "utf8"), tab, { filename: fileURLToPath(url) });
+  }
+  const contentSource = readFileSync(new URL("content.js", SRC), "utf8");
+  const handler = (head) => {
+    const start = contentSource.indexOf(head);
+    const end = contentSource.indexOf("\n}\n", start);
+    if (start < 0 || end < 0) throw new Error(`content.js no longer has ${head}; update this check`);
+    return contentSource.slice(start, end + 3);
+  };
+  vm.runInContext([
+    'const IMPORT_BROADCAST_KEY = "be_import_broadcast";',
+    handler("function handleSettingsChange("),
+    handler("async function adoptCrossTabWrites("),
+    handler("async function applyImportedData("),
+  ].join("\n"), tab);
+  listeners.push((changes, name) => vm.runInContext("handleSettingsChange", tab)(changes, name));
+  const inTab = (code) => vm.runInContext(code, tab);
+
+  const page = { console, chrome };
+  vm.createContext(page);
+  for (const url of [MODULE, BACKUP]) vm.runInContext(readFileSync(url, "utf8"), page, { filename: fileURLToPath(url) });
+  const onPage = (code) => vm.runInContext(code, page);
+
+  // The tab loads its roster and is the last to write it, so the stored copy
+  // carries the tab's own stamp — the case where a tab would skip the change.
+  await inTab("loadAllTimeRoster()");
+  inTab("saveAllTimeRoster()");
+  await settle();
+  eq("the stored roster carries the open tab's stamp",
+    store.local.be_alltime_roster?.beWriter, inTab("CATALYST_WRITER_ID"));
+
+  const T = Date.now();
+  const withLearners = {
+    observedLearners: {
+      format: FORMAT, version: VERSION, generatedAt: new Date(T).toISOString(),
+      learners: [{ handle: "brandnewtop", xp: 5_000_000, at: new Date(T).toISOString() }],
+    },
+  };
+  renders = 0;
+  await onPage(`applyBackup(${JSON.stringify(withLearners)})`);
+  await settle();
+  check("the open tab adopts an imported roster", inTab("Boolean(allTimeRoster.entries.brandnewtop)"));
+  check("and redraws its board", renders > 0);
+  check("and the imported learner survives the tab's own next write",
+    Boolean(store.local.be_alltime_roster?.entries?.brandnewtop));
+
+  const before = JSON.stringify(store.local.be_alltime_roster.entries);
+  await onPage(`applyBackup(${JSON.stringify({ settings: { bossTracker: true } })})`);
+  await settle();
+  check("a backup without the section leaves the stored roster as it was",
+    JSON.stringify(store.local.be_alltime_roster?.entries) === before);
+  check("and the open tab keeps its learners", inTab("Boolean(allTimeRoster.entries.brandnewtop)"));
+
+  // A backup reaches the tab two ways: the roster write itself, and the import
+  // signal written last. The Import learners button sends no signal, so it
+  // depends on the roster write alone — and that write is only adopted because
+  // the import clears the stamp the tab left on the stored copy.
+  inTab("saveAllTimeRoster()");
+  await settle();
+  eq("the tab has written the roster again, under its own stamp",
+    store.local.be_alltime_roster?.beWriter, inTab("CATALYST_WRITER_ID"));
+  const listed = [{ handle: "listedtop", xp: 4_000_000, at: T }];
+  await onPage(`(async () => {
+    const stored = await backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY);
+    const { roster } = importObservedLearnersIntoStoredRoster(stored, ${JSON.stringify(listed)});
+    await backupStorageSet("local", OBSERVED_ROSTER_STORAGE_KEY, roster);
+  })()`);
+  await settle();
+  check("a learner-list import reaches the open tab with no import signal",
+    inTab("Boolean(allTimeRoster.entries.listedtop)"));
 }
 
 if (failures) {

@@ -46,6 +46,8 @@
           in it only if your XP places you among its 100 learners. Importing a
           list <strong>merges</strong> it with yours and keeps the 100 highest-XP
           learners from both; a newer XP reading always wins over an older one.
+          Backups below include these learners too, so these buttons are only
+          needed to share a list on its own.
         </p>
         <div id="be-observed-share"></div>
       </section>
@@ -53,10 +55,12 @@
       <section class="be-settings-group be-comparison-section" aria-label="Backup and restore">
         <h2 class="be-settings-group-title">Backup &amp; restore</h2>
         <p class="be-settings-note">
-          Export your Catalyst data — settings, tracked learners, XP/karma
-          snapshot history, and boss stats — to a file, or import a backup.
-          Importing <strong>merges</strong> data with what's on this device
-          and <strong>replaces</strong> settings; nothing is deleted.
+          Export your Catalyst data — settings, your Personal Leaderboards
+          learners and their XP/karma snapshot history, your Top Observed
+          Learners, and boss stats — to a file, or import a backup. Importing
+          <strong>merges</strong> data with what's on this device and
+          <strong>replaces</strong> settings. Nothing is deleted, except that
+          Top Observed Learners keeps its usual 100 highest-XP learners.
         </p>
         <div id="be-backup"></div>
       </section>
@@ -75,8 +79,8 @@
       </footer>
     </main>
     <script src="src/settings-schema.js"></script>
-    <script src="src/backup.js"></script>
     <script src="src/observed-learners.js"></script>
+    <script src="src/backup.js"></script>
     <script src="popup.js"></script>
   </body>
 </html>

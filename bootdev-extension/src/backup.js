@@ -2,14 +2,16 @@
 // Backup & restore core for the extension pages: owns the backup file format
 // (BACKUP_FORMAT_VERSION), builds an export from storage, validates/upgrades an
 // uploaded file, and merges it back into storage. Merge semantics: data accretes
-// (handle list unions, snapshot series merge, boss highs take the max), settings
-// are replaced wholesale — restoring a backup should land the toggles exactly as
-// they were.
+// (handle list unions, snapshot series merge, boss highs take the max, observed
+// learners keep the newer reading), settings are replaced wholesale — restoring
+// a backup should land the toggles exactly as they were.
 //
-// Dependency-free like settings-schema.js: loaded by options.html via a
-// <script> tag before popup.js, and NOT a content script (utils.js is coupled
-// to the content-script lifecycle via enhancerStopped/stopEnhancer, so the few
-// helpers needed here are mirrored instead — each marked "keep in sync").
+// Depends only on observed-learners.js, which owns the observed-learner list
+// format the `observedLearners` section uses; both are loaded by options.html
+// via <script> tags before popup.js, and neither is a content script here
+// (utils.js is coupled to the content-script lifecycle via
+// enhancerStopped/stopEnhancer, so the few helpers needed here are mirrored
+// instead — each marked "keep in sync").
 // Open Boot.dev tabs learn about an import through the BACKUP_BROADCAST_KEY
 // write at the end of applyBackup; see the storage.onChanged listener in
 // content.js.
@@ -202,7 +204,7 @@ function sanitizeBackupSettings(raw) {
 // snapshot series are exported — profile/stats/heatmap are refetched
 // automatically and would only ship stale data.
 async function collectBackupData() {
-  const [settings, handlesStored, cacheStored, userHandleStored, userKarmaStored, bossStored] =
+  const [settings, handlesStored, cacheStored, userHandleStored, userKarmaStored, bossStored, rosterStored] =
     await Promise.all([
       backupStorageGet("sync", BACKUP_SETTINGS_KEY),
       backupStorageGet("local", BACKUP_HANDLES_KEY),
@@ -210,6 +212,7 @@ async function collectBackupData() {
       backupStorageGet("local", BACKUP_USER_HANDLE_KEY),
       backupStorageGet("local", BACKUP_USER_KARMA_KEY),
       backupStorageGet("local", BACKUP_BOSS_KEY),
+      backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY),
     ]);
 
   const now = Date.now();
@@ -241,6 +244,12 @@ async function collectBackupData() {
         : [];
     data.currentUser = { handle: userHandle, karmaSnapshots: series };
   }
+
+  // The Top Observed Learners roster, in the same list format as a shared list:
+  // handles, XP and read times. Names and avatars are refetched by the board,
+  // so moving to another browser takes one backup, not a backup plus a list.
+  const learners = buildObservedLearners(rosterToObservedLearners(rosterStored), now);
+  if (learners.learners.length) data.observedLearners = learners;
 
   const boss = backupIsPlainObject(bossStored?.state) ? bossStored.state : null;
   if (boss) {
@@ -346,6 +355,14 @@ function summarizeBackup(data) {
     }
   }
 
+  if (data.observedLearners !== undefined) {
+    const parsed = parseObservedLearners(data.observedLearners);
+    lines.push(parsed.error
+      ? `Top Observed Learners — unreadable (${parsed.error}), will be skipped`
+      : `Top Observed Learners — ${parsed.learners.length} learner${parsed.learners.length === 1 ? "" : "s"} ` +
+          "(merges; the newer XP reading wins and the 100 highest-XP learners are kept)");
+  }
+
   if (backupIsPlainObject(data.bossState)) {
     const ath = Math.round(Math.max(0, backupNum(data.bossState.allTimeHigh) ?? 0));
     const aura = sanitizeBackupAura(data.bossState.aura);
@@ -448,6 +465,23 @@ async function applyBackup(data) {
         applied = applied || ok;
         results.push(ok ? "Your karma history merged." : "Your karma history could not be written.");
       }
+    }
+  }
+
+  // Same merge as the Import learners button. A bad section is skipped alone;
+  // the rest of the backup still applies.
+  if (data.observedLearners !== undefined) {
+    const parsed = parseObservedLearners(data.observedLearners, now);
+    if (parsed.error) {
+      results.push(`Top Observed Learners skipped: ${parsed.error}`);
+    } else {
+      const stored = await backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY);
+      const { roster, kept, updated } = importObservedLearnersIntoStoredRoster(stored, parsed.learners, now);
+      const ok = await backupStorageSet("local", OBSERVED_ROSTER_STORAGE_KEY, roster);
+      applied = applied || ok;
+      results.push(ok
+        ? `Top Observed Learners: ${kept} learner${kept === 1 ? "" : "s"} added, ${updated} updated.`
+        : "Top Observed Learners could not be written.");
     }
   }
 
