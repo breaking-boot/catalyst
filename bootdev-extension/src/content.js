@@ -141,6 +141,9 @@ async function initEnhancer() {
   await loadFrameDebugFlag();
   if (enhancerStopped) return;
   chrome.storage.onChanged.addListener(handleSettingsChange);
+  // A handle stored from an earlier visit is known now; a new install learns
+  // it later, and rememberCurrentUserHandle runs the same check then.
+  void maybeAutoAddCurrentUser();
   document.addEventListener("visibilitychange", handleVisibilityChange);
   restoreBossPanel();
   syncRouteScopedUi();
@@ -338,6 +341,9 @@ function applyFeatureSettings(before, after) {
     if (isFeatureEnabled("comparisons")) augmentNativeLeaderboards();
     else removeNativeComparisons();
   }
+
+  // Personal Leaderboards switched on: the viewer belongs on it.
+  void maybeAutoAddCurrentUser();
 
   // Run a release check right away when the opt-in is switched on (page-independent).
   if (before && after && before.versionCheck === false && after.versionCheck !== false) {

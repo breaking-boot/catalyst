@@ -177,7 +177,11 @@ function handleProfileStats(json) {
   if (!handle || handle !== currentProfileHandle()) return;
 
   const wantBadge = isFeatureEnabled("profileXp");
-  const wantAddButton = isFeatureEnabled("personalLeaderboards");
+  // Not on your own profile: you are added to Personal Leaderboards
+  // automatically, and if you removed yourself the panel's own input is the
+  // way back.
+  const wantAddButton = isFeatureEnabled("personalLeaderboards") &&
+    handle !== normalizeHandle(currentUserHandle);
   if (!wantBadge && !wantAddButton) {
     removeProfileXpBadge();
     return;

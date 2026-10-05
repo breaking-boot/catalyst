@@ -19,6 +19,9 @@ const LEAGUE_DAILY_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard
 const LEAGUE_LEADERBOARD_URL = "https://api.boot.dev/v1/league_leaderboard_xp/alltime?limit=25";
 const PERSONAL_HANDLES_KEY = "be_personal_leaderboard_handles";
 const PERSONAL_CACHE_KEY = "be_personal_leaderboard_cache";
+// The signed-in handles the user has removed from their own Personal
+// Leaderboards. Auto-add skips them; adding one back by hand clears it.
+const PERSONAL_SELF_OPT_OUT_KEY = "be_personal_self_opt_out";
 const CURRENT_USER_HANDLE_KEY = "be_current_user_handle";
 const CURRENT_USER_KARMA_KEY = "be_current_user_karma";
 
@@ -144,6 +147,8 @@ function boardFresh(key) {
   return Date.now() - (boardSeenAt[key] || 0) < BOARD_FETCH_FRESH_MS;
 }
 let personalHandles = [];
+let personalSelfOptOut = [];
+let personalAutoAddAttempted = "";
 let personalRecords = {};
 let personalFeedback = null;
 let personalPendingHandle = null;
@@ -482,6 +487,7 @@ async function rememberCurrentUserHandle(handle) {
   }
   currentUserHandle = normalized;
   await chromeSet(CURRENT_USER_HANDLE_KEY, { handle: normalized, updatedAt: Date.now() });
+  void maybeAutoAddCurrentUser();
   if (!isLeaderboardPage()) return;
 
   renderAllTimeLeaderboard();
@@ -622,6 +628,11 @@ function getMyValue(kind) {
     value = measured ? measured.delta : null;
   }
   if (value != null) return value;
+  // Lifetime XP must be a value observed this session (see above), and the
+  // viewer's personal record is a stored copy that can be days old. Now that
+  // the viewer is on their own boards by default, that record would almost
+  // always exist and answer here with a stale "me".
+  if (kind === "xp") return null;
 
   const record = personalRecords[normalizeHandle(identity.handle)];
   return record ? getPersonalValue(record, kind) : null;
@@ -1540,6 +1551,7 @@ function updatePersonalUserData(username, isStats, json) {
 
 async function loadPersonalLeaderboard() {
   const storedHandles = (await chromeGet(PERSONAL_HANDLES_KEY)) || {};
+  const storedOptOut = await chromeGet(PERSONAL_SELF_OPT_OUT_KEY);
   const storedCache = (await chromeGet(PERSONAL_CACHE_KEY)) || {};
   const storedBoards = await chromeGet(DAILY_BOARD_CACHE_KEY);
   if (enhancerStopped) return;
@@ -1551,6 +1563,8 @@ async function loadPersonalLeaderboard() {
       : [];
 
   personalHandles = uniqueHandles(rawHandles).filter(isValidHandle);
+  personalSelfOptOut = uniqueHandles(Array.isArray(storedOptOut?.handles) ? storedOptOut.handles : [])
+    .filter(isValidHandle);
   personalRecords = isPlainObject(storedCache.records) ? storedCache.records : {};
   for (const handle of personalHandles) ensurePersonalRecord(handle);
 
@@ -1837,7 +1851,7 @@ function bindPersonalLeaderboardControls(panel) {
   if (chips) {
     chips.onclick = (event) => {
       const button = event.target.closest("[data-be-remove-handle]");
-      if (button) removePersonalHandle(button.getAttribute("data-be-remove-handle"));
+      if (button) removePersonalHandle(button.getAttribute("data-be-remove-handle"), { byUser: true });
     };
   }
 }
@@ -1877,6 +1891,10 @@ async function addPersonalHandle(handle) {
   }
 
   personalHandles = uniqueHandles([...personalHandles, canonical]);
+  if (personalSelfOptOut.includes(canonical)) {
+    personalSelfOptOut = personalSelfOptOut.filter((h) => h !== canonical);
+    await chromeSet(PERSONAL_SELF_OPT_OUT_KEY, { handles: personalSelfOptOut });
+  }
   const record = ensurePersonalRecord(canonical);
   record.handle = readField(profile, "Handle") || canonical;
   record.profile = profile;
@@ -1902,10 +1920,19 @@ async function addPersonalHandle(handle) {
   void refreshPersonalHeatmap(canonical);
 }
 
-async function removePersonalHandle(handle) {
+// `byUser` marks a removal the user asked for. Removing yourself that way is
+// remembered, so auto-add does not put you straight back; a handle dropped
+// because its profile no longer exists is not a choice and is not remembered.
+async function removePersonalHandle(handle, { byUser = false } = {}) {
   const normalized = normalizeHandle(handle);
   if (!normalized) return;
 
+  if (byUser && normalized === normalizeHandle(currentUserHandle) && !personalSelfOptOut.includes(normalized)) {
+    personalSelfOptOut = [...personalSelfOptOut, normalized];
+    // Written before the handle list: another tab reloads both when the list
+    // changes, and must already see the opt-out or it would add you back.
+    await chromeSet(PERSONAL_SELF_OPT_OUT_KEY, { handles: personalSelfOptOut });
+  }
   personalHandles = personalHandles.filter((h) => h !== normalized);
   delete personalRecords[normalized];
   await savePersonalHandles();
@@ -2437,6 +2464,38 @@ function clearPersonalFeedback() {
   personalFeedback = null;
 }
 
+// The viewer belongs on their own Personal Leaderboards: every row is drawn as
+// a comparison against them, and their row already carries the highlight. So
+// once the signed-in handle is known it is added automatically — unless the
+// user removed it, which is remembered per handle, because a watch-list of
+// other people is a legitimate way to use the boards. Runs whenever the handle
+// first becomes known or the feature is switched on, not once at startup: a
+// fresh install may not know the handle until a page reveals it.
+function shouldAutoAddSelf({ enabled, handle, handles, optOut }) {
+  return Boolean(enabled) && isValidHandle(handle) && !handles.includes(handle) && !optOut.includes(handle);
+}
+
+async function maybeAutoAddCurrentUser() {
+  const handle = normalizeHandle(currentUserHandle);
+  if (!shouldAutoAddSelf({
+    enabled: isFeatureEnabled("personalLeaderboards"),
+    handle,
+    handles: personalHandles,
+    optOut: personalSelfOptOut,
+  })) return;
+  // Once per handle per page: a failed save must not turn into a retry loop
+  // on every scan.
+  if (personalAutoAddAttempted === handle) return;
+  personalAutoAddAttempted = handle;
+
+  personalHandles = uniqueHandles([handle, ...personalHandles]);
+  ensurePersonalRecord(handle);
+  if (!(await savePersonalHandles())) return;
+  schedulePersonalLeaderboardRender();
+  // Off the leaderboard, the next visit's personal pass fetches the row.
+  if (isLeaderboardPage() && anyPersonalBoardEnabled()) void refreshPersonalHandle(handle);
+}
+
 async function savePersonalHandles() {
   const validHandles = uniqueHandles(personalHandles).filter(isValidHandle);
   if (validHandles.length !== personalHandles.length) {
@@ -2544,5 +2603,6 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     mapByHandle,
     leagueMyValueOrZero,
     distillHeatmap,
+    shouldAutoAddSelf,
   };
 }
