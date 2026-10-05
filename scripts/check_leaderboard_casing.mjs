@@ -357,20 +357,29 @@ if (existsSync(PASCAL_CAPTURE)) {
 }
 
 {
-  // Discovery off a live board: a camelCase entry above the admission floor
-  // must be admitted just as a PascalCase one is.
-  const admit = (entry) => {
-    runInSandbox("allTimeRoster = emptyRoster(); applySeedToRoster(allTimeRoster);");
+  // Discovery off a live board: a camelCase entry must be admitted just as a
+  // PascalCase one is. The roster is built by hand rather than from the
+  // bundled seed, so the cases do not depend on how many learners the seed
+  // holds: `full` fills it to capacity, so the admission bar applies;
+  // otherwise it holds a few learners and has room.
+  const admit = (entry, { full = false } = {}) => {
+    runInSandbox(`allTimeRoster = emptyRoster();
+      for (let i = 0; i < ${full ? "ROSTER_MAX_ENTRIES" : "10"}; i++) {
+        allTimeRoster.entries["filler" + i] = { ...blankEntry("filler" + i), XP: 3000000 + i, profileAt: 1 };
+      }`);
     sandbox.__probeEntry = entry;
     runInSandbox("noteAllTimeBoardEntries([__probeEntry]);");
-    return runInSandbox('Boolean(allTimeRoster.entries.climber)');
+    return runInSandbox(`Boolean(allTimeRoster.entries[${JSON.stringify(normalizeHandle(getHandle(entry)))}])`);
   };
+  const { normalizeHandle } = sandbox;
   check("roster: discovery admits a PascalCase board entry",
-    admit({ Handle: "climber", XP: 5000000, FirstName: "C", Role: "Archmage", Level: 200 }), true);
+    admit({ Handle: "climber", XP: 5000000, FirstName: "C", Role: "Archmage", Level: 200 }, { full: true }), true);
   check("roster: discovery admits a camelCase board entry",
-    admit({ handle: "climber", xp: 5000000, firstName: "C", role: "Archmage", level: 200 }), true);
-  check("roster: discovery still refuses someone below the floor",
-    admit({ handle: "nobody", xp: 10, firstName: "N", role: "Sage", level: 60 }), false);
+    admit({ handle: "climber", xp: 5000000, firstName: "C", role: "Archmage", level: 200 }, { full: true }), true);
+  check("roster: below capacity a low learner is admitted too",
+    admit({ handle: "nobody", xp: 10, firstName: "N", role: "Sage", level: 60 }), true);
+  check("roster: at capacity someone below the bar is refused",
+    admit({ handle: "nobody", xp: 10, firstName: "N", role: "Sage", level: 60 }, { full: true }), false);
 }
 
 // --- values Catalyst must never fabricate ------------------------------------

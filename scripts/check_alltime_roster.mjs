@@ -232,29 +232,51 @@ check("seed rows are written highest XP first",
 // --- 5. admission, eviction and caps ------------------------------------------
 
 {
-  const roster = fullRoster();
-  eq("the admission floor is the lowest retained XP",
-    R.admissionThresholdXp(roster), roster.entries.user30.XP);
-  check("a handle above the floor is admitted", R.applyRosterObservation(roster,
-    { handle: "climber", XP: roster.entries.user30.XP + 1, profileAt: NOW, candidate: true }));
+  const MAX = R.constants.ROSTER_MAX_ENTRIES;
+  eq("an empty roster admits anyone", R.admissionThresholdXp(R.emptyRoster()), null);
+  eq("below capacity anyone is admitted, however low", R.admissionThresholdXp(fullRoster()), null);
+
+  const full = fullRoster({ through: MAX });
+  const bar = full.entries[`user${MAX}`].XP;
+  eq("at capacity a newcomer must beat the last retained place", R.admissionThresholdXp(full), bar);
+  eq("past capacity the bar is still the last retained place",
+    R.admissionThresholdXp(fullRoster({ through: MAX + 5 })), bar);
+  check("a handle above the bar is admitted", R.applyRosterObservation(full,
+    { handle: "climber", XP: bar + 1, profileAt: NOW, candidate: true }));
 
   const roster2 = fullRoster();
   check("an unknown handle with no admission decision is refused",
     !R.applyRosterObservation(roster2, { handle: "nobody", XP: 10, profileAt: NOW }));
   check("and is not stored", !roster2.entries.nobody);
-  eq("an empty roster has no floor", R.admissionThresholdXp(R.emptyRoster()), null);
 }
 
 {
-  // Pruning keeps the highest XP now that rank cannot order the store.
-  const roster = fullRoster();
-  for (let i = 0; i < 60; i++) {
-    R.applyRosterObservation(roster, { handle: "cand" + i, XP: 1 + i, profileAt: NOW, candidate: true });
+  // Hysteresis: the roster runs past capacity to the prune point, then is cut
+  // back to capacity by XP, so someone at the boundary is not dropped and
+  // re-admitted on alternate sightings.
+  const { ROSTER_MAX_ENTRIES: MAX, ROSTER_PRUNE_AT: PRUNE_AT } = R.constants;
+  const roster = fullRoster({ through: MAX });
+  for (let i = 0; i < PRUNE_AT - MAX; i++) {
+    R.applyRosterObservation(roster, { handle: "low" + i, XP: 1 + i, profileAt: NOW, candidate: true });
   }
-  check("total entries are capped",
-    Object.keys(roster.entries).length <= R.constants.ROSTER_MAX_ENTRIES,
-    "got " + Object.keys(roster.entries).length);
-  check("the seeded top survives a flood of low-XP candidates", Boolean(roster.entries.user1));
+  eq("the roster may run past capacity up to the prune point", Object.keys(roster.entries).length, PRUNE_AT);
+  R.applyRosterObservation(roster, { handle: "one-more", XP: 5_000_000, profileAt: NOW, candidate: true });
+  eq("passing the prune point cuts back to capacity", Object.keys(roster.entries).length, MAX);
+  check("the lowest XP is what goes", !roster.entries.low0 && !roster.entries.low9);
+  check("a newcomer above everyone stays", Boolean(roster.entries["one-more"]));
+  check("the top survives a flood of low-XP candidates", Boolean(roster.entries.user1));
+}
+
+{
+  // Two tabs each holding a full roster union past capacity; the merge prunes.
+  const { ROSTER_MAX_ENTRIES: MAX, ROSTER_PRUNE_AT: PRUNE_AT } = R.constants;
+  const mine = fullRoster({ through: MAX });
+  const theirs = R.emptyRoster();
+  for (let i = 0; i < MAX; i++) theirs.entries["other" + i] = { ...R.blankEntry("other" + i), XP: 10 + i, profileAt: NOW };
+  const merged = R.mergeRosters(mine, theirs);
+  check("a cross-tab union is pruned", Object.keys(merged.entries).length <= PRUNE_AT,
+    "got " + Object.keys(merged.entries).length);
+  check("keeping the highest XP", Boolean(merged.entries.user1) && !merged.entries.other0);
 }
 
 // --- 6. a falling XP is stored, never clamped ---------------------------------
@@ -300,6 +322,31 @@ check("seed rows are written highest XP first",
     cursor = result.cursor;
   }
   eq("the whole roster is covered within a handful of loads", seen.size, 30);
+}
+
+{
+  // The cold ring: everyone below the hot ring, a couple per pass, and only
+  // learners not read for a while.
+  const { ROSTER_HOT_SIZE: HOT, ROSTER_COLD_SLICE: COLD, ROSTER_XP_SLICE: SLICE } = R.constants;
+  const tail = 30;
+  eq("a recently read tail costs nothing",
+    R.pickXpRefreshTargets(fullRoster({ through: HOT + tail }), { now: NOW }).targets.length, SLICE);
+
+  const stale = fullRoster({ through: HOT + tail, profileAt: NOW - 2 * DAY });
+  const first = R.pickXpRefreshTargets(stale, { now: NOW });
+  eq("a stale tail gets its cold slice", first.targets.length, SLICE + COLD);
+  check("cold picks come from below the hot ring",
+    first.targets.slice(SLICE).every((h) => Number(h.slice(4)) > HOT), first.targets.join(","));
+
+  const seen = new Set();
+  let coldCursor = 0;
+  for (let pass = 0; pass < Math.ceil(tail / COLD); pass++) {
+    stale.coldCursor = coldCursor;
+    const result = R.pickXpRefreshTargets(stale, { now: NOW });
+    for (const handle of result.targets.slice(SLICE)) seen.add(handle);
+    coldCursor = result.coldCursor;
+  }
+  eq("the cold cursor walks the whole tail", seen.size, tail);
 }
 
 {
