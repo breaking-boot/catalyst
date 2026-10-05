@@ -317,8 +317,9 @@ if (existsSync(PASCAL_CAPTURE)) {
   // observation is newer than the seed — otherwise "newest observation wins"
   // correctly keeps the seed and the test would pass on seed data instead of on
   // the read under test. That is exactly how the first draft of this check
-  // fooled itself.
-  const AFTER_SEED = Date.parse("2026-09-01T12:00:00Z");
+  // fooled itself. Derived from the seed rather than written as a date, so
+  // re-exporting the seed cannot make the observation older than it.
+  const AFTER_SEED = Date.parse(runInSandbox("ALLTIME_SEED.generatedAt")) + 24 * 60 * 60 * 1000;
   const profilePascal = {
     Handle: "katcodes", XP: 1999999, FirstName: "Kat", LastName: "C",
     Role: "Archmage", Level: 205, ProfileImageURL: "https://example.test/a.png",
