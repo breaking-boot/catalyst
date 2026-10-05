@@ -18,11 +18,13 @@
 // one, and the board is named accordingly — a position here means "Nth highest
 // XP among those Catalyst knows of", never "Nth on Boot.dev".
 //
-// The 2026-08-20 ranks are kept as provenance on seeded entries (`rank`,
-// `rankAt`). They are not reproducible and are never displayed as current.
-// Carry them forward through the roster export; do not try to re-measure them.
+// Entries carry no rank. The seed used to carry the last ranks measured before
+// the field was withdrawn, and gating the seed on them kept out every learner
+// discovered afterwards — including ones who had since climbed into the top 10
+// by XP. A position is derived from XP on every render; roster.self keeps a
+// slot for the viewer's own rank in case Boot.dev ever serves one again.
 
-const ALLTIME_ROSTER_KEY = "be_alltime_roster";
+const ALLTIME_ROSTER_KEY = OBSERVED_ROSTER_STORAGE_KEY;
 const ALLTIME_ROSTER_VERSION = 1;
 const ALLTIME_BOARD_SIZE = 25;
 
@@ -92,8 +94,6 @@ function blankEntry(handle) {
     Level: null,
     XP: null,
     ProfileImageURL: "",
-    rank: null,
-    rankAt: 0,
     profileAt: 0,
     source: "observed",
   };
@@ -116,13 +116,6 @@ function mergeRosterObservation(existing, observation) {
 
   const entry = isPlainObject(existing) ? { ...existing } : blankEntry(handle);
   entry.Handle = observation?.Handle || entry.Handle || handle;
-
-  const rankAt = observedNum(observation?.rankAt) || 0;
-  const rank = observedNum(observation?.rank);
-  if (rank != null && rankAt >= (observedNum(entry.rankAt) || 0)) {
-    entry.rank = rank;
-    entry.rankAt = rankAt;
-  }
 
   const profileAt = observedNum(observation?.profileAt) || 0;
   if (profileAt >= (observedNum(entry.profileAt) || 0)) {
@@ -186,39 +179,26 @@ function pruneRoster(roster) {
 // ---------------------------------------------------------------------------
 // Applied on EVERY load, not just the first: shipping a fresher seed in a later
 // release then upgrades stale rows for free, while a user whose own data is
-// newer keeps it (merge rule above).
+// newer keeps it (merge rule above, applied per learner by the shared list
+// code). The seed is an observed-learner list like any other, so it is read by
+// the same parser as an imported or fetched one.
 function applySeedToRoster(roster, seed = typeof ALLTIME_SEED === "undefined" ? null : ALLTIME_SEED) {
-  if (!isPlainObject(roster) || !isPlainObject(seed) || !Array.isArray(seed.entries)) return false;
-  const observedAt = Date.parse(seed.generatedAt);
-  if (!Number.isFinite(observedAt)) return false;
+  if (!isPlainObject(roster) || !isPlainObject(seed)) return false;
+  return applyObservedLearners(roster, seed, "seed").changed;
+}
 
-  let changed = false;
-  for (const raw of seed.entries) {
-    const handle = normalizeHandle(raw?.handle);
-    if (!isValidHandle(handle) || observedNum(raw?.rank) == null) continue;
-    // A seed exported from a live roster carries the date each rank was
-    // actually confirmed, which is older than the
-    // export. Honour it — claiming the export date would silently make a
-    // months-old position look freshly verified, and ranks can no longer be
-    // re-checked to correct that.
-    const rankAt = Date.parse(raw.rankAt);
-    changed = applyRosterObservation(roster, {
-      handle,
-      Handle: raw.handle,
-      rank: observedNum(raw.rank),
-      rankAt: Number.isFinite(rankAt) ? rankAt : observedAt,
-      XP: observedNum(raw.xp),
-      FirstName: raw.firstName,
-      LastName: raw.lastName,
-      Role: raw.role,
-      Level: observedNum(raw.level),
-      ProfileImageURL: raw.profileImageURL,
-      profileAt: observedAt,
-      source: "seed",
-      candidate: true,
-    }) || changed;
+// Fold an observed-learner list (bundled seed, imported file or fetched copy)
+// into the roster. A list can carry far more learners than a sighting does, so
+// the roster is pruned afterwards like after any other admission.
+function applyObservedLearners(roster, list, source) {
+  const parsed = parseObservedLearners(list);
+  if (parsed.error) {
+    warnOnce(`alltime:list-${source}`, `Observed-learner list (${source}) was not applied: ${parsed.error}`);
+    return { changed: false, added: [], updated: [] };
   }
-  return changed;
+  const { added, updated } = mergeObservedLearnersIntoRoster(roster, parsed.learners, { source, blank: blankEntry });
+  pruneRoster(roster);
+  return { changed: added.length > 0 || updated.length > 0, added, updated };
 }
 
 // bootstrapRosterFromPersonalRecords was removed with the pivot. It seeded the
@@ -299,8 +279,6 @@ function admissionThresholdXp(roster) {
   return floor;
 }
 
-// True while some position in 1..25 has no known occupant. Drives both the gap
-// rows and the week/month escalation.
 // How many learners the board can actually draw. There is no notion of a
 // "known position" any more — an unknown occupant of slot 17 is not something
 // Catalyst can detect, because nothing reports positions. What it can state
@@ -316,17 +294,9 @@ function rosterCoverage(roster) {
 // ---------------------------------------------------------------------------
 // Position derivation
 // ---------------------------------------------------------------------------
-// XP is refreshed far more often than rank, and rank order tracks XP order (0
-// inversions across 45 handles), so the fresher field can carry the ordering
-// and the rank lookup becomes verification plus an absolute anchor.
-//
-// It is only sound if no UNKNOWN person sits inside the window, and that is
-// checkable rather than assumable: exactly rank-1 people are above a verified
-// anchor, so if the count of known entries with more XP equals rank-1, every
-// position above it is accounted for. An unknown at, say, 20 would occupy one
-// of the 24 places above a verified #25, leaving at most 23 of ours — which the
-// count catches. Short by n means exactly n unknowns, and the board falls back
-// to per-entry stored ranks with gaps.
+// Positions are the XP order of the learners held, nothing more: with no rank
+// to anchor against, an unknown learner between two known ones cannot be
+// detected, which is why the board says "observed".
 function deriveBoardPositions(roster) {
   const entries = Object.values(roster?.entries || {}).filter((e) => observedNum(e.XP) != null);
   return {
@@ -379,7 +349,6 @@ function rosterRow(entry, position, selfHandle) {
     entry,
     handle,
     xp: observedNum(entry.XP),
-    rankAt: observedNum(entry.rankAt) || 0,
     profileAt: observedNum(entry.profileAt) || 0,
     isCurrentUser: Boolean(handle) && handle === normalizeHandle(selfHandle),
     href: handle ? `/u/${encodeURIComponent(handle)}` : "",
@@ -462,7 +431,10 @@ function normalizeStoredRoster(stored) {
   for (const [handle, entry] of Object.entries(stored.entries)) {
     const normalized = normalizeHandle(handle);
     if (!isValidHandle(normalized) || !isPlainObject(entry)) continue;
-    roster.entries[normalized] = { ...blankEntry(normalized), ...entry };
+    // Rosters written before v0.16.0 carry a per-entry rank and its date. They
+    // are dropped here so nothing can read them by accident.
+    const { rank, rankAt, ...kept } = entry;
+    roster.entries[normalized] = { ...blankEntry(normalized), ...kept };
   }
   return roster;
 }
@@ -532,14 +504,12 @@ function noteAllTimeObservation(username, isStats, json) {
       allTimeRoster.self = { ...allTimeRoster.self, handle, percentile, percentileAt: now };
       changed = true;
     }
-    // A rank only arrives if Boot.dev restores the field. Stored as provenance
-    // if it does; nothing depends on it.
-    if (rank != null) {
-      if (handle === normalizeHandle(currentUserHandle)) {
-        allTimeRoster.self = { ...allTimeRoster.self, handle, rank, rankAt: now };
-        changed = true;
-      }
-      changed = applyRosterObservation(allTimeRoster, { handle, Handle: readField(data, "Handle"), rank, rankAt: now }) || changed;
+    // A rank only arrives if Boot.dev restores the field. The viewer's own is
+    // kept, because a privately visible own-rank would be the one exact
+    // position Catalyst could show; nothing reads it yet.
+    if (rank != null && handle === normalizeHandle(currentUserHandle)) {
+      allTimeRoster.self = { ...allTimeRoster.self, handle, rank, rankAt: now };
+      changed = true;
     }
   } else {
     changed = noteAllTimeProfile(handle, data, now) || changed;
@@ -766,7 +736,9 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     mergeRosterObservation,
     applyRosterObservation,
     applySeedToRoster,
+    applyObservedLearners,
     mergeRosters,
+    normalizeStoredRoster,
     readAlltimeRank,
     readAlltimePercentile,
     readRegisteredUsers,

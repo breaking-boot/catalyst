@@ -45,7 +45,7 @@ const sandbox = {
 vm.createContext(sandbox);
 for (const file of [
   "utils.js", "settings-schema.js", "settings.js",
-  "alltime-seed.js", "allTimeRoster.js", "leaderboard.js", "boss.js",
+  "observed-learners.js", "alltime-seed.js", "allTimeRoster.js", "leaderboard.js", "boss.js",
 ]) {
   vm.runInContext(readFileSync(new URL(file, SRC), "utf8"), sandbox, { filename: file });
 }

@@ -8,14 +8,14 @@
 // Exits non-zero on any failure (same spirit as the node --check gate).
 //
 // Why this exists: /v1/leaderboard_xp/alltime was removed on 2026-08-14, so the
-// board is now assembled from per-user rank observations plus a bundled seed.
-// Four of its rules are the kind that fail silently and look healthy:
+// board is assembled from XP sightings plus a bundled seed. Four of its rules
+// are the kind that fail silently and look healthy:
 //
 //   1. Entries NEVER expire. A TTL schedules a refresh; it must never turn a
 //      known learner into an unknown, or a board left alone for a month decays
 //      into a page of gaps.
 //   2. Ordering comes from lifetime XP ALONE. Boot.dev removed the per-user
-//      rank on 2026-08-20, so a stored rank is provenance and must never
+//      rank on 2026-08-20; a rank left in an older stored roster must never
 //      influence the displayed order.
 //   3. Equal XP orders deterministically, or rows swap between renders.
 //   4. A falling XP is stored, not clamped. Staff can reduce XP for cheating;
@@ -41,7 +41,7 @@ const sandbox = {
   clearInterval() {},
 };
 vm.createContext(sandbox);
-for (const file of ["utils.js", "alltime-seed.js", "allTimeRoster.js"]) {
+for (const file of ["utils.js", "observed-learners.js", "alltime-seed.js", "allTimeRoster.js"]) {
   const url = new URL(file, SRC);
   vm.runInContext(readFileSync(url, "utf8"), sandbox, { filename: fileURLToPath(url) });
 }
@@ -55,6 +55,7 @@ if (!R) {
 // lexical scope rather than on the sandbox object — read it by evaluating its
 // name in the same context.
 const SEED = vm.runInContext("ALLTIME_SEED", sandbox);
+const L = testHook.observedLearners;
 
 // --- tiny assert -------------------------------------------------------------
 
@@ -72,20 +73,18 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const NOW = Date.parse("2026-09-01T12:00:00Z");
 
-// A complete, freshly observed board: ranks 1..25, XP descending, plus the
-// watchlist. Mirrors the shape the bundled seed produces.
-function fullRoster({ rankAt = NOW - HOUR, profileAt = NOW - HOUR, through = 30 } = {}) {
+// A complete, freshly observed board: userN holds the Nth highest XP, plus a
+// watchlist underneath.
+function fullRoster({ profileAt = NOW - HOUR, through = 30 } = {}) {
   const roster = R.emptyRoster();
-  for (let rank = 1; rank <= through; rank++) {
-    const handle = `user${rank}`;
+  for (let n = 1; n <= through; n++) {
+    const handle = `user${n}`;
     roster.entries[handle] = {
       ...R.blankEntry(handle),
-      FirstName: `User${rank}`,
+      FirstName: `User${n}`,
       Role: "Archmage",
-      Level: 200 - rank,
-      XP: 2_000_000 - rank * 10_000,
-      rank,
-      rankAt,
+      Level: 200 - n,
+      XP: 2_000_000 - n * 10_000,
       profileAt,
     };
   }
@@ -94,49 +93,71 @@ function fullRoster({ rankAt = NOW - HOUR, profileAt = NOW - HOUR, through = 30 
 
 // --- 1. seed integrity -------------------------------------------------------
 
-check("seed exists", Boolean(SEED && Array.isArray(SEED.entries)));
+check("seed exists", Boolean(SEED && Array.isArray(SEED.learners)));
 check("seed generatedAt parses", Number.isFinite(Date.parse(SEED.generatedAt)));
-eq("seed cutoff is documented", SEED.cutoffRank, 30);
-check("seed is trimmed to the cutoff", SEED.entries.every((e) => e.rank <= SEED.cutoffRank),
-  "the raw snapshot also holds handles at ranks 402-977; those must not ship");
-check("seed ranks are unique", new Set(SEED.entries.map((e) => e.rank)).size === SEED.entries.length);
-check("seed entries all have a handle and integer rank",
-  SEED.entries.every((e) => typeof e.handle === "string" && e.handle && Number.isInteger(e.rank)));
-const seedTop = new Set(SEED.entries.filter((e) => e.rank <= 25).map((e) => e.rank));
-eq("seed covers all 25 board positions", seedTop.size, 25);
-check("seed carries no unexpected fields", SEED.entries.every((e) =>
-  Object.keys(e).every((k) =>
-    ["handle", "rank", "rankAt", "xp", "firstName", "lastName", "role", "level", "profileImageURL"].includes(k))));
+{
+  const parsed = L.parseObservedLearners(SEED);
+  check("seed is a list the extension accepts", !parsed.error, parsed.error);
+  eq("no seed row is malformed", parsed.skipped, 0);
+}
+check("seed carries handles, XP and read times only", SEED.learners.every((e) =>
+  Object.keys(e).every((k) => ["handle", "xp", "at"].includes(k))),
+  "names, avatars, level, role and rank are fetched or derived, never shipped");
+eq("seed handles are unique", new Set(SEED.learners.map((e) => e.handle)).size, SEED.learners.length);
+check("seed holds at most the list maximum", SEED.learners.length <= L.constants.OBSERVED_LEARNERS_MAX);
+check("seed rows are written highest XP first",
+  SEED.learners.every((e, i, arr) => i === 0 || arr[i - 1].xp >= e.xp));
 
 // --- 2. merge: newest observation wins ---------------------------------------
 
 {
-  const older = { handle: "a", rank: 5, rankAt: NOW - DAY, XP: 100, profileAt: NOW - DAY };
-  const newer = { handle: "a", rank: 6, rankAt: NOW, XP: 200, profileAt: NOW };
+  const older = { handle: "a", XP: 100, profileAt: NOW - DAY };
+  const newer = { handle: "a", XP: 200, profileAt: NOW };
 
   const forward = R.mergeRosterObservation(R.mergeRosterObservation(null, older), newer);
-  eq("newer rank wins", forward.rank, 6);
   eq("newer XP wins", forward.XP, 200);
 
   const backward = R.mergeRosterObservation(R.mergeRosterObservation(null, newer), older);
-  eq("older rank loses", backward.rank, 6);
   eq("older XP loses", backward.XP, 200);
+  check("a merged entry carries no rank", !("rank" in backward) && !("rankAt" in backward));
 }
 
 {
   // A fresher bundled seed must upgrade a stale stored row; a stale seed must
   // never clobber fresher data. Both fall out of the same comparison.
-  const roster = R.emptyRoster();
-  const seed = { generatedAt: new Date(NOW).toISOString(), entries: [{ handle: "a", rank: 3, xp: 500, role: "Archmage", level: 150 }] };
+  const iso = (ms) => new Date(ms).toISOString();
+  const seed = {
+    format: L.constants.OBSERVED_LEARNERS_FORMAT,
+    version: L.constants.OBSERVED_LEARNERS_VERSION,
+    generatedAt: iso(NOW),
+    learners: [{ handle: "a", xp: 500, at: iso(NOW) }, { handle: "newcomer", xp: 400, at: iso(NOW) }],
+  };
 
-  roster.entries.a = { ...R.blankEntry("a"), rank: 9, rankAt: NOW - DAY, XP: 100, profileAt: NOW - DAY };
+  const roster = R.emptyRoster();
+  roster.entries.a = { ...R.blankEntry("a"), FirstName: "Ann", XP: 100, profileAt: NOW - DAY };
   R.applySeedToRoster(roster, seed);
-  eq("fresher seed upgrades a stale row", roster.entries.a.rank, 3);
+  eq("fresher seed upgrades a stale row", roster.entries.a.XP, 500);
+  eq("and keeps the display fields it does not carry", roster.entries.a.FirstName, "Ann");
+  eq("a learner only the seed knows is added", roster.entries.newcomer?.XP, 400);
+  eq("with the read time the seed gives it", roster.entries.newcomer?.profileAt, NOW);
 
   const roster2 = R.emptyRoster();
-  roster2.entries.a = { ...R.blankEntry("a"), rank: 9, rankAt: NOW + DAY, XP: 100, profileAt: NOW + DAY };
+  roster2.entries.a = { ...R.blankEntry("a"), XP: 100, profileAt: NOW + DAY };
   R.applySeedToRoster(roster2, seed);
-  eq("stale seed loses to fresher data", roster2.entries.a.rank, 9);
+  eq("stale seed loses to fresher data", roster2.entries.a.XP, 100);
+
+  const roster3 = R.emptyRoster();
+  check("a list in an unknown format changes nothing",
+    !R.applySeedToRoster(roster3, { ...seed, format: "something-else" }) && !Object.keys(roster3.entries).length);
+}
+
+{
+  // Rosters stored before v0.16.0 carry a rank per entry. It must not survive
+  // the load, or something could start reading it again.
+  const stored = { entries: { old: { Handle: "old", XP: 5, profileAt: NOW, rank: 3, rankAt: NOW } } };
+  const loaded = R.normalizeStoredRoster(stored);
+  check("a stored rank is dropped on load", !("rank" in loaded.entries.old) && !("rankAt" in loaded.entries.old));
+  eq("and the XP reading is kept", loaded.entries.old.XP, 5);
 }
 
 
@@ -157,17 +178,18 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
 {
   // THE INVARIANT, unchanged by the pivot: staleness schedules work, it never
   // subtracts knowledge. A roster nobody has refreshed still renders in full.
-  const board = R.buildAllTimeBoardRows(fullRoster({ rankAt: 1, profileAt: 1 }), "");
+  const board = R.buildAllTimeBoardRows(fullRoster({ profileAt: 1 }), "");
   eq("an entirely stale roster still yields 25 rows", board.rows.length, 25);
 }
 
 {
-  // Ordering comes from XP alone now. A stored rank is provenance and must NOT
-  // influence the order — that is the whole pivot, so it gets a direct test.
+  // Ordering comes from XP alone. A rank left over in memory from an older
+  // roster must NOT influence the order — that is the whole pivot, so it gets
+  // a direct test.
   const roster = fullRoster();
   roster.entries.user20.XP = 9999999;
   roster.entries.user20.rank = 20;
-  eq("XP decides the order, not the stored rank",
+  eq("XP decides the order, not a leftover rank",
     R.buildAllTimeBoardRows(roster, "").rows[0].handle, "user20");
 }
 

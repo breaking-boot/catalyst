@@ -538,8 +538,6 @@ function handleAllTimeLeaderboard(json) {
       // so every one goes through readField. This path cannot run today (the
       // alltime timeframe 400s) — which is exactly why it would rot unnoticed.
       Handle: getHandle(entry),
-      rank: readField(entry, "Position") ?? entry.Rank,
-      rankAt: now,
       XP: readField(entry, "XP"),
       FirstName: readField(entry, "FirstName"),
       LastName: readField(entry, "LastName"),
@@ -841,10 +839,7 @@ function allTimeXpText(it) {
 // Freshness is disclosed per row rather than implied. A row can legitimately be
 // weeks old, and saying when it was read is what keeps that honest.
 function allTimeRowTitle(it) {
-  const parts = [];
-  if (it.profileAt) parts.push(`XP read ${describeAge(it.profileAt)}`);
-  if (it.rankAt) parts.push(`rank confirmed ${describeAge(it.rankAt)}`);
-  return parts.join(" · ");
+  return it.profileAt ? `XP read ${describeAge(it.profileAt)}` : "";
 }
 
 function allTimeRowTitleAttr(it) {
