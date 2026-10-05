@@ -280,10 +280,164 @@ function renderBackupSection() {
   host.replaceChildren(actions, confirmBox, status);
 }
 
+// ---------------------------------------------------------------------------
+// Top Observed Learners: export / import (options page only). The list format
+// and the merge rule live in src/observed-learners.js, which the bundled seed
+// and the opt-in fetch also go through. Kept apart from Backup & restore on
+// purpose: a backup is the user's own data, a learner list is public data
+// about other people, and sending one must never send the other.
+
+function datedFileName(prefix) {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${prefix}-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
+}
+
+function renderObservedShareSection() {
+  const host = document.getElementById("be-observed-share");
+  if (!host) return;
+
+  const actions = document.createElement("div");
+  actions.className = "be-backup-actions";
+
+  const confirmBox = document.createElement("div");
+  confirmBox.className = "be-backup-confirm";
+  confirmBox.hidden = true;
+
+  const status = document.createElement("div");
+  status.className = "be-backup-status";
+  status.setAttribute("role", "status");
+
+  let pendingLearners = null;
+
+  const setStatus = (lines, isError = false) => {
+    status.classList.toggle("be-backup-error", isError);
+    status.replaceChildren(
+      ...[].concat(lines).filter(Boolean).map((line) => {
+        const p = document.createElement("p");
+        p.textContent = line;
+        return p;
+      })
+    );
+  };
+
+  const clearConfirm = () => {
+    pendingLearners = null;
+    confirmBox.hidden = true;
+    confirmBox.replaceChildren();
+  };
+
+  const exportBtn = makeBackupButton("Export learners", async () => {
+    exportBtn.disabled = true;
+    try {
+      const roster = await backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY);
+      const list = buildObservedLearners(rosterToObservedLearners(roster));
+      clearConfirm();
+      if (!list.learners.length) {
+        setStatus("Catalyst has not observed any learners yet. Open Boot.dev's leaderboard first.", true);
+        return;
+      }
+      const blob = new Blob([stringifyObservedLearners(list)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = datedFileName("catalyst-observed-learners");
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      setStatus(`Exported ${list.learners.length} learners to ${a.download}.`);
+    } catch (err) {
+      setStatus(`Export failed: ${err?.message || err}`, true);
+    } finally {
+      exportBtn.disabled = false;
+    }
+  });
+
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json,application/json";
+  fileInput.hidden = true;
+
+  const importBtn = makeBackupButton("Import learners…", () => fileInput.click());
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = ""; // so the same file can be re-picked later
+    if (!file) return;
+    clearConfirm();
+
+    let parsed;
+    try {
+      parsed = parseObservedLearners(await file.text());
+    } catch (_) {
+      parsed = { error: "Could not read the file." };
+    }
+    if (parsed.error) {
+      setStatus(parsed.error, true);
+      return;
+    }
+
+    // Confirm step: nothing is written until the user applies.
+    const roster = await backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY);
+    const preview = previewObservedLearnersImport(roster, parsed.learners);
+    pendingLearners = parsed.learners;
+    setStatus(`"${file.name}" contains:`);
+
+    const lines = [
+      `${preview.listed} learner${preview.listed === 1 ? "" : "s"}` +
+        (parsed.skipped ? ` (${parsed.skipped} unreadable row${parsed.skipped === 1 ? "" : "s"} skipped)` : ""),
+      `${preview.added} not on this device yet, ${preview.kept} of whom make your top 100`,
+      `${preview.updated} with a newer XP reading than this device has`,
+    ];
+    const list = document.createElement("ul");
+    for (const line of lines) {
+      const li = document.createElement("li");
+      li.textContent = line;
+      list.appendChild(li);
+    }
+
+    const applyBtn = makeBackupButton("Import", async () => {
+      const learners = pendingLearners;
+      clearConfirm();
+      if (!learners) return;
+      setStatus("Importing…");
+      try {
+        // Re-read: a Boot.dev tab may have written since the preview.
+        const stored = await backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY);
+        const { roster, kept, updated } = importObservedLearnersIntoStoredRoster(stored, learners);
+        const ok = await backupStorageSet("local", OBSERVED_ROSTER_STORAGE_KEY, roster);
+        setStatus(ok
+          ? [
+              `Imported: ${kept} learner${kept === 1 ? "" : "s"} added, ${updated} updated.`,
+              "Open Boot.dev tabs pick the change up on their own.",
+            ]
+          : "The learners could not be saved.", !ok);
+      } catch (err) {
+        setStatus(`Import failed: ${err?.message || err}`, true);
+      }
+    });
+    applyBtn.classList.add("be-backup-primary");
+
+    const cancelBtn = makeBackupButton("Cancel", () => {
+      clearConfirm();
+      setStatus("Import cancelled. Nothing was changed.");
+    });
+
+    const confirmActions = document.createElement("div");
+    confirmActions.className = "be-backup-actions";
+    confirmActions.append(applyBtn, cancelBtn);
+    confirmBox.replaceChildren(list, confirmActions);
+    confirmBox.hidden = false;
+  });
+
+  actions.append(exportBtn, importBtn, fileInput);
+  host.replaceChildren(actions, confirmBox, status);
+}
+
 function render() {
   renderToggles();
   renderVersionBanner();
   renderBackupSection();
+  renderObservedShareSection();
 
   const openOptions = document.getElementById("be-open-options");
   if (openOptions) {

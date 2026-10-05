@@ -762,8 +762,8 @@ function getTotalStudents() {
 // high enough to reach the board itself.
 //
 // So an unknown learner enters the roster through the karma board, the daily
-// board, a league board, a profile the user opens, or a refreshed bundled seed.
-// Reaching the visible 25 that way
+// board, a league board, a profile the user opens, a refreshed bundled seed, or
+// a list imported on the options page. Reaching the visible 25 that way
 // is slower than it was, which the README states rather than hides: the board
 // showing fewer new faces is a consequence of the platform, not a defect.
 //

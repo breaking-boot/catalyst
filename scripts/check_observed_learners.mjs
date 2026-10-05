@@ -188,6 +188,23 @@ check("an empty list is accepted", !L.parseObservedLearners(list([]), NOW).error
   eq("a preview counts what would change", preview, { listed: 3, added: 2, kept: 1, updated: 1 });
 }
 
+{
+  // The options page's import, against the roster exactly as storage holds it.
+  const stored = {
+    version: 1, xpCursor: 4, beWriter: "tab-123", self: { percentile: 1 },
+    entries: { kept: { Handle: "kept", XP: 900, profileAt: NOW - HOUR, FirstName: "K" } },
+  };
+  const { roster, kept, updated } = L.importObservedLearnersIntoStoredRoster(stored,
+    [{ handle: "kept", xp: 950, at: NOW }, { handle: "fresh", xp: 10, at: NOW }], NOW);
+  check("the last writer's stamp is removed, so that tab adopts the import", !("beWriter" in roster));
+  eq("the rest of the stored roster is carried over", [roster.xpCursor, roster.self.percentile], [4, 1]);
+  eq("and the import is applied", [roster.entries.kept.XP, roster.entries.kept.FirstName, roster.entries.fresh.XP], [950, "K", 10]);
+  eq("added and updated are counted", [kept, updated], [1, 1]);
+  eq("the stored object itself is untouched", [stored.entries.kept.XP, stored.beWriter], [900, "tab-123"]);
+  eq("nothing stored yet still imports", L.importObservedLearnersIntoStoredRoster(undefined,
+    [{ handle: "a", xp: 1, at: NOW }], NOW).kept, 1);
+}
+
 // --- 5. the shipped files ---------------------------------------------------------------
 
 {

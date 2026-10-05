@@ -228,6 +228,25 @@ function trimObservedRoster(roster, limit = OBSERVED_LEARNERS_MAX) {
   return removed;
 }
 
+// The options page's import: fold a list into the roster object as it was
+// read from storage, keep the top OBSERVED_LEARNERS_MAX, and return what to
+// write back. The writer stamp (`beWriter`, see mergeWrite in utils.js — keep
+// in sync) is removed: it names the Boot.dev tab that wrote last, and that tab
+// skips any change carrying its own stamp, so it would never adopt the import.
+function importObservedLearnersIntoStoredRoster(stored, learners, now = Date.now()) {
+  const roster = observedLearnersIsObject(stored) ? { ...stored } : { version: 1, entries: {} };
+  roster.entries = observedLearnersIsObject(stored?.entries) ? { ...stored.entries } : {};
+  const { added, updated } = mergeObservedLearnersIntoRoster(roster, learners);
+  trimObservedRoster(roster, OBSERVED_LEARNERS_MAX);
+  delete roster.beWriter;
+  roster.updatedAt = now;
+  return {
+    roster,
+    kept: added.filter((handle) => handle in roster.entries).length,
+    updated: updated.length,
+  };
+}
+
 // What importing a list would do, without doing it: for the options page's
 // confirm step. Works on a copy, so the caller's roster is untouched.
 function previewObservedLearnersImport(roster, learners) {
@@ -253,6 +272,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     rosterToObservedLearners,
     mergeObservedLearnersIntoRoster,
     trimObservedRoster,
+    importObservedLearnersIntoStoredRoster,
     previewObservedLearnersImport,
     constants: {
       OBSERVED_LEARNERS_FORMAT,
