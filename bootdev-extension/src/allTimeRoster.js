@@ -81,7 +81,16 @@ let allTimeRoster = null;
 let rosterLastPassAt = 0;
 
 function emptyRoster() {
-  return { version: ALLTIME_ROSTER_VERSION, updatedAt: 0, xpCursor: 0, xpWraps: 0, coldCursor: 0, self: {}, entries: {} };
+  return {
+    version: ALLTIME_ROSTER_VERSION,
+    updatedAt: 0,
+    xpCursor: 0,
+    xpWraps: 0,
+    coldCursor: 0,
+    boardSeen: [],
+    self: {},
+    entries: {},
+  };
 }
 
 // True once the hot ring's cursor has been all the way round at least once,
@@ -503,7 +512,12 @@ async function loadAllTimeRoster() {
 
   allTimeRoster = normalizeStoredRoster(stored);
   let changed = !isPlainObject(stored);
-  changed = applySeedToRoster(allTimeRoster) || changed;
+  const seed = typeof ALLTIME_SEED === "undefined" ? null : ALLTIME_SEED;
+  const seeded = isPlainObject(seed) ? applyObservedLearners(allTimeRoster, seed, "seed") : null;
+  changed = Boolean(seeded?.changed) || changed;
+  // A load is never news: whatever reached the board through the seed, an
+  // import, or another tab's write is recorded without an alert.
+  changed = noteBoardMembership(allTimeRoster, seeded?.added || []).changed || changed;
   if (changed) saveAllTimeRoster();
 }
 
@@ -514,6 +528,9 @@ function normalizeStoredRoster(stored) {
   roster.xpCursor = observedNum(stored.xpCursor) || 0;
   roster.xpWraps = observedNum(stored.xpWraps) || 0;
   roster.coldCursor = observedNum(stored.coldCursor) || 0;
+  roster.boardSeen = Array.isArray(stored.boardSeen)
+    ? uniqueHandleList(stored.boardSeen).slice(-BOARD_SEEN_MAX)
+    : [];
   if (isPlainObject(stored.self)) {
     roster.self = {
       handle: normalizeHandle(stored.self.handle),
@@ -562,6 +579,10 @@ function mergeRosters(mine, theirs) {
   if (theirsSelfAt > mineSelfAt) merged.self = theirs.self;
 
   merged.xpWraps = Math.max(observedNum(mine.xpWraps) || 0, observedNum(theirs.xpWraps) || 0);
+  merged.boardSeen = uniqueHandleList([
+    ...(Array.isArray(theirs.boardSeen) ? theirs.boardSeen : []),
+    ...(Array.isArray(mine.boardSeen) ? mine.boardSeen : []),
+  ]).slice(-BOARD_SEEN_MAX);
   // Two tabs each holding a full roster can union to well past capacity.
   pruneRoster(merged);
   return merged;
@@ -612,9 +633,11 @@ function noteAllTimeObservation(username, isStats, json) {
   }
 
   if (changed) {
+    const { newcomers } = noteBoardMembership(allTimeRoster);
     saveAllTimeRoster();
     schedulePersonalLeaderboardRender();
     renderAllTimeLeaderboard();
+    announceBoardNewcomers(newcomers);
   }
 }
 
@@ -659,8 +682,10 @@ function noteAllTimeBoardEntries(entries) {
     changed = noteAllTimeProfile(handle, entry, now) || changed;
   }
   if (changed) {
+    const { newcomers } = noteBoardMembership(allTimeRoster);
     saveAllTimeRoster();
     renderAllTimeLeaderboard();
+    announceBoardNewcomers(newcomers);
   }
 }
 
@@ -739,6 +764,69 @@ function getTotalStudents() {
 }
 
 // ---------------------------------------------------------------------------
+// New-learner alerts (opt-in)
+// ---------------------------------------------------------------------------
+// An informational notice when a learner this device found by browsing enters
+// the visible board for the first time. Default OFF: news about strangers on a
+// board the user did not curate is not something most users want. It carries
+// no call to action; sharing a list is what the options page's export is for.
+//
+// roster.boardSeen holds every handle that has been on the board here, plus
+// every handle that arrived in a list. It is kept whether or not alerts are on,
+// so switching them on later does not announce the whole board at once, and a
+// learner who drops to 26th and climbs back is not news a second time.
+const BOARD_SEEN_MAX = 1000;
+
+function uniqueHandleList(handles) {
+  return Array.from(new Set(handles.map(normalizeHandle).filter(isValidHandle)));
+}
+
+// Record the current top ALLTIME_BOARD_SIZE, plus `fromLists` (handles that
+// arrived in a seed, import or fetched list, which are never news). Returns the
+// handles reaching the board for the first time; the first call on an empty
+// record establishes a baseline and reports none.
+function noteBoardMembership(roster, fromLists = []) {
+  const seen = Array.isArray(roster.boardSeen) ? roster.boardSeen.slice() : [];
+  const seenSet = new Set(seen);
+  const baseline = seen.length === 0;
+  const mark = (handle) => {
+    seenSet.add(handle);
+    seen.push(handle);
+  };
+  for (const handle of uniqueHandleList(fromLists)) {
+    if (!seenSet.has(handle)) mark(handle);
+  }
+  const newcomers = [];
+  for (const { position, entry } of deriveBoardPositions(roster).positions) {
+    if (position > ALLTIME_BOARD_SIZE) break;
+    const handle = normalizeHandle(entry.Handle);
+    if (!isValidHandle(handle) || seenSet.has(handle)) continue;
+    mark(handle);
+    if (!baseline) newcomers.push(handle);
+  }
+  const changed = seen.length !== (roster.boardSeen?.length || 0);
+  roster.boardSeen = seen.slice(-BOARD_SEEN_MAX);
+  return { newcomers, changed };
+}
+
+function announceBoardNewcomers(handles) {
+  if (!handles.length || !isFeatureEnabled("observedBoardAlerts")) return;
+  // Reaching the board yourself is not news about someone else.
+  const self = normalizeHandle(currentUserHandle);
+  const others = handles.filter((handle) => handle !== self);
+  if (!others.length) return;
+  const describe = (handle) => {
+    const xp = observedNum(allTimeRoster?.entries?.[handle]?.XP);
+    return xp == null ? `@${handle}` : `@${handle} (${fmtNum(xp)} xp)`;
+  };
+  const text = others.length === 1
+    ? `New on Top Observed Learners: ${describe(others[0])}.`
+    : `New on Top Observed Learners: ${others.slice(0, 2).map(describe).join(", ")}` +
+      (others.length > 2 ? ` and ${others.length - 2} more.` : ".");
+  toast(text);
+}
+
+// ---------------------------------------------------------------------------
 // Published list (opt-in)
 // ---------------------------------------------------------------------------
 // The repository publishes a curated list, data/observed-learners.json — the
@@ -776,6 +864,7 @@ async function maybeFetchObservedList(now = Date.now()) {
     if (enhancerStopped || !allTimeRoster) return;
     const result = applyObservedLearners(allTimeRoster, text, "published");
     if (result.parsed.error) return;
+    noteBoardMembership(allTimeRoster, result.added);
     chromeSet(OBSERVED_LIST_STATE_KEY, {
       checkedAt: now,
       appliedAt: now,
@@ -919,6 +1008,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     pickXpRefreshTargets,
     pickDisplayFillTargets,
     needsDisplayFields,
+    noteBoardMembership,
     pruneRoster,
     constants: {
       ALLTIME_BOARD_SIZE,

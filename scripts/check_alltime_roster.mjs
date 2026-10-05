@@ -43,6 +43,8 @@ const sandbox = {
   fetch: (...args) => fetchImpl(...args),
   isFeatureEnabled: (key) => flags[key] !== false,
   renderAllTimeLeaderboard() {},
+  // leaderboard.js is not loaded here; it owns these on the real page.
+  currentUserHandle: "",
   chrome: {
     runtime: { getURL: (p) => `chrome-extension://catalyst-test/${p}` },
     storage: {
@@ -521,6 +523,51 @@ check("seed rows are written highest XP first",
   await run("maybeFetchObservedList()");
   eq("nothing is fetched while the board is off", requests, 0);
   flags.allTimeLeaderboard = true;
+}
+
+// --- 12. new-learner alerts ---------------------------------------------------------
+
+{
+  const run = (code) => vm.runInContext(code, sandbox);
+  const toasts = [];
+  sandbox.__toasts = toasts;
+  run("toast = (text) => { __toasts.push(text); }");
+
+  const roster = fullRoster({ through: 30 });
+  let result = R.noteBoardMembership(roster);
+  eq("the first record is a baseline, not news", result.newcomers.length, 0);
+  eq("and it holds the visible board", roster.boardSeen.length, R.constants.ALLTIME_BOARD_SIZE);
+
+  roster.entries.user28.XP = 9_999_999;
+  result = R.noteBoardMembership(roster);
+  eq("a learner reaching the board for the first time is news",
+    JSON.stringify(result.newcomers), JSON.stringify(["user28"]));
+  eq("only once", R.noteBoardMembership(roster).newcomers.length, 0);
+
+  roster.entries.user29.XP = 9_999_998;
+  roster.entries.listed = { ...R.blankEntry("listed"), XP: 9_999_997, profileAt: NOW };
+  result = R.noteBoardMembership(roster, ["listed"]);
+  eq("a learner who arrived in a list never is",
+    JSON.stringify(result.newcomers), JSON.stringify(["user29"]));
+
+  run(`allTimeRoster = { entries: { user26: { XP: 9000026 } } };`);
+  flags.observedBoardAlerts = false;
+  run(`announceBoardNewcomers(["user26"])`);
+  eq("nothing is shown while alerts are off", toasts.length, 0);
+  flags.observedBoardAlerts = true;
+  run(`announceBoardNewcomers(["user26"])`);
+  eq("one newcomer names the learner and their XP", toasts[0], "New on Top Observed Learners: @user26 (9,000,026 xp).");
+  run(`announceBoardNewcomers(["a", "b", "c", "d"])`);
+  eq("several become one notice", toasts[1], "New on Top Observed Learners: @a, @b and 2 more.");
+  sandbox.currentUserHandle = "me";
+  run(`announceBoardNewcomers(["me"])`);
+  eq("reaching the board yourself is not announced", toasts.length, 2);
+  sandbox.currentUserHandle = "";
+
+  const mine = { entries: {}, boardSeen: ["a", "b"] };
+  const theirs = { entries: {}, boardSeen: ["b", "c"] };
+  eq("tabs share what has been seen",
+    JSON.stringify(R.mergeRosters(mine, theirs).boardSeen.slice().sort()), JSON.stringify(["a", "b", "c"]));
 }
 
 if (failures) {

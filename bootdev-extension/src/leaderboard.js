@@ -553,7 +553,12 @@ function handleAllTimeLeaderboard(json) {
       profileAt: now,
     }) || changed;
   }
-  if (changed) saveAllTimeRoster();
+  // A restored board would deliver 25 learners at once; record them without
+  // alerts, as a list is.
+  if (changed) {
+    noteBoardMembership(allTimeRoster);
+    saveAllTimeRoster();
+  }
   renderAllTimeLeaderboard();
 }
 
