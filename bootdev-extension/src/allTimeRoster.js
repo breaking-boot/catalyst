@@ -421,6 +421,69 @@ function walkRing(ring, start, slice, due) {
   return { handles, cursor, wrapped };
 }
 
+// ---------------------------------------------------------------------------
+// Display fill
+// ---------------------------------------------------------------------------
+// The seed carries handle and XP only, so a row it adds has no name, avatar or
+// frame until that learner's profile is read. When the board is drawn, the
+// visible rows still missing them are fetched straight away instead of waiting
+// for the XP sweep to come round.
+//
+// A deliberate exception to ROSTER_REQUEST_CEILING, bounded three ways: only
+// rows the board is about to show (at most ALLTIME_BOARD_SIZE), each at most
+// once per page session, and only when the board is actually drawn — not at
+// install, when the user may be on a lesson and may never open the
+// leaderboard. Requests are spaced rather than sent as a burst: twenty-five
+// profile reads in the same second from one session is a conspicuous pattern,
+// and nothing on screen needs them that fast. patchLeaderAvatar fills each row
+// in place as its profile arrives.
+const DISPLAY_FILL_SPACING_MS = 400;
+const displayFillRequested = new Set();
+let displayFillQueue = [];
+let displayFillTimer = null;
+
+// A profile read always brings a level and a role, so their absence means this
+// learner has never been read — not that they have no avatar.
+function needsDisplayFields(entry) {
+  return !entry?.FirstName && !entry?.ProfileImageURL && !entry?.Role && observedNum(entry?.Level) == null;
+}
+
+function pickDisplayFillTargets(roster, requested = new Set()) {
+  return deriveBoardPositions(roster).positions
+    .filter(({ position, entry }) => position <= ALLTIME_BOARD_SIZE && needsDisplayFields(entry))
+    .map(({ entry }) => normalizeHandle(entry.Handle))
+    .filter((handle) => isValidHandle(handle) && !requested.has(handle));
+}
+
+function requestRosterDisplayFill() {
+  if (!allTimeRoster || enhancerStopped) return [];
+  if (!isLeaderboardPage() || !isFeatureEnabled("allTimeLeaderboard")) return [];
+  const handles = pickDisplayFillTargets(allTimeRoster, displayFillRequested);
+  for (const handle of handles) {
+    displayFillRequested.add(handle);
+    displayFillQueue.push(handle);
+  }
+  drainDisplayFill();
+  return handles;
+}
+
+function drainDisplayFill() {
+  if (displayFillTimer || !displayFillQueue.length || enhancerStopped) return;
+  // Leaving the leaderboard abandons what is left. Those handles are released,
+  // so the next time the board is drawn they are asked for again.
+  if (!isLeaderboardPage()) {
+    for (const handle of displayFillQueue) displayFillRequested.delete(handle);
+    displayFillQueue = [];
+    return;
+  }
+  const handle = displayFillQueue.shift();
+  requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(handle)}`);
+  displayFillTimer = setTrackedTimeout(() => {
+    displayFillTimer = null;
+    drainDisplayFill();
+  }, DISPLAY_FILL_SPACING_MS);
+}
+
 // There is no rank queue any more. It fetched /stats to verify or discover a
 // position, and positions no longer exist — every such request would return a
 // percentile Catalyst cannot order by. detectOvertakes went with it: it existed
@@ -739,9 +802,10 @@ function requestAllTimeRosterRefresh() {
 
   // 2. The XP sweep — the ONLY thing keeping the board correct, since the
   //    ordering is derived from XP alone. Hot ring first, then the cold tail.
-  //    Handles the Personal Leaderboards pass already refreshes this load are
-  //    skipped rather than fetched twice.
-  const skip = anyPersonalBoardEnabled() ? personalHandles : [];
+  //    Handles the Personal Leaderboards pass already refreshes this load, and
+  //    rows still waiting in the display fill, are skipped rather than fetched
+  //    twice.
+  const skip = [...(anyPersonalBoardEnabled() ? personalHandles : []), ...displayFillQueue];
   const slice = Math.min(priming ? ROSTER_XP_PRIMING_SLICE : ROSTER_XP_SLICE, budget);
   const { targets, cursor, wrapped, coldCursor } = pickXpRefreshTargets(allTimeRoster, {
     slice,
@@ -784,6 +848,8 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     compareByObservedXp,
     buildAllTimeBoardRows,
     pickXpRefreshTargets,
+    pickDisplayFillTargets,
+    needsDisplayFields,
     pruneRoster,
     constants: {
       ALLTIME_BOARD_SIZE,

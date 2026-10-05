@@ -786,6 +786,9 @@ function _applyAllTimeContent(panel) {
     (it) => elementFromHTML(allTimeCardHTML(it, myXP)),
     (el, it) => patchAllTimeCard(el, it, myXP)
   );
+
+  // Rows drawn from a seeded handle have no name or avatar yet.
+  requestRosterDisplayFill();
 }
 
 function allTimeCardHTML(it, myXP) {

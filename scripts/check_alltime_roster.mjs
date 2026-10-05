@@ -420,6 +420,26 @@ check("seed rows are written highest XP first",
     board.rows.every((r, i, arr) => i === 0 || arr[i - 1].xp >= r.xp));
 }
 
+// --- 10. display fill ----------------------------------------------------------
+
+{
+  // Only the rows the board is about to show are filled, and only those never
+  // read: a seeded row has handle and XP but no name, avatar, role or level.
+  const roster = fullRoster({ through: 40 });
+  for (const n of [3, 10, 30, 35]) {
+    roster.entries[`user${n}`] = { ...R.blankEntry(`user${n}`), XP: roster.entries[`user${n}`].XP, profileAt: NOW };
+  }
+  eq("visible rows without display fields are picked, the tail is not",
+    JSON.stringify(R.pickDisplayFillTargets(roster)), JSON.stringify(["user3", "user10"]));
+  eq("a row already asked for this session is not asked for again",
+    JSON.stringify(R.pickDisplayFillTargets(roster, new Set(["user3"]))), JSON.stringify(["user10"]));
+  check("a row with a level but no avatar counts as read",
+    !R.needsDisplayFields({ ...R.blankEntry("x"), Level: 150 }));
+  check("a fresh install's seed fills at most one board's worth",
+    R.pickDisplayFillTargets((() => { const r = R.emptyRoster(); R.applySeedToRoster(r); return r; })()).length
+      <= R.constants.ALLTIME_BOARD_SIZE);
+}
+
 if (failures) {
   console.error(`\n${failures} check(s) failed`);
   process.exit(1);
