@@ -4,12 +4,13 @@
 // defaults, feature labels, and per-board ordering live in exactly one place and
 // can never drift between the two contexts. No logic here — data only.
 
-// Every flag except versionCheck, bossTracker, submitConfirm, and
-// assignmentShortcuts defaults to true: a missing or corrupt value means
-// "feature on" so the extension fails open (full functionality) rather than
-// silently dark. normalizeSettings seeds every key from this map. The four
-// default-OFF exceptions are deliberate: versionCheck because it can reach
-// off-device, bossTracker because the floating panel should be quiet by default
+// Every flag except versionCheck, observedListFetch, bossTracker,
+// submitConfirm, and assignmentShortcuts defaults to true: a missing or corrupt
+// value means "feature on" so the extension fails open (full functionality)
+// rather than silently dark. normalizeSettings seeds every key from this map.
+// The default-OFF exceptions are deliberate: versionCheck and
+// observedListFetch because they reach off-device, bossTracker because the
+// floating panel should be quiet by default
 // (users opt in via the popup or the boss-event reminder toast, see boss.js),
 // submitConfirm because it puts a step in front of a native Boot.dev action —
 // nobody should meet a confirmation dialog they didn't ask for — and
@@ -46,12 +47,16 @@ const SETTINGS_DEFAULTS = {
   personalBoardDailyKarma: true,
   personalBoardAllTimeKarma: true,
 
-  // Opt-in GitHub release check (options page only); one of the four
+  // Opt-in GitHub release check (options page only); one of the
   // default-OFF settings described above. Default-off works within the
   // default-on framework because normalizeSettings
   // seeds this key from here, so a missing value resolves to false and stays off
   // until the user explicitly enables it. See updateCheck.js.
   versionCheck: false,
+
+  // Top Observed Learners options (options page only); each is ANDed with
+  // `allTimeLeaderboard`.
+  observedListFetch: false, // default-OFF: daily read of the published list from GitHub
 };
 
 // Top-level feature toggles, in display order, rendered on both pages.
@@ -82,6 +87,11 @@ const PERSONAL_BOARD_TOGGLES = [
   { key: "personalBoardAllTimeXp", label: "All-Time XP" },
   { key: "personalBoardDailyKarma", label: "Daily Karma" },
   { key: "personalBoardAllTimeKarma", label: "All-Time Karma" },
+];
+
+// Top Observed Learners options (options page only), rendered in that section.
+const OBSERVED_BOARD_TOGGLES = [
+  { key: "observedListFetch", label: "Fetch the published learner list", desc: "Once a day, download the list of top learners published in Catalyst's GitHub repository and merge it into your board, so new top learners can reach it between releases. Makes one request to github.com and sends nothing. Your own readings always win over older ones in the list." },
 ];
 
 // Per-board comparison toggles (options page only). Ordered top-to-bottom to

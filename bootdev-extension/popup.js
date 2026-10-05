@@ -3,7 +3,9 @@
 // It reads/writes the same be_settings object in chrome.storage.sync that the
 // content script's settings.js consumes; the content script live-applies changes
 // via storage.onChanged. Renders whichever containers the host page provides:
-// #be-features (always), #be-comparison-boards + #be-update-settings (options only).
+// #be-features (always); #be-personal-boards, #be-comparison-boards,
+// #be-observed-settings, #be-observed-share, #be-backup and #be-update-settings
+// (options page only).
 //
 // No inline script/handlers (popup runs under the default MV3 CSP). Defaults,
 // feature labels, and board ordering come from settings-schema.js, the single
@@ -14,7 +16,8 @@ const SETTINGS_KEY = "be_settings";
 const DEFAULTS = SETTINGS_DEFAULTS;
 const FEATURES = FEATURE_TOGGLES;
 
-// Options-page-only opt-in. Default OFF; the only setting that reaches off-device.
+// Options-page-only opt-in. Default OFF because it reaches off-device, like the
+// published learner list in OBSERVED_BOARD_TOGGLES.
 const UPDATE_SETTINGS = [
   {
     key: "versionCheck",
@@ -91,6 +94,7 @@ function makeToggle({ key, label, desc, shortDesc }) {
 const DEPENDENT_SECTIONS = {
   comparisons: "be-comparison-boards",
   personalLeaderboards: "be-personal-boards",
+  allTimeLeaderboard: "be-observed-settings",
 };
 
 function updateDependentSectionStates() {
@@ -128,6 +132,9 @@ function renderToggles() {
 
   const boards = document.getElementById("be-comparison-boards");
   if (boards) boards.replaceChildren(...COMPARISON_BOARDS.map(makeToggle));
+
+  const observed = document.getElementById("be-observed-settings");
+  if (observed) observed.replaceChildren(...OBSERVED_BOARD_TOGGLES.map(makeToggle));
 
   const updates = document.getElementById("be-update-settings");
   if (updates) updates.replaceChildren(...UPDATE_SETTINGS.map(makeToggle));
@@ -433,11 +440,33 @@ function renderObservedShareSection() {
   host.replaceChildren(actions, confirmBox, status);
 }
 
+// One line under the toggle saying when the published list was last applied,
+// read from the state the content script records (allTimeRoster.js) — keep the
+// key in sync. It is the only visible sign the opt-in is doing anything.
+const OBSERVED_LIST_STATE_KEY = "be_observed_list_fetch";
+
+async function renderObservedListStatus() {
+  const el = document.getElementById("be-observed-list-status");
+  if (!el) return;
+  const state = await backupStorageGet("local", OBSERVED_LIST_STATE_KEY);
+  const when = (ms) => new Date(ms).toLocaleString();
+  let text = "";
+  if (Number.isFinite(state?.appliedAt)) {
+    const dated = Number.isFinite(state.listGeneratedAt) ? `, list dated ${when(state.listGeneratedAt)}` : "";
+    text = `Published list last applied ${when(state.appliedAt)}: ${state.learners ?? 0} learners${dated}.`;
+  } else if (Number.isFinite(state?.checkedAt)) {
+    text = `Last checked ${when(state.checkedAt)}; no usable list was found. Catalyst tries again a day later.`;
+  }
+  el.textContent = text;
+  el.hidden = !text;
+}
+
 function render() {
   renderToggles();
   renderVersionBanner();
   renderBackupSection();
   renderObservedShareSection();
+  void renderObservedListStatus();
 
   const openOptions = document.getElementById("be-open-options");
   if (openOptions) {

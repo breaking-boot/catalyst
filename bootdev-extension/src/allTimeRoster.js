@@ -204,11 +204,11 @@ function applyObservedLearners(roster, list, source) {
   const parsed = parseObservedLearners(list);
   if (parsed.error) {
     warnOnce(`alltime:list-${source}`, `Observed-learner list (${source}) was not applied: ${parsed.error}`);
-    return { changed: false, added: [], updated: [] };
+    return { changed: false, added: [], updated: [], parsed };
   }
   const { added, updated } = mergeObservedLearnersIntoRoster(roster, parsed.learners, { source, blank: blankEntry });
   pruneRoster(roster);
-  return { changed: added.length > 0 || updated.length > 0, added, updated };
+  return { changed: added.length > 0 || updated.length > 0, added, updated, parsed };
 }
 
 // bootstrapRosterFromPersonalRecords was removed with the pivot. It seeded the
@@ -739,6 +739,74 @@ function getTotalStudents() {
 }
 
 // ---------------------------------------------------------------------------
+// Published list (opt-in)
+// ---------------------------------------------------------------------------
+// The repository publishes a curated list, data/observed-learners.json — the
+// same file the bundled seed is built from. With observedListFetch on,
+// Catalyst reads it at most once a day and folds it in like an imported list,
+// so a newly found top learner reaches users between releases. Default OFF,
+// like versionCheck and for the same reason: it is a request somewhere other
+// than Boot.dev. It sends nothing; it is one GET of a public file. GitHub's
+// REST API answers with Access-Control-Allow-Origin: * (checked 2026-10-04),
+// so no host permission is needed.
+//
+// The file is untrusted input. It goes through the same parser as an import,
+// so all it can contribute is handles and numbers, and newest-reading-wins per
+// learner means a stale or tampered copy cannot lower a fresher local reading.
+const OBSERVED_LIST_URL =
+  "https://api.github.com/repos/breaking-boot/catalyst/contents/data/observed-learners.json?ref=main";
+const OBSERVED_LIST_STATE_KEY = "be_observed_list_fetch";
+const OBSERVED_LIST_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let observedListFetchInFlight = false;
+
+async function maybeFetchObservedList(now = Date.now()) {
+  if (enhancerStopped || observedListFetchInFlight || !allTimeRoster) return;
+  if (!isFeatureEnabled("observedListFetch") || !isFeatureEnabled("allTimeLeaderboard")) return;
+  const state = await chromeGet(OBSERVED_LIST_STATE_KEY);
+  if (enhancerStopped) return;
+  if (now - (observedNum(state?.checkedAt) || 0) < OBSERVED_LIST_INTERVAL_MS) return;
+
+  observedListFetchInFlight = true;
+  // Recorded before the request, so a failure waits a day as a success does
+  // instead of retrying on every page load.
+  await chromeSet(OBSERVED_LIST_STATE_KEY, { ...(isPlainObject(state) ? state : {}), checkedAt: now });
+  try {
+    const text = await fetchObservedListText();
+    // Read after the await: another tab's write may have replaced the roster.
+    if (enhancerStopped || !allTimeRoster) return;
+    const result = applyObservedLearners(allTimeRoster, text, "published");
+    if (result.parsed.error) return;
+    chromeSet(OBSERVED_LIST_STATE_KEY, {
+      checkedAt: now,
+      appliedAt: now,
+      listGeneratedAt: result.parsed.generatedAt,
+      learners: result.parsed.learners.length,
+    });
+    if (result.changed) {
+      saveAllTimeRoster();
+      renderAllTimeLeaderboard();
+    }
+  } catch (err) {
+    // Offline, rate-limited, or the file is missing: keep what is held.
+    warnOnce("alltime:list-fetch", `Published learner list not fetched: ${safeErrorMessage(err)}`);
+  } finally {
+    observedListFetchInFlight = false;
+  }
+}
+
+// The contents API returns the file base64-encoded inside a JSON envelope.
+async function fetchObservedListText() {
+  const response = await fetch(OBSERVED_LIST_URL, { headers: { accept: "application/vnd.github+json" } });
+  if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
+  const body = await response.json();
+  if (body?.encoding !== "base64" || typeof body.content !== "string") {
+    throw new Error("unexpected response from GitHub");
+  }
+  const binary = atob(body.content.replace(/\s/g, ""));
+  return new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)));
+}
+
+// ---------------------------------------------------------------------------
 // Refresh: one budget, spent in priority order
 // ---------------------------------------------------------------------------
 // ONE hard ceiling rather than a sum of sub-budgets: it is a single number to
@@ -762,8 +830,9 @@ function getTotalStudents() {
 // high enough to reach the board itself.
 //
 // So an unknown learner enters the roster through the karma board, the daily
-// board, a league board, a profile the user opens, a refreshed bundled seed, or
-// a list imported on the options page. Reaching the visible 25 that way
+// board, a league board, a profile the user opens, a refreshed bundled seed, a
+// list imported on the options page, or the opt-in published list. Reaching the
+// visible 25 that way
 // is slower than it was, which the README states rather than hides: the board
 // showing fewer new faces is a consequence of the platform, not a defect.
 //

@@ -28,13 +28,30 @@ import vm from "node:vm";
 const SRC = new URL("../bootdev-extension/src/", import.meta.url);
 
 const testHook = {};
+// Backing store and switches for the published-list fetch (section 11).
+const storage = {};
+const flags = {};
+let fetchImpl = async () => { throw new Error("fetch not expected here"); };
 const sandbox = {
   window: { __BOOTDEV_ENHANCER_TEST__: testHook },
   document: { addEventListener() {}, removeEventListener() {}, getElementById: () => null },
   location: { origin: "https://www.boot.dev", pathname: "/leaderboard" },
-  console,
+  console: { ...console, warn() {} },
   URL,
-  chrome: { runtime: { getURL: (p) => `chrome-extension://catalyst-test/${p}` } },
+  atob,
+  TextDecoder,
+  fetch: (...args) => fetchImpl(...args),
+  isFeatureEnabled: (key) => flags[key] !== false,
+  renderAllTimeLeaderboard() {},
+  chrome: {
+    runtime: { getURL: (p) => `chrome-extension://catalyst-test/${p}` },
+    storage: {
+      local: {
+        get: (key, cb) => cb({ [key]: storage[key] === undefined ? undefined : JSON.parse(JSON.stringify(storage[key])) }),
+        set: (obj, cb) => { Object.assign(storage, JSON.parse(JSON.stringify(obj))); cb && cb(); },
+      },
+    },
+  },
   setTimeout: () => 0,
   clearTimeout() {},
   setInterval: () => 0,
@@ -438,6 +455,72 @@ check("seed rows are written highest XP first",
   check("a fresh install's seed fills at most one board's worth",
     R.pickDisplayFillTargets((() => { const r = R.emptyRoster(); R.applySeedToRoster(r); return r; })()).length
       <= R.constants.ALLTIME_BOARD_SIZE);
+}
+
+// --- 11. the published list (opt-in fetch) ----------------------------------------
+
+{
+  const run = (code) => vm.runInContext(code, sandbox);
+  const iso = (ms) => new Date(ms).toISOString();
+  const T = Date.now();
+  const published = {
+    format: L.constants.OBSERVED_LEARNERS_FORMAT,
+    version: L.constants.OBSERVED_LEARNERS_VERSION,
+    generatedAt: iso(T - HOUR),
+    learners: [
+      { handle: "kat", xp: 2_000_000, at: iso(T - HOUR) },
+      { handle: "newtop", xp: 1_900_000, at: iso(T - HOUR) },
+    ],
+  };
+  let requests = 0;
+  const respondWith = (list) => {
+    fetchImpl = async (url) => {
+      requests += 1;
+      check("only the repository's contents API is asked", url.startsWith("https://api.github.com/repos/"), url);
+      const content = Buffer.from(JSON.stringify(list)).toString("base64").replace(/(.{60})/g, "$1\n");
+      return { ok: true, status: 200, json: async () => ({ encoding: "base64", content }) };
+    };
+  };
+  const reset = () => {
+    for (const key of Object.keys(storage)) delete storage[key];
+    requests = 0;
+    run(`allTimeRoster = emptyRoster();
+      allTimeRoster.entries.kat = { ...blankEntry("kat"), FirstName: "Kat", XP: 2_100_000, profileAt: ${T} };`);
+  };
+
+  reset();
+  respondWith(published);
+  flags.observedListFetch = false;
+  await run("maybeFetchObservedList()");
+  eq("nothing is fetched while the opt-in is off", requests, 0);
+
+  flags.observedListFetch = true;
+  await run("maybeFetchObservedList()");
+  eq("switched on, the list is fetched once", requests, 1);
+  eq("its new learner is added", run("allTimeRoster.entries.newtop?.XP"), 1_900_000);
+  eq("an older list reading never lowers a fresher local one", run("allTimeRoster.entries.kat.XP"), 2_100_000);
+  eq("and the state records what was applied", storage.be_observed_list_fetch?.learners, 2);
+
+  await run("maybeFetchObservedList()");
+  eq("a second call the same day does not fetch", requests, 1);
+
+  reset();
+  fetchImpl = async () => { requests += 1; return { ok: false, status: 404, json: async () => ({}) }; };
+  await run("maybeFetchObservedList()");
+  check("a failed fetch is recorded, so it waits a day", Number.isFinite(storage.be_observed_list_fetch?.checkedAt));
+  check("and changes nothing", !run("allTimeRoster.entries.newtop"));
+
+  reset();
+  respondWith({ ...published, version: published.version + 1 });
+  await run("maybeFetchObservedList()");
+  check("a list in a newer format is not applied", !run("allTimeRoster.entries.newtop"));
+
+  reset();
+  flags.allTimeLeaderboard = false;
+  respondWith(published);
+  await run("maybeFetchObservedList()");
+  eq("nothing is fetched while the board is off", requests, 0);
+  flags.allTimeLeaderboard = true;
 }
 
 if (failures) {
