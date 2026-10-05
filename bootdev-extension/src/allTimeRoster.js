@@ -342,25 +342,21 @@ function compareByObservedXp(a, b) {
 }
 
 
-// The board: 25 fixed slots, a real row where a position is known and a gap row
-// where it is not. Never fabricates a name, an XP figure or a handle.
+// The board: the top ALLTIME_BOARD_SIZE observed learners by XP, and nothing
+// else. Never fabricates a name, an XP figure or a handle.
+//
+// The viewer appears only if they are one of those learners, highlighted in
+// place. There is deliberately no extra row for a viewer below the board: with
+// no objective standing to show, it could only claim a place Catalyst cannot
+// measure. If Boot.dev ever gives the signed-in user an exact own-rank
+// (roster.self has room for it), the board could show the top 24 and the
+// viewer's real position in the last slot.
 function buildAllTimeBoardRows(roster, selfHandle = "") {
   const { positions } = deriveBoardPositions(roster);
   const rows = positions
     .filter((placed) => placed.position <= ALLTIME_BOARD_SIZE)
     .map((placed) => rosterRow(placed.entry, placed.position, selfHandle));
-
-  // The viewer, when they are not among the observed top. Appended rather than
-  // displacing someone real. There is no rank to show any more, so the row
-  // carries no position — see renderers, which label it rather than number it.
-  const selfNormalized = normalizeHandle(selfHandle || roster?.self?.handle);
-  const onBoard = rows.some((r) => r.isCurrentUser);
-  const selfEntry = selfNormalized ? roster?.entries?.[selfNormalized] : null;
-  if (selfNormalized && !onBoard && selfEntry && observedNum(selfEntry.XP) != null) {
-    rows.push({ ...rosterRow(selfEntry, null, selfNormalized), outsideBoard: true });
-  }
-
-  return { rows, observed: positions.length, shown: Math.min(positions.length, ALLTIME_BOARD_SIZE) };
+  return { rows, observed: positions.length, shown: rows.length };
 }
 
 function rosterRow(entry, position, selfHandle) {

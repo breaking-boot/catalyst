@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Checks for the signed-in user's own place on Personal Leaderboards
-// (bootdev-extension/src/leaderboard.js), evaluated in a vm sandbox with the
-// files it needs.
+// Checks for the signed-in user's own place on Personal Leaderboards and Top
+// Observed Learners (bootdev-extension/src/leaderboard.js and allTimeRoster.js),
+// evaluated in a vm sandbox with the files they need.
 //
 // Run from anywhere:  node scripts/check_personal_self.mjs
 //
@@ -13,6 +13,9 @@
 //   3. Being a tracked handle must not give the viewer a stored lifetime XP.
 //      The viewer's own XP comes only from values observed this session — a
 //      stored copy of "me" silently wrong-footed every comparison in v0.13.1.
+//   4. Top Observed Learners gives the viewer no exemption: they are admitted
+//      and pruned by XP like anyone, and appear on the board only if they are
+//      among its top 25.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -112,6 +115,38 @@ run(`
 eq("a stored personal record is not the viewer's XP", run(`getMyValue("xp")`), null);
 run("recordCurrentUserLiveXp(200000)");
 eq("a value observed this session is", run(`getMyValue("xp")`), 200000);
+
+// --- 4. the viewer on Top Observed Learners -----------------------------------------
+
+run(`
+  currentUserHandle = "me";
+  allTimeRoster = emptyRoster();
+  for (let i = 0; i < ROSTER_MAX_ENTRIES; i++) {
+    allTimeRoster.entries["top" + i] = { ...blankEntry("top" + i), XP: 2000000 + i, profileAt: 1 };
+  }
+  noteAllTimeProfile("me", { handle: "me", xp: 5000, level: 40, role: "Sage" }, 2);
+`);
+eq("at capacity, the viewer is refused below the bar like anyone", run(`Boolean(allTimeRoster.entries.me)`), false);
+
+run(`
+  allTimeRoster = emptyRoster();
+  for (let i = 0; i < 50; i++) {
+    allTimeRoster.entries["top" + i] = { ...blankEntry("top" + i), XP: 2000000 + i, profileAt: 1 };
+  }
+  noteAllTimeProfile("me", { handle: "me", xp: 5000, level: 40, role: "Sage" }, 2);
+`);
+eq("below capacity, the viewer is admitted like anyone", run(`allTimeRoster.entries.me?.XP`), 5000);
+eq("but is not on the board unless among its top 25",
+  run(`buildAllTimeBoardRows(allTimeRoster, "me").rows.some((r) => r.isCurrentUser)`), false);
+run(`for (let i = 0; i < ROSTER_PRUNE_AT - 50; i++) {
+  noteAllTimeProfile("climber" + i, { handle: "climber" + i, xp: 3000000 + i, level: 200, role: "Archmage" }, 3);
+}`);
+eq("and is pruned like anyone once 100 higher learners are known", run(`Boolean(allTimeRoster.entries.me)`), false);
+eq("leaving exactly the 100 highest", run(`Object.keys(allTimeRoster.entries).length`), run("ROSTER_MAX_ENTRIES"));
+
+run(`noteAllTimeProfile("me", { handle: "me", xp: 9000000, level: 250, role: "Archmage" }, 4)`);
+eq("a viewer who earns a place is highlighted in it",
+  run(`buildAllTimeBoardRows(allTimeRoster, "me").rows.filter((r) => r.isCurrentUser).map((r) => r.position)`), [1]);
 
 if (failures) {
   console.error(`\n${failures} check(s) failed`);

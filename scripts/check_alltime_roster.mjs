@@ -184,11 +184,11 @@ check("seed rows are written highest XP first",
 
 {
   const board = R.buildAllTimeBoardRows(fullRoster(), "user2");
-  eq("25 rows rendered", board.rows.filter((r) => !r.outsideBoard).length, 25);
+  eq("25 rows rendered", board.rows.length, 25);
   eq("observed count reports the whole roster", board.observed, 30);
   eq("shown is capped at the board size", board.shown, 25);
   eq("positions are 1..25 exactly once",
-    JSON.stringify(board.rows.filter((r) => !r.outsideBoard).map((r) => r.position)),
+    JSON.stringify(board.rows.map((r) => r.position)),
     JSON.stringify(Array.from({ length: 25 }, (_, i) => i + 1)));
   check("current user is flagged", board.rows.some((r) => r.isCurrentUser && r.handle === "user2"));
   check("no row claims a gap", board.rows.every((r) => !r.gap));
@@ -232,20 +232,22 @@ check("seed rows are written highest XP first",
   eq("and the comparator is symmetric", R.compareByObservedXp(b, a) < 0, true);
 }
 
-// --- 4. the viewer's own row --------------------------------------------------
+// --- 4. the viewer --------------------------------------------------------------
 
 {
+  // The board is the top 25 observed learners and nothing else. A viewer below
+  // it gets no extra row: there is no objective place Catalyst could give them.
   const roster = fullRoster();
-  roster.entries.me = { ...R.blankEntry("me"), XP: 1, Role: "Sage", Level: 40 };
-  const board = R.buildAllTimeBoardRows(roster, "me");
-  const own = board.rows.filter((r) => r.outsideBoard);
-  eq("a viewer below the board is appended", own.length, 1);
-  eq("with no position, because it cannot be known", own[0].position, null);
-  eq("nothing on the board was displaced", board.rows.filter((r) => !r.outsideBoard).length, 25);
-  eq("a viewer already on the board is not appended",
-    R.buildAllTimeBoardRows(fullRoster(), "user4").rows.filter((r) => r.outsideBoard).length, 0);
-  eq("an unknown viewer adds nothing",
-    R.buildAllTimeBoardRows(fullRoster(), "stranger").rows.filter((r) => r.outsideBoard).length, 0);
+  roster.entries.me = { ...R.blankEntry("me"), XP: 1, Role: "Sage", Level: 40, profileAt: NOW };
+  const below = R.buildAllTimeBoardRows(roster, "me");
+  eq("a viewer below the board adds no row", below.rows.length, 25);
+  check("and nobody is highlighted", !below.rows.some((r) => r.isCurrentUser));
+  eq("every row has a real position", below.rows.every((r) => Number.isInteger(r.position)), true);
+
+  const onBoard = R.buildAllTimeBoardRows(fullRoster(), "user4");
+  eq("a viewer among the top 25 is highlighted in place",
+    JSON.stringify(onBoard.rows.filter((r) => r.isCurrentUser).map((r) => r.position)), JSON.stringify([4]));
+  eq("an unknown viewer changes nothing", R.buildAllTimeBoardRows(fullRoster(), "stranger").rows.length, 25);
 }
 
 // --- 5. admission, eviction and caps ------------------------------------------
@@ -306,7 +308,7 @@ check("seed rows are written highest XP first",
   R.applyRosterObservation(roster, { handle: "user5", XP: before - 50000, profileAt: NOW });
   eq("a reduced XP is written as observed", roster.entries.user5.XP, before - 50000);
   eq("and the board simply re-orders",
-    R.buildAllTimeBoardRows(roster, "").rows.filter((r) => !r.outsideBoard).length, 25);
+    R.buildAllTimeBoardRows(roster, "").rows.length, 25);
 }
 
 // --- 7. refresh queue ---------------------------------------------------------

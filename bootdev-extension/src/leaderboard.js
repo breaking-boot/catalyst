@@ -808,7 +808,7 @@ function _applyAllTimeContent(panel) {
 }
 
 function allTimeCardHTML(it, myXP) {
-  return `<div class="be-leader-card${it.isCurrentUser ? " be-current-user" : ""}${it.outsideBoard ? " be-leader-outside" : ""}">
+  return `<div class="be-leader-card${it.isCurrentUser ? " be-current-user" : ""}">
       <a href="${escapeHtml(it.href || "#")}" class="be-leader-link"${allTimeRowTitleAttr(it)}>
         <span class="be-leader-rank">${escapeHtml(allTimePositionText(it))}</span>
         ${renderLeaderAvatar(it.entry, it.displayName)}
@@ -823,7 +823,6 @@ function allTimeCardHTML(it, myXP) {
 
 function patchAllTimeCard(el, it, myXP) {
   el.classList.toggle("be-current-user", it.isCurrentUser);
-  el.classList.toggle("be-leader-outside", Boolean(it.outsideBoard));
   const link = el.querySelector(".be-leader-link");
   const href = it.href || "#";
   if (link && link.getAttribute("href") !== href) link.setAttribute("href", href);
@@ -845,10 +844,8 @@ function patchAllTimeCard(el, it, myXP) {
 
 // A number here means "Nth highest XP among the learners Catalyst has observed",
 // never a Boot.dev position — Boot.dev stopped publishing those on 2026-08-20.
-// The viewer's appended row has no position at all, because their standing
-// among people Catalyst does not track is exactly what cannot be known.
 function allTimePositionText(it) {
-  return it.outsideBoard || it.position == null ? "you" : String(it.position);
+  return String(it.position);
 }
 
 function allTimeXpText(it) {
@@ -1210,7 +1207,10 @@ function ensureLeaderboardUiState() {
   // All-Time: re-render if it's missing or its current-user highlight dropped.
   if (isFeatureEnabled("allTimeLeaderboard")) {
     const allTime = document.getElementById("be-alltime-leaderboard");
-    const meOnBoard = Boolean(allTimeRoster?.entries?.[normalizeHandle(currentIdentity.handle)]);
+    // On the board means among the rows drawn, not merely in the roster: the
+    // roster holds 100 learners and the board shows 25.
+    const meOnBoard = Boolean(allTimeRoster) &&
+      buildAllTimeBoardRows(allTimeRoster, currentIdentity.handle).rows.some((row) => row.isCurrentUser);
     if (!allTime || (meOnBoard && !allTime.querySelector(".be-current-user"))) {
       renderAllTimeLeaderboard();
     }
