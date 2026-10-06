@@ -148,6 +148,19 @@ function renderToggles() {
 // came out of an uploaded file renders via textContent; file content is
 // untrusted.
 
+// The lead line of an import's confirm step, shared by Backup & restore and
+// the learner-list import. Reading a file changes nothing, but the summary
+// below it reads like a result, so the box says first that nothing has been
+// applied yet. The file name is untrusted and goes in as text.
+function makePendingImportNote(fileName) {
+  const note = document.createElement("p");
+  note.className = "be-import-pending";
+  const lead = document.createElement("strong");
+  lead.textContent = "Not imported yet.";
+  note.append(lead, ` "${fileName}" was read and contains the data below. Nothing on this device changes until you click Import.`);
+  return note;
+}
+
 function makeBackupButton(label, onClick) {
   const btn = document.createElement("button");
   btn.type = "button";
@@ -243,7 +256,7 @@ function renderBackupSection() {
 
     // Confirm step: nothing is written until the user applies.
     pendingData = parsed.data;
-    setStatus(`"${file.name}" contains:`);
+    setStatus([]);
 
     const list = document.createElement("ul");
     for (const line of summarizeBackup(parsed.data)) {
@@ -279,7 +292,7 @@ function renderBackupSection() {
     const confirmActions = document.createElement("div");
     confirmActions.className = "be-backup-actions";
     confirmActions.append(applyBtn, cancelBtn);
-    confirmBox.replaceChildren(list, confirmActions);
+    confirmBox.replaceChildren(makePendingImportNote(file.name), list, confirmActions);
     confirmBox.hidden = false;
   });
 
@@ -387,7 +400,7 @@ function renderObservedShareSection() {
     const roster = await backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY);
     const preview = previewObservedLearnersImport(roster, parsed.learners);
     pendingLearners = parsed.learners;
-    setStatus(`"${file.name}" contains:`);
+    setStatus([]);
 
     const lines = [
       `${preview.listed} learner${preview.listed === 1 ? "" : "s"}` +
@@ -432,7 +445,7 @@ function renderObservedShareSection() {
     const confirmActions = document.createElement("div");
     confirmActions.className = "be-backup-actions";
     confirmActions.append(applyBtn, cancelBtn);
-    confirmBox.replaceChildren(list, confirmActions);
+    confirmBox.replaceChildren(makePendingImportNote(file.name), list, confirmActions);
     confirmBox.hidden = false;
   });
 
