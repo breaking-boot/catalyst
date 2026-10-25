@@ -45,7 +45,7 @@ const sandbox = {
   queueMicrotask: () => {},
 };
 vm.createContext(sandbox);
-for (const file of ["utils.js", "alltime-seed.js", "allTimeRoster.js", "leaderboard.js"]) {
+for (const file of ["utils.js", "observed-learners.js", "alltime-seed.js", "allTimeRoster.js", "leaderboard.js"]) {
   const url = new URL(file, SRC);
   vm.runInContext(readFileSync(url, "utf8"), sandbox, { filename: fileURLToPath(url) });
 }

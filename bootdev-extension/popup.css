@@ -216,6 +216,23 @@ body.be-settings-options main {
   border-radius: 6px;
   background: rgba(17, 24, 39, 0.55);
 }
+/* Lead line of an import's confirm step: the file was read, nothing applied
+   yet. Gold, like the rest of the confirm box, but filled so it reads before
+   the summary does. boot.dev --yellow-400 / --yellow-150 (bootdev_palette.css). */
+.be-import-pending {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-left: 3px solid #e5ae3c;
+  border-radius: 2px;
+  background: rgba(229, 174, 60, 0.12);
+  color: #fde9b0;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.be-import-pending strong {
+  color: #fff;
+  font-weight: 700;
+}
 .be-backup-confirm ul {
   margin: 0;
   padding-left: 18px;

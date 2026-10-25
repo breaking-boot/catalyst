@@ -3,7 +3,9 @@
 // It reads/writes the same be_settings object in chrome.storage.sync that the
 // content script's settings.js consumes; the content script live-applies changes
 // via storage.onChanged. Renders whichever containers the host page provides:
-// #be-features (always), #be-comparison-boards + #be-update-settings (options only).
+// #be-features (always); #be-personal-boards, #be-comparison-boards,
+// #be-observed-settings, #be-observed-share, #be-backup and #be-update-settings
+// (options page only).
 //
 // No inline script/handlers (popup runs under the default MV3 CSP). Defaults,
 // feature labels, and board ordering come from settings-schema.js, the single
@@ -14,7 +16,8 @@ const SETTINGS_KEY = "be_settings";
 const DEFAULTS = SETTINGS_DEFAULTS;
 const FEATURES = FEATURE_TOGGLES;
 
-// Options-page-only opt-in. Default OFF; the only setting that reaches off-device.
+// Options-page-only opt-in. Default OFF because it reaches off-device, like the
+// published learner list in OBSERVED_BOARD_TOGGLES.
 const UPDATE_SETTINGS = [
   {
     key: "versionCheck",
@@ -91,6 +94,7 @@ function makeToggle({ key, label, desc, shortDesc }) {
 const DEPENDENT_SECTIONS = {
   comparisons: "be-comparison-boards",
   personalLeaderboards: "be-personal-boards",
+  allTimeLeaderboard: "be-observed-settings",
 };
 
 function updateDependentSectionStates() {
@@ -129,6 +133,9 @@ function renderToggles() {
   const boards = document.getElementById("be-comparison-boards");
   if (boards) boards.replaceChildren(...COMPARISON_BOARDS.map(makeToggle));
 
+  const observed = document.getElementById("be-observed-settings");
+  if (observed) observed.replaceChildren(...OBSERVED_BOARD_TOGGLES.map(makeToggle));
+
   const updates = document.getElementById("be-update-settings");
   if (updates) updates.replaceChildren(...UPDATE_SETTINGS.map(makeToggle));
 
@@ -140,6 +147,19 @@ function renderToggles() {
 // owns the file format and merge logic — exist only there). Every string that
 // came out of an uploaded file renders via textContent; file content is
 // untrusted.
+
+// The lead line of an import's confirm step, shared by Backup & restore and
+// the learner-list import. Reading a file changes nothing, but the summary
+// below it reads like a result, so the box says first that nothing has been
+// applied yet. The file name is untrusted and goes in as text.
+function makePendingImportNote(fileName) {
+  const note = document.createElement("p");
+  note.className = "be-import-pending";
+  const lead = document.createElement("strong");
+  lead.textContent = "Not imported yet.";
+  note.append(lead, ` "${fileName}" was read and contains the data below. Nothing on this device changes until you click Import.`);
+  return note;
+}
 
 function makeBackupButton(label, onClick) {
   const btn = document.createElement("button");
@@ -236,7 +256,7 @@ function renderBackupSection() {
 
     // Confirm step: nothing is written until the user applies.
     pendingData = parsed.data;
-    setStatus(`"${file.name}" contains:`);
+    setStatus([]);
 
     const list = document.createElement("ul");
     for (const line of summarizeBackup(parsed.data)) {
@@ -272,7 +292,7 @@ function renderBackupSection() {
     const confirmActions = document.createElement("div");
     confirmActions.className = "be-backup-actions";
     confirmActions.append(applyBtn, cancelBtn);
-    confirmBox.replaceChildren(list, confirmActions);
+    confirmBox.replaceChildren(makePendingImportNote(file.name), list, confirmActions);
     confirmBox.hidden = false;
   });
 
@@ -280,10 +300,186 @@ function renderBackupSection() {
   host.replaceChildren(actions, confirmBox, status);
 }
 
+// ---------------------------------------------------------------------------
+// Top Observed Learners: export / import (options page only). The list format
+// and the merge rule live in src/observed-learners.js, which the bundled seed
+// and the opt-in fetch also go through. Kept apart from Backup & restore on
+// purpose: a backup is the user's own data, a learner list is public data
+// about other people, and sending one must never send the other.
+
+function datedFileName(prefix) {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${prefix}-${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}.json`;
+}
+
+function renderObservedShareSection() {
+  const host = document.getElementById("be-observed-share");
+  if (!host) return;
+
+  const actions = document.createElement("div");
+  actions.className = "be-backup-actions";
+
+  const confirmBox = document.createElement("div");
+  confirmBox.className = "be-backup-confirm";
+  confirmBox.hidden = true;
+
+  const status = document.createElement("div");
+  status.className = "be-backup-status";
+  status.setAttribute("role", "status");
+
+  let pendingLearners = null;
+
+  const setStatus = (lines, isError = false) => {
+    status.classList.toggle("be-backup-error", isError);
+    status.replaceChildren(
+      ...[].concat(lines).filter(Boolean).map((line) => {
+        const p = document.createElement("p");
+        p.textContent = line;
+        return p;
+      })
+    );
+  };
+
+  const clearConfirm = () => {
+    pendingLearners = null;
+    confirmBox.hidden = true;
+    confirmBox.replaceChildren();
+  };
+
+  const exportBtn = makeBackupButton("Export learners", async () => {
+    exportBtn.disabled = true;
+    try {
+      const roster = await backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY);
+      const list = buildObservedLearners(rosterToObservedLearners(roster));
+      clearConfirm();
+      if (!list.learners.length) {
+        setStatus("Catalyst has not observed any learners yet. Open Boot.dev's leaderboard first.", true);
+        return;
+      }
+      const blob = new Blob([stringifyObservedLearners(list)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = datedFileName("catalyst-observed-learners");
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      setStatus(`Exported ${list.learners.length} learners to ${a.download}.`);
+    } catch (err) {
+      setStatus(`Export failed: ${err?.message || err}`, true);
+    } finally {
+      exportBtn.disabled = false;
+    }
+  });
+
+  const fileInput = document.createElement("input");
+  fileInput.type = "file";
+  fileInput.accept = ".json,application/json";
+  fileInput.hidden = true;
+
+  const importBtn = makeBackupButton("Import learners…", () => fileInput.click());
+
+  fileInput.addEventListener("change", async () => {
+    const file = fileInput.files?.[0];
+    fileInput.value = ""; // so the same file can be re-picked later
+    if (!file) return;
+    clearConfirm();
+
+    let parsed;
+    try {
+      parsed = parseObservedLearners(await file.text());
+    } catch (_) {
+      parsed = { error: "Could not read the file." };
+    }
+    if (parsed.error) {
+      setStatus(parsed.error, true);
+      return;
+    }
+
+    // Confirm step: nothing is written until the user applies.
+    const roster = await backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY);
+    const preview = previewObservedLearnersImport(roster, parsed.learners);
+    pendingLearners = parsed.learners;
+    setStatus([]);
+
+    const lines = [
+      `${preview.listed} learner${preview.listed === 1 ? "" : "s"}` +
+        (parsed.skipped ? ` (${parsed.skipped} unreadable row${parsed.skipped === 1 ? "" : "s"} skipped)` : ""),
+      `${preview.added} not on this device yet, ${preview.kept} of whom make your top 100`,
+      `${preview.updated} with a newer XP reading than this device has`,
+    ];
+    const list = document.createElement("ul");
+    for (const line of lines) {
+      const li = document.createElement("li");
+      li.textContent = line;
+      list.appendChild(li);
+    }
+
+    const applyBtn = makeBackupButton("Import", async () => {
+      const learners = pendingLearners;
+      clearConfirm();
+      if (!learners) return;
+      setStatus("Importing…");
+      try {
+        // Re-read: a Boot.dev tab may have written since the preview.
+        const stored = await backupStorageGet("local", OBSERVED_ROSTER_STORAGE_KEY);
+        const { roster, kept, updated } = importObservedLearnersIntoStoredRoster(stored, learners);
+        const ok = await backupStorageSet("local", OBSERVED_ROSTER_STORAGE_KEY, roster);
+        setStatus(ok
+          ? [
+              `Imported: ${kept} learner${kept === 1 ? "" : "s"} added, ${updated} updated.`,
+              "Open Boot.dev tabs pick the change up on their own.",
+            ]
+          : "The learners could not be saved.", !ok);
+      } catch (err) {
+        setStatus(`Import failed: ${err?.message || err}`, true);
+      }
+    });
+    applyBtn.classList.add("be-backup-primary");
+
+    const cancelBtn = makeBackupButton("Cancel", () => {
+      clearConfirm();
+      setStatus("Import cancelled. Nothing was changed.");
+    });
+
+    const confirmActions = document.createElement("div");
+    confirmActions.className = "be-backup-actions";
+    confirmActions.append(applyBtn, cancelBtn);
+    confirmBox.replaceChildren(makePendingImportNote(file.name), list, confirmActions);
+    confirmBox.hidden = false;
+  });
+
+  actions.append(exportBtn, importBtn, fileInput);
+  host.replaceChildren(actions, confirmBox, status);
+}
+
+// One line under the toggle saying when the published list was last applied,
+// read from the state the content script records (allTimeRoster.js) — keep the
+// key in sync. It is the only visible sign the opt-in is doing anything.
+const OBSERVED_LIST_STATE_KEY = "be_observed_list_fetch";
+
+async function renderObservedListStatus() {
+  const el = document.getElementById("be-observed-list-status");
+  if (!el) return;
+  const state = await backupStorageGet("local", OBSERVED_LIST_STATE_KEY);
+  const when = (ms) => new Date(ms).toLocaleString();
+  let text = "";
+  if (Number.isFinite(state?.appliedAt)) {
+    const dated = Number.isFinite(state.listGeneratedAt) ? `, list dated ${when(state.listGeneratedAt)}` : "";
+    text = `Published list last applied ${when(state.appliedAt)}: ${state.learners ?? 0} learners${dated}.`;
+  } else if (Number.isFinite(state?.checkedAt)) {
+    text = `Last checked ${when(state.checkedAt)}; no usable list was found. Catalyst tries again a day later.`;
+  }
+  el.textContent = text;
+  el.hidden = !text;
+}
+
 function render() {
   renderToggles();
   renderVersionBanner();
   renderBackupSection();
+  renderObservedShareSection();
+  void renderObservedListStatus();
 
   const openOptions = document.getElementById("be-open-options");
   if (openOptions) {

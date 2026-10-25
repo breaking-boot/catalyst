@@ -8,14 +8,14 @@
 // Exits non-zero on any failure (same spirit as the node --check gate).
 //
 // Why this exists: /v1/leaderboard_xp/alltime was removed on 2026-08-14, so the
-// board is now assembled from per-user rank observations plus a bundled seed.
-// Four of its rules are the kind that fail silently and look healthy:
+// board is assembled from XP sightings plus a bundled seed. Four of its rules
+// are the kind that fail silently and look healthy:
 //
 //   1. Entries NEVER expire. A TTL schedules a refresh; it must never turn a
 //      known learner into an unknown, or a board left alone for a month decays
 //      into a page of gaps.
 //   2. Ordering comes from lifetime XP ALONE. Boot.dev removed the per-user
-//      rank on 2026-08-20, so a stored rank is provenance and must never
+//      rank on 2026-08-20; a rank left in an older stored roster must never
 //      influence the displayed order.
 //   3. Equal XP orders deterministically, or rows swap between renders.
 //   4. A falling XP is stored, not clamped. Staff can reduce XP for cheating;
@@ -28,20 +28,39 @@ import vm from "node:vm";
 const SRC = new URL("../bootdev-extension/src/", import.meta.url);
 
 const testHook = {};
+// Backing store and switches for the published-list fetch (section 11).
+const storage = {};
+const flags = {};
+let fetchImpl = async () => { throw new Error("fetch not expected here"); };
 const sandbox = {
   window: { __BOOTDEV_ENHANCER_TEST__: testHook },
   document: { addEventListener() {}, removeEventListener() {}, getElementById: () => null },
   location: { origin: "https://www.boot.dev", pathname: "/leaderboard" },
-  console,
+  console: { ...console, warn() {} },
   URL,
-  chrome: { runtime: { getURL: (p) => `chrome-extension://catalyst-test/${p}` } },
+  atob,
+  TextDecoder,
+  fetch: (...args) => fetchImpl(...args),
+  isFeatureEnabled: (key) => flags[key] !== false,
+  renderAllTimeLeaderboard() {},
+  // leaderboard.js is not loaded here; it owns these on the real page.
+  currentUserHandle: "",
+  chrome: {
+    runtime: { getURL: (p) => `chrome-extension://catalyst-test/${p}` },
+    storage: {
+      local: {
+        get: (key, cb) => cb({ [key]: storage[key] === undefined ? undefined : JSON.parse(JSON.stringify(storage[key])) }),
+        set: (obj, cb) => { Object.assign(storage, JSON.parse(JSON.stringify(obj))); cb && cb(); },
+      },
+    },
+  },
   setTimeout: () => 0,
   clearTimeout() {},
   setInterval: () => 0,
   clearInterval() {},
 };
 vm.createContext(sandbox);
-for (const file of ["utils.js", "alltime-seed.js", "allTimeRoster.js"]) {
+for (const file of ["utils.js", "observed-learners.js", "alltime-seed.js", "allTimeRoster.js"]) {
   const url = new URL(file, SRC);
   vm.runInContext(readFileSync(url, "utf8"), sandbox, { filename: fileURLToPath(url) });
 }
@@ -55,6 +74,7 @@ if (!R) {
 // lexical scope rather than on the sandbox object — read it by evaluating its
 // name in the same context.
 const SEED = vm.runInContext("ALLTIME_SEED", sandbox);
+const L = testHook.observedLearners;
 
 // --- tiny assert -------------------------------------------------------------
 
@@ -72,20 +92,18 @@ const HOUR = 60 * 60 * 1000;
 const DAY = 24 * HOUR;
 const NOW = Date.parse("2026-09-01T12:00:00Z");
 
-// A complete, freshly observed board: ranks 1..25, XP descending, plus the
-// watchlist. Mirrors the shape the bundled seed produces.
-function fullRoster({ rankAt = NOW - HOUR, profileAt = NOW - HOUR, through = 30 } = {}) {
+// A complete, freshly observed board: userN holds the Nth highest XP, plus a
+// watchlist underneath.
+function fullRoster({ profileAt = NOW - HOUR, through = 30 } = {}) {
   const roster = R.emptyRoster();
-  for (let rank = 1; rank <= through; rank++) {
-    const handle = `user${rank}`;
+  for (let n = 1; n <= through; n++) {
+    const handle = `user${n}`;
     roster.entries[handle] = {
       ...R.blankEntry(handle),
-      FirstName: `User${rank}`,
+      FirstName: `User${n}`,
       Role: "Archmage",
-      Level: 200 - rank,
-      XP: 2_000_000 - rank * 10_000,
-      rank,
-      rankAt,
+      Level: 200 - n,
+      XP: 2_000_000 - n * 10_000,
       profileAt,
     };
   }
@@ -94,49 +112,71 @@ function fullRoster({ rankAt = NOW - HOUR, profileAt = NOW - HOUR, through = 30 
 
 // --- 1. seed integrity -------------------------------------------------------
 
-check("seed exists", Boolean(SEED && Array.isArray(SEED.entries)));
+check("seed exists", Boolean(SEED && Array.isArray(SEED.learners)));
 check("seed generatedAt parses", Number.isFinite(Date.parse(SEED.generatedAt)));
-eq("seed cutoff is documented", SEED.cutoffRank, 30);
-check("seed is trimmed to the cutoff", SEED.entries.every((e) => e.rank <= SEED.cutoffRank),
-  "the raw snapshot also holds handles at ranks 402-977; those must not ship");
-check("seed ranks are unique", new Set(SEED.entries.map((e) => e.rank)).size === SEED.entries.length);
-check("seed entries all have a handle and integer rank",
-  SEED.entries.every((e) => typeof e.handle === "string" && e.handle && Number.isInteger(e.rank)));
-const seedTop = new Set(SEED.entries.filter((e) => e.rank <= 25).map((e) => e.rank));
-eq("seed covers all 25 board positions", seedTop.size, 25);
-check("seed carries no unexpected fields", SEED.entries.every((e) =>
-  Object.keys(e).every((k) =>
-    ["handle", "rank", "rankAt", "xp", "firstName", "lastName", "role", "level", "profileImageURL"].includes(k))));
+{
+  const parsed = L.parseObservedLearners(SEED);
+  check("seed is a list the extension accepts", !parsed.error, parsed.error);
+  eq("no seed row is malformed", parsed.skipped, 0);
+}
+check("seed carries handles, XP and read times only", SEED.learners.every((e) =>
+  Object.keys(e).every((k) => ["handle", "xp", "at"].includes(k))),
+  "names, avatars, level, role and rank are fetched or derived, never shipped");
+eq("seed handles are unique", new Set(SEED.learners.map((e) => e.handle)).size, SEED.learners.length);
+check("seed holds at most the list maximum", SEED.learners.length <= L.constants.OBSERVED_LEARNERS_MAX);
+check("seed rows are written highest XP first",
+  SEED.learners.every((e, i, arr) => i === 0 || arr[i - 1].xp >= e.xp));
 
 // --- 2. merge: newest observation wins ---------------------------------------
 
 {
-  const older = { handle: "a", rank: 5, rankAt: NOW - DAY, XP: 100, profileAt: NOW - DAY };
-  const newer = { handle: "a", rank: 6, rankAt: NOW, XP: 200, profileAt: NOW };
+  const older = { handle: "a", XP: 100, profileAt: NOW - DAY };
+  const newer = { handle: "a", XP: 200, profileAt: NOW };
 
   const forward = R.mergeRosterObservation(R.mergeRosterObservation(null, older), newer);
-  eq("newer rank wins", forward.rank, 6);
   eq("newer XP wins", forward.XP, 200);
 
   const backward = R.mergeRosterObservation(R.mergeRosterObservation(null, newer), older);
-  eq("older rank loses", backward.rank, 6);
   eq("older XP loses", backward.XP, 200);
+  check("a merged entry carries no rank", !("rank" in backward) && !("rankAt" in backward));
 }
 
 {
   // A fresher bundled seed must upgrade a stale stored row; a stale seed must
   // never clobber fresher data. Both fall out of the same comparison.
-  const roster = R.emptyRoster();
-  const seed = { generatedAt: new Date(NOW).toISOString(), entries: [{ handle: "a", rank: 3, xp: 500, role: "Archmage", level: 150 }] };
+  const iso = (ms) => new Date(ms).toISOString();
+  const seed = {
+    format: L.constants.OBSERVED_LEARNERS_FORMAT,
+    version: L.constants.OBSERVED_LEARNERS_VERSION,
+    generatedAt: iso(NOW),
+    learners: [{ handle: "a", xp: 500, at: iso(NOW) }, { handle: "newcomer", xp: 400, at: iso(NOW) }],
+  };
 
-  roster.entries.a = { ...R.blankEntry("a"), rank: 9, rankAt: NOW - DAY, XP: 100, profileAt: NOW - DAY };
+  const roster = R.emptyRoster();
+  roster.entries.a = { ...R.blankEntry("a"), FirstName: "Ann", XP: 100, profileAt: NOW - DAY };
   R.applySeedToRoster(roster, seed);
-  eq("fresher seed upgrades a stale row", roster.entries.a.rank, 3);
+  eq("fresher seed upgrades a stale row", roster.entries.a.XP, 500);
+  eq("and keeps the display fields it does not carry", roster.entries.a.FirstName, "Ann");
+  eq("a learner only the seed knows is added", roster.entries.newcomer?.XP, 400);
+  eq("with the read time the seed gives it", roster.entries.newcomer?.profileAt, NOW);
 
   const roster2 = R.emptyRoster();
-  roster2.entries.a = { ...R.blankEntry("a"), rank: 9, rankAt: NOW + DAY, XP: 100, profileAt: NOW + DAY };
+  roster2.entries.a = { ...R.blankEntry("a"), XP: 100, profileAt: NOW + DAY };
   R.applySeedToRoster(roster2, seed);
-  eq("stale seed loses to fresher data", roster2.entries.a.rank, 9);
+  eq("stale seed loses to fresher data", roster2.entries.a.XP, 100);
+
+  const roster3 = R.emptyRoster();
+  check("a list in an unknown format changes nothing",
+    !R.applySeedToRoster(roster3, { ...seed, format: "something-else" }) && !Object.keys(roster3.entries).length);
+}
+
+{
+  // Rosters stored before v0.16.0 carry a rank per entry. It must not survive
+  // the load, or something could start reading it again.
+  const stored = { entries: { old: { Handle: "old", XP: 5, profileAt: NOW, rank: 3, rankAt: NOW } } };
+  const loaded = R.normalizeStoredRoster(stored);
+  check("a stored rank is dropped on load", !("rank" in loaded.entries.old) && !("rankAt" in loaded.entries.old));
+  eq("and the XP reading is kept", loaded.entries.old.XP, 5);
 }
 
 
@@ -144,11 +184,11 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
 
 {
   const board = R.buildAllTimeBoardRows(fullRoster(), "user2");
-  eq("25 rows rendered", board.rows.filter((r) => !r.outsideBoard).length, 25);
+  eq("25 rows rendered", board.rows.length, 25);
   eq("observed count reports the whole roster", board.observed, 30);
   eq("shown is capped at the board size", board.shown, 25);
   eq("positions are 1..25 exactly once",
-    JSON.stringify(board.rows.filter((r) => !r.outsideBoard).map((r) => r.position)),
+    JSON.stringify(board.rows.map((r) => r.position)),
     JSON.stringify(Array.from({ length: 25 }, (_, i) => i + 1)));
   check("current user is flagged", board.rows.some((r) => r.isCurrentUser && r.handle === "user2"));
   check("no row claims a gap", board.rows.every((r) => !r.gap));
@@ -157,17 +197,18 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
 {
   // THE INVARIANT, unchanged by the pivot: staleness schedules work, it never
   // subtracts knowledge. A roster nobody has refreshed still renders in full.
-  const board = R.buildAllTimeBoardRows(fullRoster({ rankAt: 1, profileAt: 1 }), "");
+  const board = R.buildAllTimeBoardRows(fullRoster({ profileAt: 1 }), "");
   eq("an entirely stale roster still yields 25 rows", board.rows.length, 25);
 }
 
 {
-  // Ordering comes from XP alone now. A stored rank is provenance and must NOT
-  // influence the order — that is the whole pivot, so it gets a direct test.
+  // Ordering comes from XP alone. A rank left over in memory from an older
+  // roster must NOT influence the order — that is the whole pivot, so it gets
+  // a direct test.
   const roster = fullRoster();
   roster.entries.user20.XP = 9999999;
   roster.entries.user20.rank = 20;
-  eq("XP decides the order, not the stored rank",
+  eq("XP decides the order, not a leftover rank",
     R.buildAllTimeBoardRows(roster, "").rows[0].handle, "user20");
 }
 
@@ -191,48 +232,72 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
   eq("and the comparator is symmetric", R.compareByObservedXp(b, a) < 0, true);
 }
 
-// --- 4. the viewer's own row --------------------------------------------------
+// --- 4. the viewer --------------------------------------------------------------
 
 {
+  // The board is the top 25 observed learners and nothing else. A viewer below
+  // it gets no extra row: there is no objective place Catalyst could give them.
   const roster = fullRoster();
-  roster.entries.me = { ...R.blankEntry("me"), XP: 1, Role: "Sage", Level: 40 };
-  const board = R.buildAllTimeBoardRows(roster, "me");
-  const own = board.rows.filter((r) => r.outsideBoard);
-  eq("a viewer below the board is appended", own.length, 1);
-  eq("with no position, because it cannot be known", own[0].position, null);
-  eq("nothing on the board was displaced", board.rows.filter((r) => !r.outsideBoard).length, 25);
-  eq("a viewer already on the board is not appended",
-    R.buildAllTimeBoardRows(fullRoster(), "user4").rows.filter((r) => r.outsideBoard).length, 0);
-  eq("an unknown viewer adds nothing",
-    R.buildAllTimeBoardRows(fullRoster(), "stranger").rows.filter((r) => r.outsideBoard).length, 0);
+  roster.entries.me = { ...R.blankEntry("me"), XP: 1, Role: "Sage", Level: 40, profileAt: NOW };
+  const below = R.buildAllTimeBoardRows(roster, "me");
+  eq("a viewer below the board adds no row", below.rows.length, 25);
+  check("and nobody is highlighted", !below.rows.some((r) => r.isCurrentUser));
+  eq("every row has a real position", below.rows.every((r) => Number.isInteger(r.position)), true);
+
+  const onBoard = R.buildAllTimeBoardRows(fullRoster(), "user4");
+  eq("a viewer among the top 25 is highlighted in place",
+    JSON.stringify(onBoard.rows.filter((r) => r.isCurrentUser).map((r) => r.position)), JSON.stringify([4]));
+  eq("an unknown viewer changes nothing", R.buildAllTimeBoardRows(fullRoster(), "stranger").rows.length, 25);
 }
 
 // --- 5. admission, eviction and caps ------------------------------------------
 
 {
-  const roster = fullRoster();
-  eq("the admission floor is the lowest retained XP",
-    R.admissionThresholdXp(roster), roster.entries.user30.XP);
-  check("a handle above the floor is admitted", R.applyRosterObservation(roster,
-    { handle: "climber", XP: roster.entries.user30.XP + 1, profileAt: NOW, candidate: true }));
+  const MAX = R.constants.ROSTER_MAX_ENTRIES;
+  eq("an empty roster admits anyone", R.admissionThresholdXp(R.emptyRoster()), null);
+  eq("below capacity anyone is admitted, however low", R.admissionThresholdXp(fullRoster()), null);
+
+  const full = fullRoster({ through: MAX });
+  const bar = full.entries[`user${MAX}`].XP;
+  eq("at capacity a newcomer must beat the last retained place", R.admissionThresholdXp(full), bar);
+  eq("past capacity the bar is still the last retained place",
+    R.admissionThresholdXp(fullRoster({ through: MAX + 5 })), bar);
+  check("a handle above the bar is admitted", R.applyRosterObservation(full,
+    { handle: "climber", XP: bar + 1, profileAt: NOW, candidate: true }));
 
   const roster2 = fullRoster();
   check("an unknown handle with no admission decision is refused",
     !R.applyRosterObservation(roster2, { handle: "nobody", XP: 10, profileAt: NOW }));
   check("and is not stored", !roster2.entries.nobody);
-  eq("an empty roster has no floor", R.admissionThresholdXp(R.emptyRoster()), null);
 }
 
 {
-  // Pruning keeps the highest XP now that rank cannot order the store.
-  const roster = fullRoster();
-  for (let i = 0; i < 60; i++) {
-    R.applyRosterObservation(roster, { handle: "cand" + i, XP: 1 + i, profileAt: NOW, candidate: true });
+  // Hysteresis: the roster runs past capacity to the prune point, then is cut
+  // back to capacity by XP, so someone at the boundary is not dropped and
+  // re-admitted on alternate sightings.
+  const { ROSTER_MAX_ENTRIES: MAX, ROSTER_PRUNE_AT: PRUNE_AT } = R.constants;
+  const roster = fullRoster({ through: MAX });
+  for (let i = 0; i < PRUNE_AT - MAX; i++) {
+    R.applyRosterObservation(roster, { handle: "low" + i, XP: 1 + i, profileAt: NOW, candidate: true });
   }
-  check("total entries are capped",
-    Object.keys(roster.entries).length <= R.constants.ROSTER_MAX_ENTRIES,
-    "got " + Object.keys(roster.entries).length);
-  check("the seeded top survives a flood of low-XP candidates", Boolean(roster.entries.user1));
+  eq("the roster may run past capacity up to the prune point", Object.keys(roster.entries).length, PRUNE_AT);
+  R.applyRosterObservation(roster, { handle: "one-more", XP: 5_000_000, profileAt: NOW, candidate: true });
+  eq("passing the prune point cuts back to capacity", Object.keys(roster.entries).length, MAX);
+  check("the lowest XP is what goes", !roster.entries.low0 && !roster.entries.low9);
+  check("a newcomer above everyone stays", Boolean(roster.entries["one-more"]));
+  check("the top survives a flood of low-XP candidates", Boolean(roster.entries.user1));
+}
+
+{
+  // Two tabs each holding a full roster union past capacity; the merge prunes.
+  const { ROSTER_MAX_ENTRIES: MAX, ROSTER_PRUNE_AT: PRUNE_AT } = R.constants;
+  const mine = fullRoster({ through: MAX });
+  const theirs = R.emptyRoster();
+  for (let i = 0; i < MAX; i++) theirs.entries["other" + i] = { ...R.blankEntry("other" + i), XP: 10 + i, profileAt: NOW };
+  const merged = R.mergeRosters(mine, theirs);
+  check("a cross-tab union is pruned", Object.keys(merged.entries).length <= PRUNE_AT,
+    "got " + Object.keys(merged.entries).length);
+  check("keeping the highest XP", Boolean(merged.entries.user1) && !merged.entries.other0);
 }
 
 // --- 6. a falling XP is stored, never clamped ---------------------------------
@@ -243,7 +308,7 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
   R.applyRosterObservation(roster, { handle: "user5", XP: before - 50000, profileAt: NOW });
   eq("a reduced XP is written as observed", roster.entries.user5.XP, before - 50000);
   eq("and the board simply re-orders",
-    R.buildAllTimeBoardRows(roster, "").rows.filter((r) => !r.outsideBoard).length, 25);
+    R.buildAllTimeBoardRows(roster, "").rows.length, 25);
 }
 
 // --- 7. refresh queue ---------------------------------------------------------
@@ -278,6 +343,31 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
     cursor = result.cursor;
   }
   eq("the whole roster is covered within a handful of loads", seen.size, 30);
+}
+
+{
+  // The cold ring: everyone below the hot ring, a couple per pass, and only
+  // learners not read for a while.
+  const { ROSTER_HOT_SIZE: HOT, ROSTER_COLD_SLICE: COLD, ROSTER_XP_SLICE: SLICE } = R.constants;
+  const tail = 30;
+  eq("a recently read tail costs nothing",
+    R.pickXpRefreshTargets(fullRoster({ through: HOT + tail }), { now: NOW }).targets.length, SLICE);
+
+  const stale = fullRoster({ through: HOT + tail, profileAt: NOW - 2 * DAY });
+  const first = R.pickXpRefreshTargets(stale, { now: NOW });
+  eq("a stale tail gets its cold slice", first.targets.length, SLICE + COLD);
+  check("cold picks come from below the hot ring",
+    first.targets.slice(SLICE).every((h) => Number(h.slice(4)) > HOT), first.targets.join(","));
+
+  const seen = new Set();
+  let coldCursor = 0;
+  for (let pass = 0; pass < Math.ceil(tail / COLD); pass++) {
+    stale.coldCursor = coldCursor;
+    const result = R.pickXpRefreshTargets(stale, { now: NOW });
+    for (const handle of result.targets.slice(SLICE)) seen.add(handle);
+    coldCursor = result.coldCursor;
+  }
+  eq("the cold cursor walks the whole tail", seen.size, tail);
 }
 
 {
@@ -349,6 +439,137 @@ check("seed carries no unexpected fields", SEED.entries.every((e) =>
   eq("every seeded row carries XP", board.rows.filter((r) => r.xp == null).length, 0);
   check("seeded rows are ordered by XP descending",
     board.rows.every((r, i, arr) => i === 0 || arr[i - 1].xp >= r.xp));
+}
+
+// --- 10. display fill ----------------------------------------------------------
+
+{
+  // Only the rows the board is about to show are filled, and only those never
+  // read: a seeded row has handle and XP but no name, avatar, role or level.
+  const roster = fullRoster({ through: 40 });
+  for (const n of [3, 10, 30, 35]) {
+    roster.entries[`user${n}`] = { ...R.blankEntry(`user${n}`), XP: roster.entries[`user${n}`].XP, profileAt: NOW };
+  }
+  eq("visible rows without display fields are picked, the tail is not",
+    JSON.stringify(R.pickDisplayFillTargets(roster)), JSON.stringify(["user3", "user10"]));
+  eq("a row already asked for this session is not asked for again",
+    JSON.stringify(R.pickDisplayFillTargets(roster, new Set(["user3"]))), JSON.stringify(["user10"]));
+  check("a row with a level but no avatar counts as read",
+    !R.needsDisplayFields({ ...R.blankEntry("x"), Level: 150 }));
+  check("a fresh install's seed fills at most one board's worth",
+    R.pickDisplayFillTargets((() => { const r = R.emptyRoster(); R.applySeedToRoster(r); return r; })()).length
+      <= R.constants.ALLTIME_BOARD_SIZE);
+}
+
+// --- 11. the published list (opt-in fetch) ----------------------------------------
+
+{
+  const run = (code) => vm.runInContext(code, sandbox);
+  const iso = (ms) => new Date(ms).toISOString();
+  const T = Date.now();
+  const published = {
+    format: L.constants.OBSERVED_LEARNERS_FORMAT,
+    version: L.constants.OBSERVED_LEARNERS_VERSION,
+    generatedAt: iso(T - HOUR),
+    learners: [
+      { handle: "kat", xp: 2_000_000, at: iso(T - HOUR) },
+      { handle: "newtop", xp: 1_900_000, at: iso(T - HOUR) },
+    ],
+  };
+  let requests = 0;
+  const respondWith = (list) => {
+    fetchImpl = async (url) => {
+      requests += 1;
+      check("only the repository's contents API is asked", url.startsWith("https://api.github.com/repos/"), url);
+      const content = Buffer.from(JSON.stringify(list)).toString("base64").replace(/(.{60})/g, "$1\n");
+      return { ok: true, status: 200, json: async () => ({ encoding: "base64", content }) };
+    };
+  };
+  const reset = () => {
+    for (const key of Object.keys(storage)) delete storage[key];
+    requests = 0;
+    run(`allTimeRoster = emptyRoster();
+      allTimeRoster.entries.kat = { ...blankEntry("kat"), FirstName: "Kat", XP: 2_100_000, profileAt: ${T} };`);
+  };
+
+  reset();
+  respondWith(published);
+  flags.observedListFetch = false;
+  await run("maybeFetchObservedList()");
+  eq("nothing is fetched while the opt-in is off", requests, 0);
+
+  flags.observedListFetch = true;
+  await run("maybeFetchObservedList()");
+  eq("switched on, the list is fetched once", requests, 1);
+  eq("its new learner is added", run("allTimeRoster.entries.newtop?.XP"), 1_900_000);
+  eq("an older list reading never lowers a fresher local one", run("allTimeRoster.entries.kat.XP"), 2_100_000);
+  eq("and the state records what was applied", storage.be_observed_list_fetch?.learners, 2);
+
+  await run("maybeFetchObservedList()");
+  eq("a second call the same day does not fetch", requests, 1);
+
+  reset();
+  fetchImpl = async () => { requests += 1; return { ok: false, status: 404, json: async () => ({}) }; };
+  await run("maybeFetchObservedList()");
+  check("a failed fetch is recorded, so it waits a day", Number.isFinite(storage.be_observed_list_fetch?.checkedAt));
+  check("and changes nothing", !run("allTimeRoster.entries.newtop"));
+
+  reset();
+  respondWith({ ...published, version: published.version + 1 });
+  await run("maybeFetchObservedList()");
+  check("a list in a newer format is not applied", !run("allTimeRoster.entries.newtop"));
+
+  reset();
+  flags.allTimeLeaderboard = false;
+  respondWith(published);
+  await run("maybeFetchObservedList()");
+  eq("nothing is fetched while the board is off", requests, 0);
+  flags.allTimeLeaderboard = true;
+}
+
+// --- 12. new-learner alerts ---------------------------------------------------------
+
+{
+  const run = (code) => vm.runInContext(code, sandbox);
+  const toasts = [];
+  sandbox.__toasts = toasts;
+  run("toast = (text) => { __toasts.push(text); }");
+
+  const roster = fullRoster({ through: 30 });
+  let result = R.noteBoardMembership(roster);
+  eq("the first record is a baseline, not news", result.newcomers.length, 0);
+  eq("and it holds the visible board", roster.boardSeen.length, R.constants.ALLTIME_BOARD_SIZE);
+
+  roster.entries.user28.XP = 9_999_999;
+  result = R.noteBoardMembership(roster);
+  eq("a learner reaching the board for the first time is news",
+    JSON.stringify(result.newcomers), JSON.stringify(["user28"]));
+  eq("only once", R.noteBoardMembership(roster).newcomers.length, 0);
+
+  roster.entries.user29.XP = 9_999_998;
+  roster.entries.listed = { ...R.blankEntry("listed"), XP: 9_999_997, profileAt: NOW };
+  result = R.noteBoardMembership(roster, ["listed"]);
+  eq("a learner who arrived in a list never is",
+    JSON.stringify(result.newcomers), JSON.stringify(["user29"]));
+
+  run(`allTimeRoster = { entries: { user26: { XP: 9000026 } } };`);
+  flags.observedBoardAlerts = false;
+  run(`announceBoardNewcomers(["user26"])`);
+  eq("nothing is shown while alerts are off", toasts.length, 0);
+  flags.observedBoardAlerts = true;
+  run(`announceBoardNewcomers(["user26"])`);
+  eq("one newcomer names the learner and their XP", toasts[0], "New on Top Observed Learners: @user26 (9,000,026 xp).");
+  run(`announceBoardNewcomers(["a", "b", "c", "d"])`);
+  eq("several become one notice", toasts[1], "New on Top Observed Learners: @a, @b and 2 more.");
+  sandbox.currentUserHandle = "me";
+  run(`announceBoardNewcomers(["me"])`);
+  eq("reaching the board yourself is not announced", toasts.length, 2);
+  sandbox.currentUserHandle = "";
+
+  const mine = { entries: {}, boardSeen: ["a", "b"] };
+  const theirs = { entries: {}, boardSeen: ["b", "c"] };
+  eq("tabs share what has been seen",
+    JSON.stringify(R.mergeRosters(mine, theirs).boardSeen.slice().sort()), JSON.stringify(["a", "b", "c"]));
 }
 
 if (failures) {

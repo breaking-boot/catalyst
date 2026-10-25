@@ -18,32 +18,48 @@
 // one, and the board is named accordingly — a position here means "Nth highest
 // XP among those Catalyst knows of", never "Nth on Boot.dev".
 //
-// The 2026-08-20 ranks are kept as provenance on seeded entries (`rank`,
-// `rankAt`). They are not reproducible and are never displayed as current.
-// Carry them forward through the roster export; do not try to re-measure them.
+// Entries carry no rank. The seed used to carry the last ranks measured before
+// the field was withdrawn, and gating the seed on them kept out every learner
+// discovered afterwards — including ones who had since climbed into the top 10
+// by XP. A position is derived from XP on every render; roster.self keeps a
+// slot for the viewer's own rank in case Boot.dev ever serves one again.
 
-const ALLTIME_ROSTER_KEY = "be_alltime_roster";
+const ALLTIME_ROSTER_KEY = OBSERVED_ROSTER_STORAGE_KEY;
 const ALLTIME_ROSTER_VERSION = 1;
 const ALLTIME_BOARD_SIZE = 25;
 
-// Retained window: the 25 the board draws plus a watchlist underneath, so a
-// climber is already tracked before they reach the board. Pruned by XP.
-const ROSTER_MAX_ENTRIES = 60;
+// Retained window: the 25 the board draws plus a watchlist of 75 underneath,
+// so a climber is already tracked before they reach the board. The watchlist
+// is also what an exported or published list carries. Pruned by XP, with
+// hysteresis: the roster may grow to ROSTER_PRUNE_AT before it is cut back, so
+// a learner sitting at the boundary is not dropped and re-admitted on
+// alternate sightings.
+const ROSTER_MAX_ENTRIES = OBSERVED_LEARNERS_MAX;
+const ROSTER_PRUNE_AT = ROSTER_MAX_ENTRIES + 10;
 
-// XP has no TTL at all: the cursor advances on every leaderboard load, so the
-// whole board refreshes over ~5 loads and reloading the page IS a refresh. A
-// clock TTL would refresh a board nobody is reading and still be stale the
-// moment someone opens it.
+// The refresh queue has two rings, because a single round robin over 100
+// learners would take an hour of browsing per lap and leave the visible rows
+// staler than the tail deserves.
+//
+// HOT: the rendered 25 plus the next few climbers. XP has no TTL here: the
+// cursor advances on every leaderboard load, so the ring refreshes over a few
+// loads and reloading the page IS a refresh. A clock TTL would refresh a board
+// nobody is reading and still be stale the moment someone opens it.
 // 8, not 6: the week and month XP API timeframes are no longer available
 // (confirmed returning 400 "Invalid timeframe" on 2026-09-19) and the two
-// requests per pass they used to spend now go here. The per-load ceiling
-// below is unchanged.
+// requests per pass they used to spend now go here.
+//
+// COLD: everyone else. Two per pass, and only learners not read for a while —
+// the native boards on the same page refresh much of the tail for free.
+const ROSTER_HOT_SIZE = ALLTIME_BOARD_SIZE + 5;
 const ROSTER_XP_SLICE = 8;
+const ROSTER_COLD_SLICE = 2;
+const ROSTER_COLD_FRESH_MS = 12 * 60 * 60 * 1000;
 const ROSTER_REQUEST_CEILING = 12;
 const ROSTER_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 
 // PRIMING. Until Catalyst has walked the roster once, every row still carries
-// the bundled seed's XP — which is release-day accurate and then drifts, so a
+// the bundled seed's XP reading — which is release-day accurate and then drifts, so a
 // fresh install can show two neighbours in the wrong order until the sweep
 // reaches them. At the steady-state pace that first sweep takes five visits
 // spread over 20+ minutes, which is a long time to look wrong.
@@ -65,11 +81,21 @@ let allTimeRoster = null;
 let rosterLastPassAt = 0;
 
 function emptyRoster() {
-  return { version: ALLTIME_ROSTER_VERSION, updatedAt: 0, xpCursor: 0, xpWraps: 0, self: {}, entries: {} };
+  return {
+    version: ALLTIME_ROSTER_VERSION,
+    updatedAt: 0,
+    xpCursor: 0,
+    xpWraps: 0,
+    coldCursor: 0,
+    boardSeen: [],
+    self: {},
+    entries: {},
+  };
 }
 
-// True once the XP cursor has been all the way round at least once, i.e. every
-// row has had a chance to be read live rather than inherited from the seed.
+// True once the hot ring's cursor has been all the way round at least once,
+// i.e. every visible row has had a chance to be read live rather than
+// inherited from the seed.
 // A replacement seed in a later release does NOT un-prime the roster: that seed
 // is fresh at release time, so there is nothing to catch up on.
 function rosterIsPrimed(roster) {
@@ -92,8 +118,6 @@ function blankEntry(handle) {
     Level: null,
     XP: null,
     ProfileImageURL: "",
-    rank: null,
-    rankAt: 0,
     profileAt: 0,
     source: "observed",
   };
@@ -116,13 +140,6 @@ function mergeRosterObservation(existing, observation) {
 
   const entry = isPlainObject(existing) ? { ...existing } : blankEntry(handle);
   entry.Handle = observation?.Handle || entry.Handle || handle;
-
-  const rankAt = observedNum(observation?.rankAt) || 0;
-  const rank = observedNum(observation?.rank);
-  if (rank != null && rankAt >= (observedNum(entry.rankAt) || 0)) {
-    entry.rank = rank;
-    entry.rankAt = rankAt;
-  }
 
   const profileAt = observedNum(observation?.profileAt) || 0;
   if (profileAt >= (observedNum(entry.profileAt) || 0)) {
@@ -166,19 +183,14 @@ function applyRosterObservation(roster, observation) {
   return true;
 }
 
-// Keep the store bounded. Ranked entries always outranked candidates for a slot,
-// and among candidates the highest XP wins — those are the ones most likely to
-// actually be in the window.
-// Keep the highest-XP entries. Ranks no longer exist to prune by, and XP is
-// both the ordering signal and the admission signal, so one rule covers it.
-// An entry with no XP yet sorts last and is the first to go.
-function pruneRoster(roster) {
-  const remaining = Object.entries(roster.entries);
-  if (remaining.length <= ROSTER_MAX_ENTRIES) return;
-  remaining
-    .sort((a, b) => (observedNum(b[1].XP) ?? -1) - (observedNum(a[1].XP) ?? -1))
-    .slice(ROSTER_MAX_ENTRIES)
-    .forEach(([handle]) => delete roster.entries[handle]);
+// Keep the store bounded: once it passes `limit`, cut it back to the
+// ROSTER_MAX_ENTRIES highest-XP entries. XP is both the ordering signal and the
+// admission signal, so one rule covers it; an entry with no XP sorts last and
+// goes first. The shared list code does the cut, so an imported list and a
+// sighting are pruned identically.
+function pruneRoster(roster, limit = ROSTER_PRUNE_AT) {
+  if (Object.keys(roster?.entries || {}).length <= limit) return [];
+  return trimObservedRoster(roster, ROSTER_MAX_ENTRIES);
 }
 
 // ---------------------------------------------------------------------------
@@ -186,39 +198,26 @@ function pruneRoster(roster) {
 // ---------------------------------------------------------------------------
 // Applied on EVERY load, not just the first: shipping a fresher seed in a later
 // release then upgrades stale rows for free, while a user whose own data is
-// newer keeps it (merge rule above).
+// newer keeps it (merge rule above, applied per learner by the shared list
+// code). The seed is an observed-learner list like any other, so it is read by
+// the same parser as an imported or fetched one.
 function applySeedToRoster(roster, seed = typeof ALLTIME_SEED === "undefined" ? null : ALLTIME_SEED) {
-  if (!isPlainObject(roster) || !isPlainObject(seed) || !Array.isArray(seed.entries)) return false;
-  const observedAt = Date.parse(seed.generatedAt);
-  if (!Number.isFinite(observedAt)) return false;
+  if (!isPlainObject(roster) || !isPlainObject(seed)) return false;
+  return applyObservedLearners(roster, seed, "seed").changed;
+}
 
-  let changed = false;
-  for (const raw of seed.entries) {
-    const handle = normalizeHandle(raw?.handle);
-    if (!isValidHandle(handle) || observedNum(raw?.rank) == null) continue;
-    // A seed exported from a live roster carries the date each rank was
-    // actually confirmed, which is older than the
-    // export. Honour it — claiming the export date would silently make a
-    // months-old position look freshly verified, and ranks can no longer be
-    // re-checked to correct that.
-    const rankAt = Date.parse(raw.rankAt);
-    changed = applyRosterObservation(roster, {
-      handle,
-      Handle: raw.handle,
-      rank: observedNum(raw.rank),
-      rankAt: Number.isFinite(rankAt) ? rankAt : observedAt,
-      XP: observedNum(raw.xp),
-      FirstName: raw.firstName,
-      LastName: raw.lastName,
-      Role: raw.role,
-      Level: observedNum(raw.level),
-      ProfileImageURL: raw.profileImageURL,
-      profileAt: observedAt,
-      source: "seed",
-      candidate: true,
-    }) || changed;
+// Fold an observed-learner list (bundled seed, imported file or fetched copy)
+// into the roster. A list can carry far more learners than a sighting does, so
+// the roster is pruned afterwards like after any other admission.
+function applyObservedLearners(roster, list, source) {
+  const parsed = parseObservedLearners(list);
+  if (parsed.error) {
+    warnOnce(`alltime:list-${source}`, `Observed-learner list (${source}) was not applied: ${parsed.error}`);
+    return { changed: false, added: [], updated: [], parsed };
   }
-  return changed;
+  const { added, updated } = mergeObservedLearnersIntoRoster(roster, parsed.learners, { source, blank: blankEntry });
+  pruneRoster(roster);
+  return { changed: added.length > 0 || updated.length > 0, added, updated, parsed };
 }
 
 // bootstrapRosterFromPersonalRecords was removed with the pivot. It seeded the
@@ -280,27 +279,29 @@ function readRegisteredUsers(json) {
 // ---------------------------------------------------------------------------
 // Discovery
 // ---------------------------------------------------------------------------
-// Admission floor is the XP of the DEEPEST position retained (rank 30 against
-// the bundled seed), not rank 25's: the watchlist keeps refilling and a climber
-// is spotted before they arrive rather than after. XP only grows, and the
-// stored floor is itself slightly stale, so this over-admits — the safe
-// direction, since a false candidate costs one /stats and is then evicted.
-// The XP a newcomer must beat to be worth tracking: the lowest XP among the
-// entries currently retained. Sitting below the retained window rather than
-// below the rendered board means a climber is picked up before they arrive,
-// and the watchlist keeps refilling from underneath.
+// The XP a newcomer must beat to be admitted, or null when anyone is.
+//
+// Below capacity, every sighting with a readable lifetime XP is admitted,
+// however low. An empty slot helps nobody, a low entry is displaced as soon as
+// someone higher is seen, and a fast climber is tracked from the first
+// sighting rather than only once they are already near the top. (The previous
+// rule demanded beating the LOWEST XP held even with slots free, which against
+// a seed of top learners turned away nearly everyone the native boards showed.)
+//
+// At capacity, a newcomer has to beat the learner in the last retained place.
+// Dropping someone costs nothing — the roster holds only their latest XP — so a
+// climber who falls out is simply re-admitted by a later sighting.
 function admissionThresholdXp(roster) {
-  let floor = null;
+  const xps = [];
   for (const entry of Object.values(roster?.entries || {})) {
     const xp = observedNum(entry.XP);
-    if (xp == null) continue;
-    if (floor == null || xp < floor) floor = xp;
+    if (xp != null) xps.push(xp);
   }
-  return floor;
+  if (xps.length < ROSTER_MAX_ENTRIES) return null;
+  xps.sort((a, b) => b - a);
+  return xps[ROSTER_MAX_ENTRIES - 1];
 }
 
-// True while some position in 1..25 has no known occupant. Drives both the gap
-// rows and the week/month escalation.
 // How many learners the board can actually draw. There is no notion of a
 // "known position" any more — an unknown occupant of slot 17 is not something
 // Catalyst can detect, because nothing reports positions. What it can state
@@ -316,17 +317,9 @@ function rosterCoverage(roster) {
 // ---------------------------------------------------------------------------
 // Position derivation
 // ---------------------------------------------------------------------------
-// XP is refreshed far more often than rank, and rank order tracks XP order (0
-// inversions across 45 handles), so the fresher field can carry the ordering
-// and the rank lookup becomes verification plus an absolute anchor.
-//
-// It is only sound if no UNKNOWN person sits inside the window, and that is
-// checkable rather than assumable: exactly rank-1 people are above a verified
-// anchor, so if the count of known entries with more XP equals rank-1, every
-// position above it is accounted for. An unknown at, say, 20 would occupy one
-// of the 24 places above a verified #25, leaving at most 23 of ours — which the
-// count catches. Short by n means exactly n unknowns, and the board falls back
-// to per-entry stored ranks with gaps.
+// Positions are the XP order of the learners held, nothing more: with no rank
+// to anchor against, an unknown learner between two known ones cannot be
+// detected, which is why the board says "observed".
 function deriveBoardPositions(roster) {
   const entries = Object.values(roster?.entries || {}).filter((e) => observedNum(e.XP) != null);
   return {
@@ -349,25 +342,19 @@ function compareByObservedXp(a, b) {
 }
 
 
-// The board: 25 fixed slots, a real row where a position is known and a gap row
-// where it is not. Never fabricates a name, an XP figure or a handle.
+// The board contains only the top ALLTIME_BOARD_SIZE observed learners by XP.
+// The viewer is highlighted if they are among them; no separate viewer row
+// is appended. The viewer has no special admission or pruning exemption.
+//
+// Viewer-specific percentile and potential future exact-rank data live in
+// roster.self, independently of the viewer's presence in roster.entries.
+// Do not assume a particular UI treatment for a future private rank.
 function buildAllTimeBoardRows(roster, selfHandle = "") {
   const { positions } = deriveBoardPositions(roster);
   const rows = positions
     .filter((placed) => placed.position <= ALLTIME_BOARD_SIZE)
     .map((placed) => rosterRow(placed.entry, placed.position, selfHandle));
-
-  // The viewer, when they are not among the observed top. Appended rather than
-  // displacing someone real. There is no rank to show any more, so the row
-  // carries no position — see renderers, which label it rather than number it.
-  const selfNormalized = normalizeHandle(selfHandle || roster?.self?.handle);
-  const onBoard = rows.some((r) => r.isCurrentUser);
-  const selfEntry = selfNormalized ? roster?.entries?.[selfNormalized] : null;
-  if (selfNormalized && !onBoard && selfEntry && observedNum(selfEntry.XP) != null) {
-    rows.push({ ...rosterRow(selfEntry, null, selfNormalized), outsideBoard: true });
-  }
-
-  return { rows, observed: positions.length, shown: Math.min(positions.length, ALLTIME_BOARD_SIZE) };
+  return { rows, observed: positions.length, shown: rows.length };
 }
 
 function rosterRow(entry, position, selfHandle) {
@@ -379,7 +366,6 @@ function rosterRow(entry, position, selfHandle) {
     entry,
     handle,
     xp: observedNum(entry.XP),
-    rankAt: observedNum(entry.rankAt) || 0,
     profileAt: observedNum(entry.profileAt) || 0,
     isCurrentUser: Boolean(handle) && handle === normalizeHandle(selfHandle),
     href: handle ? `/u/${encodeURIComponent(handle)}` : "",
@@ -389,37 +375,116 @@ function rosterRow(entry, position, selfHandle) {
 // ---------------------------------------------------------------------------
 // Overtake detection
 // ---------------------------------------------------------------------------
-// Queue A — XP, round-robin, driven by page loads rather than a clock, so the
-// work lands where the attention is and an F5 is a refresh. `skip` carries the
-// handles the Personal Leaderboards pass already covered this load, so an
-// overlapping handle is not fetched twice.
+// The XP queue, in two rings (see ROSTER_HOT_SIZE). Driven by page loads
+// rather than a clock, so the work lands where the attention is and an F5 is a
+// refresh. `skip` carries the handles the Personal Leaderboards pass already
+// covered this load, so an overlapping handle is not fetched twice.
 //
-// Walks in the board's own order — highest XP first — so the rows a reader is
-// most likely to be looking at refresh earliest in a sweep.
-function pickXpRefreshTargets(roster, { slice = ROSTER_XP_SLICE, skip = [], now = Date.now() } = {}) {
-  const ordered = Object.values(roster?.entries || {}).sort(compareByObservedXp);
-  if (!ordered.length) return { targets: [], cursor: 0, wrapped: false };
-
+// The hot ring walks in the board's own order — highest XP first — so the rows
+// a reader is most likely to be looking at refresh earliest in a sweep.
+function pickXpRefreshTargets(roster, {
+  slice = ROSTER_XP_SLICE,
+  coldSlice = ROSTER_COLD_SLICE,
+  skip = [],
+  now = Date.now(),
+} = {}) {
+  const ordered = Object.values(roster?.entries || {})
+    .filter((entry) => observedNum(entry.XP) != null)
+    .sort(compareByObservedXp);
   const skipSet = new Set(skip.map(normalizeHandle));
-  const start = clamp(observedNum(roster.xpCursor) || 0, 0, Math.max(0, ordered.length - 1));
-  const targets = [];
-  let cursor = start;
+  // A skipped or recently read entry costs a slot nothing.
+  const unreadFor = (ms) => (entry) =>
+    !skipSet.has(normalizeHandle(entry.Handle)) && now - (observedNum(entry.profileAt) || 0) >= ms;
+  const hot = walkRing(ordered.slice(0, ROSTER_HOT_SIZE), roster?.xpCursor, slice, unreadFor(ROSTER_RECENT_SIGHTING_MS));
+  const cold = walkRing(ordered.slice(ROSTER_HOT_SIZE), roster?.coldCursor, coldSlice, unreadFor(ROSTER_COLD_FRESH_MS));
+  return {
+    targets: [...hot.handles, ...cold.handles],
+    cursor: hot.cursor,
+    wrapped: hot.wrapped,
+    coldCursor: cold.cursor,
+  };
+}
+
+// One round robin over `ring`, from `start`, collecting up to `slice` handles
+// that `due` accepts. The cursor advances whether or not an entry is taken,
+// which is what guarantees the wrap — and so guarantees priming terminates.
+function walkRing(ring, start, slice, due) {
+  if (!ring.length) return { handles: [], cursor: 0, wrapped: false };
+  const from = clamp(observedNum(start) || 0, 0, ring.length - 1);
+  const handles = [];
+  let cursor = from;
   let wrapped = false;
-
-  for (let step = 0; step < ordered.length && targets.length < slice; step++) {
-    const entry = ordered[(start + step) % ordered.length];
-    // The cursor advances whether or not this entry is requested, which is what
-    // guarantees the wrap — and so guarantees priming terminates.
-    if (start + step + 1 >= ordered.length) wrapped = true;
-    cursor = (start + step + 1) % ordered.length;
+  for (let step = 0; step < ring.length && handles.length < slice; step++) {
+    const entry = ring[(from + step) % ring.length];
+    if (from + step + 1 >= ring.length) wrapped = true;
+    cursor = (from + step + 1) % ring.length;
     const handle = normalizeHandle(entry.Handle);
-    if (!handle || skipSet.has(handle)) continue;
-    // Already covered by a sighting moments ago — costs a slot nothing.
-    if (now - (observedNum(entry.profileAt) || 0) < ROSTER_RECENT_SIGHTING_MS) continue;
-    targets.push(handle);
+    if (handle && due(entry)) handles.push(handle);
   }
+  return { handles, cursor, wrapped };
+}
 
-  return { targets, cursor, wrapped };
+// ---------------------------------------------------------------------------
+// Display fill
+// ---------------------------------------------------------------------------
+// The seed carries handle, XP, and read time only, so a row it adds has no name,
+// avatar or frame until that learner's profile is read. When the board is drawn, the
+// visible rows still missing them are fetched straight away instead of waiting
+// for the XP sweep to come round.
+//
+// A deliberate exception to ROSTER_REQUEST_CEILING, bounded three ways: only
+// rows the board is about to show (at most ALLTIME_BOARD_SIZE), each at most
+// once per page session, and only when the board is actually drawn — not at
+// install, when the user may be on a lesson and may never open the
+// leaderboard. Requests are spaced rather than sent as a burst: twenty-five
+// profile reads in the same second from one session is a conspicuous pattern,
+// and nothing on screen needs them that fast. patchLeaderAvatar fills each row
+// in place as its profile arrives.
+const DISPLAY_FILL_SPACING_MS = 400;
+const displayFillRequested = new Set();
+let displayFillQueue = [];
+let displayFillTimer = null;
+
+// A profile read always brings a level and a role, so their absence means this
+// learner has never been read — not that they have no avatar.
+function needsDisplayFields(entry) {
+  return !entry?.FirstName && !entry?.ProfileImageURL && !entry?.Role && observedNum(entry?.Level) == null;
+}
+
+function pickDisplayFillTargets(roster, requested = new Set()) {
+  return deriveBoardPositions(roster).positions
+    .filter(({ position, entry }) => position <= ALLTIME_BOARD_SIZE && needsDisplayFields(entry))
+    .map(({ entry }) => normalizeHandle(entry.Handle))
+    .filter((handle) => isValidHandle(handle) && !requested.has(handle));
+}
+
+function requestRosterDisplayFill() {
+  if (!allTimeRoster || enhancerStopped) return [];
+  if (!isLeaderboardPage() || !isFeatureEnabled("allTimeLeaderboard")) return [];
+  const handles = pickDisplayFillTargets(allTimeRoster, displayFillRequested);
+  for (const handle of handles) {
+    displayFillRequested.add(handle);
+    displayFillQueue.push(handle);
+  }
+  drainDisplayFill();
+  return handles;
+}
+
+function drainDisplayFill() {
+  if (displayFillTimer || !displayFillQueue.length || enhancerStopped) return;
+  // Leaving the leaderboard abandons what is left. Those handles are released,
+  // so the next time the board is drawn they are asked for again.
+  if (!isLeaderboardPage()) {
+    for (const handle of displayFillQueue) displayFillRequested.delete(handle);
+    displayFillQueue = [];
+    return;
+  }
+  const handle = displayFillQueue.shift();
+  requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(handle)}`);
+  displayFillTimer = setTrackedTimeout(() => {
+    displayFillTimer = null;
+    drainDisplayFill();
+  }, DISPLAY_FILL_SPACING_MS);
 }
 
 // There is no rank queue any more. It fetched /stats to verify or discover a
@@ -441,7 +506,12 @@ async function loadAllTimeRoster() {
 
   allTimeRoster = normalizeStoredRoster(stored);
   let changed = !isPlainObject(stored);
-  changed = applySeedToRoster(allTimeRoster) || changed;
+  const seed = typeof ALLTIME_SEED === "undefined" ? null : ALLTIME_SEED;
+  const seeded = isPlainObject(seed) ? applyObservedLearners(allTimeRoster, seed, "seed") : null;
+  changed = Boolean(seeded?.changed) || changed;
+  // A load is never news: whatever reached the board through the seed, an
+  // import, or another tab's write is recorded without an alert.
+  changed = noteBoardMembership(allTimeRoster, seeded?.added || []).changed || changed;
   if (changed) saveAllTimeRoster();
 }
 
@@ -451,6 +521,10 @@ function normalizeStoredRoster(stored) {
   roster.updatedAt = observedNum(stored.updatedAt) || 0;
   roster.xpCursor = observedNum(stored.xpCursor) || 0;
   roster.xpWraps = observedNum(stored.xpWraps) || 0;
+  roster.coldCursor = observedNum(stored.coldCursor) || 0;
+  roster.boardSeen = Array.isArray(stored.boardSeen)
+    ? uniqueHandleList(stored.boardSeen).slice(-BOARD_SEEN_MAX)
+    : [];
   if (isPlainObject(stored.self)) {
     roster.self = {
       handle: normalizeHandle(stored.self.handle),
@@ -462,7 +536,10 @@ function normalizeStoredRoster(stored) {
   for (const [handle, entry] of Object.entries(stored.entries)) {
     const normalized = normalizeHandle(handle);
     if (!isValidHandle(normalized) || !isPlainObject(entry)) continue;
-    roster.entries[normalized] = { ...blankEntry(normalized), ...entry };
+    // Rosters written before v0.16.0 carry a per-entry rank and its date. They
+    // are dropped here so nothing can read them by accident.
+    const { rank, rankAt, ...kept } = entry;
+    roster.entries[normalized] = { ...blankEntry(normalized), ...kept };
   }
   return roster;
 }
@@ -496,6 +573,12 @@ function mergeRosters(mine, theirs) {
   if (theirsSelfAt > mineSelfAt) merged.self = theirs.self;
 
   merged.xpWraps = Math.max(observedNum(mine.xpWraps) || 0, observedNum(theirs.xpWraps) || 0);
+  merged.boardSeen = uniqueHandleList([
+    ...(Array.isArray(theirs.boardSeen) ? theirs.boardSeen : []),
+    ...(Array.isArray(mine.boardSeen) ? mine.boardSeen : []),
+  ]).slice(-BOARD_SEEN_MAX);
+  // Two tabs each holding a full roster can union to well past capacity.
+  pruneRoster(merged);
   return merged;
 }
 
@@ -532,36 +615,35 @@ function noteAllTimeObservation(username, isStats, json) {
       allTimeRoster.self = { ...allTimeRoster.self, handle, percentile, percentileAt: now };
       changed = true;
     }
-    // A rank only arrives if Boot.dev restores the field. Stored as provenance
-    // if it does; nothing depends on it.
-    if (rank != null) {
-      if (handle === normalizeHandle(currentUserHandle)) {
-        allTimeRoster.self = { ...allTimeRoster.self, handle, rank, rankAt: now };
-        changed = true;
-      }
-      changed = applyRosterObservation(allTimeRoster, { handle, Handle: readField(data, "Handle"), rank, rankAt: now }) || changed;
+    // A rank only arrives if Boot.dev restores the field. The viewer's own is
+    // kept, because a privately visible own-rank would be the one exact
+    // position Catalyst could show; nothing reads it yet.
+    if (rank != null && handle === normalizeHandle(currentUserHandle)) {
+      allTimeRoster.self = { ...allTimeRoster.self, handle, rank, rankAt: now };
+      changed = true;
     }
   } else {
     changed = noteAllTimeProfile(handle, data, now) || changed;
   }
 
   if (changed) {
+    const { newcomers } = noteBoardMembership(allTimeRoster);
     saveAllTimeRoster();
     schedulePersonalLeaderboardRender();
     renderAllTimeLeaderboard();
+    announceBoardNewcomers(newcomers);
   }
 }
 
 // A profile sighting: refresh XP and display fields for a known entry, or admit
-// an unknown one that clears the admission floor. The overtake check runs here
-// because this is where a value read NOW is available to compare against.
+// an unknown one under the admission rule (see admissionThresholdXp).
 function noteAllTimeProfile(handle, data, now = Date.now()) {
   const xp = observedNum(readField(data, "XP"));
   if (xp == null) return false;
 
   const known = Boolean(allTimeRoster.entries[handle]);
   const floor = admissionThresholdXp(allTimeRoster);
-  if (!known && (floor == null || xp < floor)) return false;
+  if (!known && floor != null && xp <= floor) return false;
 
   return applyRosterObservation(allTimeRoster, {
     handle,
@@ -594,8 +676,10 @@ function noteAllTimeBoardEntries(entries) {
     changed = noteAllTimeProfile(handle, entry, now) || changed;
   }
   if (changed) {
+    const { newcomers } = noteBoardMembership(allTimeRoster);
     saveAllTimeRoster();
     renderAllTimeLeaderboard();
+    announceBoardNewcomers(newcomers);
   }
 }
 
@@ -674,12 +758,145 @@ function getTotalStudents() {
 }
 
 // ---------------------------------------------------------------------------
-// Refresh: two queues, one budget
+// New-learner alerts (opt-in)
+// ---------------------------------------------------------------------------
+// An informational notice when a learner this device found by browsing enters
+// the visible board for the first time. Default OFF: news about strangers on a
+// board the user did not curate is not something most users want. It carries
+// no call to action; sharing a list is what the options page's export is for.
+//
+// roster.boardSeen holds every handle that has been on the board here, plus
+// every handle that arrived in a list. It is kept whether or not alerts are on,
+// so switching them on later does not announce the whole board at once, and a
+// learner who drops to 26th and climbs back is not news a second time.
+const BOARD_SEEN_MAX = 1000;
+
+function uniqueHandleList(handles) {
+  return Array.from(new Set(handles.map(normalizeHandle).filter(isValidHandle)));
+}
+
+// Record the current top ALLTIME_BOARD_SIZE, plus `fromLists` (handles that
+// arrived in a seed, import or fetched list, which are never news). Returns the
+// handles reaching the board for the first time; the first call on an empty
+// record establishes a baseline and reports none.
+function noteBoardMembership(roster, fromLists = []) {
+  const seen = Array.isArray(roster.boardSeen) ? roster.boardSeen.slice() : [];
+  const seenSet = new Set(seen);
+  const baseline = seen.length === 0;
+  const mark = (handle) => {
+    seenSet.add(handle);
+    seen.push(handle);
+  };
+  for (const handle of uniqueHandleList(fromLists)) {
+    if (!seenSet.has(handle)) mark(handle);
+  }
+  const newcomers = [];
+  for (const { position, entry } of deriveBoardPositions(roster).positions) {
+    if (position > ALLTIME_BOARD_SIZE) break;
+    const handle = normalizeHandle(entry.Handle);
+    if (!isValidHandle(handle) || seenSet.has(handle)) continue;
+    mark(handle);
+    if (!baseline) newcomers.push(handle);
+  }
+  const changed = seen.length !== (roster.boardSeen?.length || 0);
+  roster.boardSeen = seen.slice(-BOARD_SEEN_MAX);
+  return { newcomers, changed };
+}
+
+function announceBoardNewcomers(handles) {
+  if (!handles.length || !isFeatureEnabled("observedBoardAlerts")) return;
+  // Reaching the board yourself is not news about someone else.
+  const self = normalizeHandle(currentUserHandle);
+  const others = handles.filter((handle) => handle !== self);
+  if (!others.length) return;
+  const describe = (handle) => {
+    const xp = observedNum(allTimeRoster?.entries?.[handle]?.XP);
+    return xp == null ? `@${handle}` : `@${handle} (${fmtNum(xp)} xp)`;
+  };
+  const text = others.length === 1
+    ? `New on Top Observed Learners: ${describe(others[0])}.`
+    : `New on Top Observed Learners: ${others.slice(0, 2).map(describe).join(", ")}` +
+      (others.length > 2 ? ` and ${others.length - 2} more.` : ".");
+  toast(text);
+}
+
+// ---------------------------------------------------------------------------
+// Published list (opt-in)
+// ---------------------------------------------------------------------------
+// The repository publishes a curated list, data/observed-learners.json. It is
+// generated alongside the bundled seed from the same exported learner list.
+// With observedListFetch on, Catalyst reads it at most once a day and folds it
+// in like an imported list, so a newly found top learner reaches users between
+// releases. Default OFF, like versionCheck and for the same reason: it is a
+// request somewhere other than Boot.dev. It sends no Catalyst or Boot.dev user
+// data; it is one GET of a public file. GitHub's
+// REST API answers with Access-Control-Allow-Origin: * (checked 2026-10-04),
+// so no host permission is needed.
+//
+// The file is untrusted input. It goes through the same parser as an import,
+// so all it can contribute is handles and numbers, and newest-reading-wins per
+// learner means a stale or tampered copy cannot lower a fresher local reading.
+const OBSERVED_LIST_URL =
+  "https://api.github.com/repos/breaking-boot/catalyst/contents/data/observed-learners.json?ref=main";
+const OBSERVED_LIST_STATE_KEY = "be_observed_list_fetch";
+const OBSERVED_LIST_INTERVAL_MS = 24 * 60 * 60 * 1000;
+let observedListFetchInFlight = false;
+
+async function maybeFetchObservedList(now = Date.now()) {
+  if (enhancerStopped || observedListFetchInFlight || !allTimeRoster) return;
+  if (!isFeatureEnabled("observedListFetch") || !isFeatureEnabled("allTimeLeaderboard")) return;
+  const state = await chromeGet(OBSERVED_LIST_STATE_KEY);
+  if (enhancerStopped) return;
+  if (now - (observedNum(state?.checkedAt) || 0) < OBSERVED_LIST_INTERVAL_MS) return;
+
+  observedListFetchInFlight = true;
+  // Recorded before the request, so a failure waits a day as a success does
+  // instead of retrying on every page load.
+  await chromeSet(OBSERVED_LIST_STATE_KEY, { ...(isPlainObject(state) ? state : {}), checkedAt: now });
+  try {
+    const text = await fetchObservedListText();
+    // Read after the await: another tab's write may have replaced the roster.
+    if (enhancerStopped || !allTimeRoster) return;
+    const result = applyObservedLearners(allTimeRoster, text, "published");
+    if (result.parsed.error) return;
+    noteBoardMembership(allTimeRoster, result.added);
+    chromeSet(OBSERVED_LIST_STATE_KEY, {
+      checkedAt: now,
+      appliedAt: now,
+      listGeneratedAt: result.parsed.generatedAt,
+      learners: result.parsed.learners.length,
+    });
+    if (result.changed) {
+      saveAllTimeRoster();
+      renderAllTimeLeaderboard();
+    }
+  } catch (err) {
+    // Offline, rate-limited, or the file is missing: keep what is held.
+    warnOnce("alltime:list-fetch", `Published learner list not fetched: ${safeErrorMessage(err)}`);
+  } finally {
+    observedListFetchInFlight = false;
+  }
+}
+
+// The contents API returns the file base64-encoded inside a JSON envelope.
+async function fetchObservedListText() {
+  const response = await fetch(OBSERVED_LIST_URL, { headers: { accept: "application/vnd.github+json" } });
+  if (!response.ok) throw new Error(`GitHub answered ${response.status}`);
+  const body = await response.json();
+  if (body?.encoding !== "base64" || typeof body.content !== "string") {
+    throw new Error("unexpected response from GitHub");
+  }
+  const binary = atob(body.content.replace(/\s/g, ""));
+  return new TextDecoder().decode(Uint8Array.from(binary, (c) => c.charCodeAt(0)));
+}
+
+// ---------------------------------------------------------------------------
+// Refresh: one budget, spent in priority order
 // ---------------------------------------------------------------------------
 // ONE hard ceiling rather than a sum of sub-budgets: it is a single number to
 // verify in DevTools, and it cannot drift as the queues are tuned. Spent in
-// priority order, so when it binds the gap-closing work survives and the XP
-// sweep is what gets truncated.
+// priority order — the student count, the hot ring, then the cold tail — so
+// when it binds, the tail is what gets truncated.
 // DISCOVERY IS PASSIVE-ONLY SINCE v0.15.1, and that is a platform constraint
 // rather than a choice. /v1/leaderboard_xp/{week,month} were the standing
 // discovery sweep; both were confirmed returning 400 "Invalid timeframe" on
@@ -689,18 +906,19 @@ function getTotalStudents() {
 //
 // Nothing replaces them. /v1/leaderboard_archmage is alive and lists 30 full
 // user objects, but they are the most recent learners to reach level 100 —
-// measured XP 427,712-464,145 against an admission floor (the lowest XP the
-// roster already holds) of 930,102. Not one would be admitted, so relaying it
-// would cost nothing and add nothing. The daily board's own lifetime-XP range
-// that day topped out at 786,594, also below the floor; the all-time karma
-// board reached 1,813,156 and is the only remaining board that regularly
-// carries learners this one could admit.
+// measured XP 427,712-464,145, against 930,102 for the lowest learner the board
+// then drew. They could only ever fill the tail, which the native boards on the
+// same page already fill, so it is not relayed. The daily board's lifetime-XP
+// range that day topped out at 786,594; the all-time karma board reached
+// 1,813,156 and is the only remaining board that regularly carries learners
+// high enough to reach the board itself.
 //
-// So an unknown learner now enters the roster through the karma board, the
-// daily board, a profile the user opens, or a refreshed bundled seed. That is
-// slower than it was. It is stated in the README rather than hidden, because
-// the board showing fewer new faces is a consequence of the platform and not a
-// defect to chase.
+// So an unknown learner enters the roster through the karma board, the daily
+// board, a league board, a profile the user opens, a refreshed bundled seed, a
+// list imported on the options page, or the opt-in published list. Reaching the
+// visible 25 that way
+// is slower than it was, which the README states rather than hides: the board
+// showing fewer new faces is a consequence of the platform, not a defect.
 //
 // The route handler for the unavailable timeframes is deliberately KEPT (see
 // handleXpDiscoveryBoard in leaderboard.js, and the router in content.js), on
@@ -735,12 +953,16 @@ function requestAllTimeRosterRefresh() {
     spend(() => requestApiJson(LEADERBOARD_STATS_URL));
   }
 
-  // 2. The XP sweep — now the ONLY thing keeping the board correct, since the
-  //    ordering is derived from XP alone. Handles the Personal Leaderboards
-  //    pass already refreshes this load are skipped rather than fetched twice.
-  const skip = anyPersonalBoardEnabled() ? personalHandles : [];
-  const { targets, cursor, wrapped } = pickXpRefreshTargets(allTimeRoster, {
-    slice: Math.min(priming ? ROSTER_XP_PRIMING_SLICE : ROSTER_XP_SLICE, budget),
+  // 2. The XP sweep — the ONLY thing keeping the board correct, since the
+  //    ordering is derived from XP alone. Hot ring first, then the cold tail.
+  //    Handles the Personal Leaderboards pass already refreshes this load, and
+  //    rows still waiting in the display fill, are skipped rather than fetched
+  //    twice.
+  const skip = [...(anyPersonalBoardEnabled() ? personalHandles : []), ...displayFillQueue];
+  const slice = Math.min(priming ? ROSTER_XP_PRIMING_SLICE : ROSTER_XP_SLICE, budget);
+  const { targets, cursor, wrapped, coldCursor } = pickXpRefreshTargets(allTimeRoster, {
+    slice,
+    coldSlice: Math.min(ROSTER_COLD_SLICE, Math.max(0, budget - slice)),
     skip,
     now,
   });
@@ -748,6 +970,7 @@ function requestAllTimeRosterRefresh() {
     spend(() => requestApiJson(`https://api.boot.dev/v1/users/public/${encodeURIComponent(handle)}`));
   }
   allTimeRoster.xpCursor = cursor;
+  allTimeRoster.coldCursor = coldCursor;
   if (wrapped) allTimeRoster.xpWraps = (observedNum(allTimeRoster.xpWraps) || 0) + 1;
   saveAllTimeRoster();
 
@@ -766,7 +989,9 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     mergeRosterObservation,
     applyRosterObservation,
     applySeedToRoster,
+    applyObservedLearners,
     mergeRosters,
+    normalizeStoredRoster,
     readAlltimeRank,
     readAlltimePercentile,
     readRegisteredUsers,
@@ -776,9 +1001,17 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     compareByObservedXp,
     buildAllTimeBoardRows,
     pickXpRefreshTargets,
+    pickDisplayFillTargets,
+    needsDisplayFields,
+    noteBoardMembership,
+    pruneRoster,
     constants: {
       ALLTIME_BOARD_SIZE,
       ROSTER_MAX_ENTRIES,
+      ROSTER_PRUNE_AT,
+      ROSTER_HOT_SIZE,
+      ROSTER_COLD_SLICE,
+      ROSTER_COLD_FRESH_MS,
       ROSTER_XP_SLICE,
       ROSTER_XP_PRIMING_SLICE,
       ROSTER_PRIMING_COOLDOWN_MS,

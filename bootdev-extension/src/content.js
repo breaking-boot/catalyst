@@ -141,6 +141,9 @@ async function initEnhancer() {
   await loadFrameDebugFlag();
   if (enhancerStopped) return;
   chrome.storage.onChanged.addListener(handleSettingsChange);
+  // A handle stored from an earlier visit is known now; a new install learns
+  // it later, and rememberCurrentUserHandle runs the same check then.
+  void maybeAutoAddCurrentUser();
   document.addEventListener("visibilitychange", handleVisibilityChange);
   restoreBossPanel();
   syncRouteScopedUi();
@@ -154,6 +157,7 @@ async function initEnhancer() {
   startDomScan();
   maybeShowSettingsIntro().catch((err) => handleAsyncError(err, "intro"));
   maybeRunVersionCheck().catch((err) => handleAsyncError(err, "versionCheck"));
+  maybeFetchObservedList().catch((err) => handleAsyncError(err, "observedList"));
   maybeTriggerBossReminderDebug().catch((err) => handleAsyncError(err, "bossReminderDebug"));
   maybeReplayBossDebugResponse().catch((err) => handleAsyncError(err, "bossDebugResponse"));
 
@@ -339,9 +343,16 @@ function applyFeatureSettings(before, after) {
     else removeNativeComparisons();
   }
 
+  // Personal Leaderboards switched on: the viewer belongs on it.
+  void maybeAutoAddCurrentUser();
+
   // Run a release check right away when the opt-in is switched on (page-independent).
   if (before && after && before.versionCheck === false && after.versionCheck !== false) {
     maybeRunVersionCheck().catch((err) => handleAsyncError(err, "versionCheck"));
+  }
+  // Likewise the published learner list (throttled to once a day either way).
+  if (before && after && before.observedListFetch === false && after.observedListFetch !== false) {
+    maybeFetchObservedList().catch((err) => handleAsyncError(err, "observedList"));
   }
 
   // Fetch only when a feature just turned on AND its data isn't already cached.
