@@ -59,7 +59,7 @@ const ROSTER_REQUEST_CEILING = 12;
 const ROSTER_REFRESH_COOLDOWN_MS = 5 * 60 * 1000;
 
 // PRIMING. Until Catalyst has walked the roster once, every row still carries
-// the bundled seed's XP — which is release-day accurate and then drifts, so a
+// the bundled seed's XP reading — which is release-day accurate and then drifts, so a
 // fresh install can show two neighbours in the wrong order until the sweep
 // reaches them. At the steady-state pace that first sweep takes five visits
 // spread over 20+ minutes, which is a long time to look wrong.
@@ -342,15 +342,13 @@ function compareByObservedXp(a, b) {
 }
 
 
-// The board: the top ALLTIME_BOARD_SIZE observed learners by XP, and nothing
-// else. Never fabricates a name, an XP figure or a handle.
+// The board contains only the top ALLTIME_BOARD_SIZE observed learners by XP.
+// The viewer is highlighted if they are among them; no separate viewer row
+// is appended. The viewer has no special admission or pruning exemption.
 //
-// The viewer appears only if they are one of those learners, highlighted in
-// place. There is deliberately no extra row for a viewer below the board: with
-// no objective standing to show, it could only claim a place Catalyst cannot
-// measure. If Boot.dev ever gives the signed-in user an exact own-rank
-// (roster.self has room for it), the board could show the top 24 and the
-// viewer's real position in the last slot.
+// Viewer-specific percentile and potential future exact-rank data live in
+// roster.self, independently of the viewer's presence in roster.entries.
+// Do not assume a particular UI treatment for a future private rank.
 function buildAllTimeBoardRows(roster, selfHandle = "") {
   const { positions } = deriveBoardPositions(roster);
   const rows = positions
@@ -429,8 +427,8 @@ function walkRing(ring, start, slice, due) {
 // ---------------------------------------------------------------------------
 // Display fill
 // ---------------------------------------------------------------------------
-// The seed carries handle and XP only, so a row it adds has no name, avatar or
-// frame until that learner's profile is read. When the board is drawn, the
+// The seed carries handle, XP, and read time only, so a row it adds has no name,
+// avatar or frame until that learner's profile is read. When the board is drawn, the
 // visible rows still missing them are fetched straight away instead of waiting
 // for the XP sweep to come round.
 //
@@ -825,12 +823,13 @@ function announceBoardNewcomers(handles) {
 // ---------------------------------------------------------------------------
 // Published list (opt-in)
 // ---------------------------------------------------------------------------
-// The repository publishes a curated list, data/observed-learners.json — the
-// same file the bundled seed is built from. With observedListFetch on,
-// Catalyst reads it at most once a day and folds it in like an imported list,
-// so a newly found top learner reaches users between releases. Default OFF,
-// like versionCheck and for the same reason: it is a request somewhere other
-// than Boot.dev. It sends nothing; it is one GET of a public file. GitHub's
+// The repository publishes a curated list, data/observed-learners.json. It is
+// generated alongside the bundled seed from the same exported learner list.
+// With observedListFetch on, Catalyst reads it at most once a day and folds it
+// in like an imported list, so a newly found top learner reaches users between
+// releases. Default OFF, like versionCheck and for the same reason: it is a
+// request somewhere other than Boot.dev. It sends no Catalyst or Boot.dev user
+// data; it is one GET of a public file. GitHub's
 // REST API answers with Access-Control-Allow-Origin: * (checked 2026-10-04),
 // so no host permission is needed.
 //

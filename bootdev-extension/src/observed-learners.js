@@ -2,7 +2,7 @@
 // The observed-learner list format, and the one rule for folding a list into
 // the Observed board's roster. Three things read and write these lists, and
 // they must agree exactly:
-//   - the bundled seed (alltime-seed.js, generated from data/observed-learners.json),
+//   - the bundled seed (alltime-seed.js, generated alongside data/observed-learners.json),
 //   - the options page's Export / Import learners buttons,
 //   - the opt-in fetch of the published list (allTimeRoster.js).
 //
@@ -11,10 +11,10 @@
 // a <script> tag. The two helpers it needs from utils.js are mirrored — keep in
 // sync.
 //
-// A list holds handles and lifetime XP and nothing else. Names, avatars, level
-// and role come from each learner's public profile when the board needs them,
-// and stay in this browser's storage, so a list that is published or sent to
-// someone carries nothing more personal than the handle.
+// A list holds handles, lifetime XP, and the time each XP reading was observed.
+// Names, avatars, level, and role come from each learner's public profile when
+// the board needs them and stay in this browser's storage. Published or shared
+// lists therefore contain only those three fields.
 
 const OBSERVED_LEARNERS_FORMAT = "catalyst-observed-learners";
 // Bump only for a STRUCTURAL change. A reader refuses a version newer than it

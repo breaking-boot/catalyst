@@ -1,4 +1,36 @@
 # Changelog
+## v0.16.0 - Shareable observed learners
+
+Top Observed Learners now follows a 100-learner XP roster instead of a few dozen, admits any sighting until the top-100 cut is full, and can be shared: export the learners you have observed, import a list someone sends you, or opt in to a curated list published in this repository. The bundled seed now contains handles, lifetime XP, and read times only. Personal Leaderboards adds you automatically, and Catalyst's leaderboard cells match Boot.dev's new look.
+
+### Added
+
+* **Share observed learners.** The options page has a new **Top Observed Learners** section. **Export learners** saves the learners Catalyst has observed as a small file of handles, lifetime XP, and read times; **Import learners** merges a list into yours after showing what it would change. An older XP reading never replaces a newer one, and the 100 highest-XP learners from both lists are kept. Learner lists are separate from **Backup & restore**, so sharing one never shares your own settings or history.
+* **Backups include your Top Observed Learners.** Moving Catalyst to another browser, or reinstalling it, now takes one export and one import; the learners merge the same way as **Import learners**.
+* **The published learner list** (off by default). Once a day, Catalyst can download the curated list kept in this repository and merge it the same way, so new top learners reach your board between releases. It is one request to GitHub, sends no Catalyst or Boot.dev user data, and the options page shows when the list was last applied.
+* **New-learner alerts** (off by default). A short notice when someone Catalyst has not shown on Top Observed Learners before enters it while you browse. Learners that arrive in a list never trigger it.
+* **You are added to Personal Leaderboards automatically**, because every row there is a comparison against you. Removing yourself is remembered, and adding yourself back by hand undoes that. The **Add to Personal Leaderboards** button no longer appears on your own profile.
+
+### Changed
+
+* **Top Observed Learners tracks a 100-learner XP roster and shows the top 25.** Until the top-100 XP cut is full, anyone seen with a readable lifetime XP is admitted, however low their XP; after that a newcomer has to beat the 100th learner. Previously a newcomer had to beat the lowest XP already held even when there was room, which turned away nearly everyone the native boards showed.
+* **Top Observed Learners shows only the top 25.** Your own entry is highlighted when you are among them. The separate "you" row formerly shown below the board is removed; the panel now displays only its 25 highest-XP observed learners.
+* **Refreshes go where they matter.** The 25 shown plus the next five are refreshed as before; the rest are refreshed a couple at a time and only when they have not been seen for 12 hours. The regular XP refresh sweep still uses at most 12 requests per load.
+* **The bundled seed holds handles, lifetime XP, and read times only.** Missing names and avatars are fetched from public profiles when the board is drawn, for the rows on screen only, one every 400 ms and at most once per row per page session. Earlier releases shipped names and avatar links in the seed.
+* **No more frozen ranks.** The seed and stored rosters no longer carry the positions last measured before Boot.dev withdrew them, and row tooltips no longer mention them. Those ranks had been keeping every learner found afterwards out of the seed.
+* **Leaderboard cells match Boot.dev's new style.** Boot.dev gave its leaderboard cells a solid dark fill and rounded corners; Top Observed Learners and Personal Leaderboards now use the same fill and corners.
+* **Imports say when they have not been applied yet.** After you choose a backup or learner file, the options page now says plainly that nothing has changed until you click **Import**.
+
+### Fixed
+
+* **All-Time XP comparisons no longer fall back to a stored copy of your own XP.** With you on your own Personal Leaderboards by default, a saved record of your XP — possibly days old — could otherwise have become the baseline for every comparison until a fresh reading arrived.
+
+### Notes
+
+* No new permissions. The published learner list uses GitHub's public API, which needs no host permission, like the update check.
+* Two new local storage keys: your own opt-out from Personal Leaderboards, and the published list's last-check time. Backups gain a Top Observed Learners section; older backups without it still import, and older Catalyst versions ignore it. No backup-format change.
+* Your existing roster is kept. Positions stored by earlier releases are discarded on load.
+
 ## v0.15.1 - Profile, leaderboard, and cross-tab fixes
 
 Boot.dev rebuilt its profile page, and two XP API timeframes Catalyst used are no longer available, while separate Catalyst bugs were affecting the top navigation and shared state across open tabs. No new features in this release; it is entirely compatibility and correctness fixes.

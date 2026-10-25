@@ -28,7 +28,7 @@ catalyst/
   bootdev-extension/       Browser "Load unpacked" target
     manifest.json
     popup.html             Settings popup (toolbar icon)
-    options.html           Settings options page (adds per-board comparisons)
+    options.html           Settings options page (per-board options, learner lists, backup)
     popup.js               Shared settings UI logic
     popup.css              Shared settings UI styles
     icons/                 Extension toolbar icons
@@ -37,7 +37,8 @@ catalyst/
       utils.js             Shared helpers (loaded first)
       settings-schema.js   Canonical settings defaults/labels (shared with the settings pages)
       settings.js          Feature on/off model
-      alltime-seed.js      Bundled seed for Top Observed Learners
+      observed-learners.js Learner-list format shared by the seed, export/import and fetch
+      alltime-seed.js      Bundled seed for Top Observed Learners (generated)
       allTimeRoster.js     Observed-roster storage, discovery, ordering, and refresh
       leaderboard.js       Observed-board rendering and personal leaderboards
       profile.js           Cumulative XP on public profile pages
@@ -52,10 +53,13 @@ catalyst/
       injected.js          Page-context fetch/XHR interceptor
       backup.js            Backup & restore core (options page only, not a content script)
       styles.css
+  data/
+    observed-learners.json The published learner list (generated alongside the bundled seed)
   docs/
     branding/              Logo assets referenced by this README
   scripts/
     package-extension.sh   Builds releases/catalyst-v<version>.zip
+    build-observed-seed.mjs  Rebuilds the learner list and the bundled seed from an export
   CLAUDE.md                Agent guidance and development conventions
   CHANGELOG.md
   README.md
@@ -121,16 +125,16 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 - Every feature below can be turned on or off. **Click the Catalyst toolbar icon** to open the settings popup. Chromium browsers hide extension icons until they're pinned, so pin Catalyst from the puzzle-piece menu if you don't see it; a one-time prompt points this out on first run.
 - The popup toggles the twelve features: Boss event tracker (off by default), Boss event reminders, boss aura alerts, Top Observed Learners, Personal Leaderboards, profile cumulative XP, the Next Lesson shortcut, the Training Grounds level filter, the CLI command shortcuts, the checklist step shortcuts (off by default), code submission confirmation (off by default), and leaderboard comparisons (XP/karma).
-- The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), and per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards).
+- The **options page** (toolbar icon → right-click → *Options*, or the link in the popup) adds finer control: a toggle for each of the four Personal Leaderboards boards (Daily XP, All-Time XP, Daily Karma, All-Time Karma — switching all four off hides the whole section until one is turned back on), per-board control over the XP/karma comparisons (a master toggle plus a checkbox for each of the six boards), and a **Top Observed Learners** section with new-learner alerts (off by default), the published learner list (off by default), and learner-list export and import.
 - Settings sync across your devices (`chrome.storage.sync`; in Brave they stay on-device) and apply instantly — no page reload. Turning a feature off stops any polling or requests it owns, so it adds no load to Boot.dev.
 
 ### Backup & restore
 
-- The options page has a **Backup & restore** section. **Export data** downloads a JSON file (`catalyst-backup-YYYY-MM-DD.json`) containing your settings, tracked Personal Leaderboards learners, XP/karma snapshot history, your own karma comparison series, and boss stats. **Import data** picks a backup file, shows you what's inside, and applies it only after you confirm. The file is created locally and never uploaded anywhere.
-- Importing **merges data and replaces settings** — tracked learners are combined with your current list, snapshot history and boss highs merge (the boss event high, and the aura history behind the event average, only count if the backup is from the currently running event), and your toggles are restored exactly as exported. An import never deletes anything.
+- The options page has a **Backup & restore** section. **Export data** downloads a JSON file (`catalyst-backup-YYYY-MM-DD.json`) containing your settings, tracked Personal Leaderboards learners, XP/karma snapshot history, your own karma comparison series, your Top Observed Learners, and boss stats. **Import data** picks a backup file, shows you what's inside, and applies it only after you confirm. The file is created locally and never uploaded anywhere.
+- Importing **merges data and replaces settings** — tracked learners are combined with your current list, snapshot history and boss highs merge (the boss event high, and the aura history behind the event average, only count if the backup is from the currently running event), Top Observed Learners merge the same way as **Import learners** (the newer XP reading wins and the 100 highest-XP learners are kept), and your toggles are restored exactly as exported. Nothing else is ever deleted.
 - Use it before removing/reinstalling the extension, to move Catalyst to another machine, or to sync settings between devices on Brave (which doesn't sync extension data).
 - One honest caveat: XP/karma snapshot history only lives ~24 hours by design (it measures a rolling window), so a backup restores full comparison accuracy only when imported soon after export. Older backups still restore your learners, settings, and boss stats; the expired measurement window simply rebuilds as you browse.
-- Power users: the file's sections (`settings`, `personalLeaderboard`, `currentUser`, `bossState`) are independent — deleting a section from the JSON before importing skips just that part.
+- Power users: the file's sections (`settings`, `personalLeaderboard`, `currentUser`, `observedLearners`, `bossState`) are independent — deleting a section from the JSON before importing skips just that part.
 
 ### Next Lesson
 
@@ -167,17 +171,22 @@ The extension runs automatically on `www.boot.dev`. No extra sign-in flow is req
 
 - A **Top Observed Learners** section on `https://www.boot.dev/leaderboard`, with role-tier avatar frames and your own row highlighted.
 - **Why it is called "Observed", and why that matters.** Boot.dev removed its all-time leaderboard in August 2026, and a week later removed the per-user rank from profiles too — a profile now shows a band such as "Top 1%" instead. That band is far too coarse to order anybody: when first measured, a single value covered everyone from about 930,000 to 1,740,000 lifetime XP, and even the finest band seen since still covers well over a thousand learners. The leaderboard and profile sources Catalyst has identified therefore no longer provide an exact all-time position. Catalyst orders the learners it has seen by lifetime XP instead. A number on this board means "Nth highest XP among the learners Catalyst has observed" — not "Nth on Boot.dev".
-- **It ships knowing where to start.** The extension bundles a seed of observed high-XP learners, so a new installation shows a full board immediately, with no waiting and no network round-trip.
-- **It keeps its known learners current as you browse.** XP is picked up from responses Boot.dev's own pages already make — every profile you open, every native board — and each time you open or reload the leaderboard Catalyst refreshes a few more known learners. A fresh installation can refresh the bundled roster over a handful of loads; continued browsing also discovers learners the seed did not know about. **At most 12 requests per load**, and at most one such pass every five minutes.
-- **It still discovers new learners, but more slowly.** Any learner Catalyst sees with enough lifetime XP to belong is picked up automatically from Boot.dev's native boards or from a profile you open. Catalyst previously also used Boot.dev's `week` and `month` XP API timeframes, which were the best passive sources for learners approaching the top. Those timeframes are no longer available, and no remaining source reliably lists that group, so new high-XP learners may take longer to appear. Refreshing the bundled seed in future releases can help fill that gap.
-- Learners you already know never disappear on their own. Leaving the leaderboard alone for a month changes nothing; the board is refreshed the next few times you visit.
+- **It ships knowing where to start.** The extension bundles a seed of observed high-XP learners — handles, lifetime XP, and read times only — so a new installation shows a full board immediately, with no waiting. When the board is drawn, Catalyst fetches missing names and avatars for the rows on screen from their public profiles, one every 400 ms. That is at most 25 requests, at most once per row per page session, and only while the leaderboard is open.
+- **It tracks a 100-learner XP roster and shows the top 25.** Anyone Catalyst sees with a readable lifetime XP — on any native board or on a profile you open — joins the roster, however low their XP, until the top-100 XP cut is full; after that a newcomer has to beat the 100th learner. A fast climber is therefore followed from the first sighting, and a learner who drops out is picked up again by the next sighting. You are treated like anyone else in that roster, and appear on the board only if you are among its top 25.
+- **It keeps its known learners current as you browse.** XP is picked up from responses Boot.dev's own pages already make, and each time you open or reload the leaderboard Catalyst refreshes a few more: the 25 shown plus the next five most often, the rest a couple at a time and only when they have not been seen for 12 hours. **At most 12 requests per load** for this, and at most one such pass every five minutes.
+- **New high-XP learners can take a while to appear.** Catalyst previously used Boot.dev's `week` and `month` XP API timeframes, which were the best passive sources for learners approaching the top. Those timeframes are no longer available, and no remaining source reliably lists that group. The learner lists below exist to fill that gap.
+- **Learners never expire from age alone.** Leaving the leaderboard alone for a month changes nothing; the board is refreshed the next few times you visit. A learner leaves the roster only when they fall below the top-100 XP cut.
+- **Sharing learners.** The options page can **export** the learners Catalyst has observed (`catalyst-observed-learners-YYYY-MM-DD.json`) and **import** a list someone sends you. A list holds handles, lifetime XP, and read times only — no names, avatars, settings, or XP/karma history; your own handle is in it only if your XP places you among its 100 learners. An import shows what it would change, merges with yours, keeps the 100 highest-XP learners from both, and never lets an older XP reading replace a newer one. It is separate from **Backup & restore**, so sharing a learner list never shares your settings or other Catalyst history. Backups include these learners too, so moving Catalyst to another browser needs only a backup.
+- **The published learner list** (options page, off by default). Once a day Catalyst downloads the curated list kept in this repository (`data/observed-learners.json`) and merges it the same way as an import, so new top learners reach your board between releases. It is one request to GitHub and sends no Catalyst or Boot.dev user data.
+- **New-learner alerts** (options page, off by default). A short notice when someone Catalyst has not shown on the board before enters it while you browse. Learners that arrive in a seed, an imported list or the published list never trigger it.
 - The subtitle shows **your own percentile** — the remaining all-time standing signal Boot.dev publishes through public stats — against the current total number of learners. Catalyst displays it as a percentile and never converts it into an exact rank.
 - Hover any row to see when its XP was last read.
 
 #### Personal Leaderboards
 
 - Also on the leaderboard page, a **Personal Leaderboards** section lets you track specific Boot.dev handles across four side-by-side boards: **Daily XP**, **All-Time XP**, **Daily Karma**, and **All-Time Karma**. Handles are stored in `chrome.storage.local`. Each board can be toggled individually from the options page; all four off hides the section entirely.
-- On any public profile page (`https://www.boot.dev/u/<username>`), an **Add to Personal Leaderboards** button lets you save that user directly.
+- **You are added automatically** once Catalyst knows your handle, since every row is a comparison against you. Remove yourself from the chip list and Catalyst remembers that and leaves you off; adding yourself back by hand undoes it.
+- On any other user's public profile page (`https://www.boot.dev/u/<username>`), an **Add to Personal Leaderboards** button lets you save that user directly.
 - **All-Time XP** uses public profile XP. **All-Time Karma** uses public stats karma, the same figure shown on that user's profile page. Both are exact.
 - **Boot.dev exposes two slightly different karma totals for the same user.** Public profile/stats karma and the native Top Community Members board differed by 0-44 points across the accounts tested, with a stable gap per user. Catalyst uses the profile/stats figure throughout Personal Leaderboards and the native board's figure for comparisons on that board, so each comparison is internally consistent. This means Personal Leaderboards' All-Time Karma value may be a few points lower than the native board.
 - **Daily XP** is a **best-effort estimate for users other than yourself**, because Boot.dev's daily board is a rolling last-24-hours window and there is no public API for another user's daily XP unless they are on a daily leaderboard (global top-25, or your league's). Each value is labeled with how it was obtained (the label sits to the left of the value), in decreasing accuracy:
@@ -254,7 +263,7 @@ Catalyst is built to keep your data on your device:
 
 - **It reads only your own Boot.dev session data.** The extension observes the JSON responses that the Boot.dev page already fetches with your existing session (leaderboards, public profiles, boss progress, dashboard content, lesson history) and, when a feature needs data the page has not already fetched, requests the relevant Boot.dev endpoint itself. That includes public leaderboard/profile data and, if submit confirmation is enabled and a lesson's risk state is still unknown, that lesson's own history endpoint. It never asks for or handles your password, and your auth token is never stored, logged, or copied out of the page.
 - **It stores only settings and small caches locally.** Feature on/off flags live in `chrome.storage.sync` (so they roam across your browser profile; Brave keeps them on-device) as plain booleans — no personal data. Small caches (boss state, saved personal-leaderboard handles, the observed lifetime-XP roster and learner count, your current handle, and the next-lesson link) live in `chrome.storage.local` on your machine.
-- **It transmits nothing off-device** — with one opt-in exception: if you enable **Automatic update checks**, it makes one request a day to GitHub's public API to compare version numbers. That request contains no personal data. It is off by default.
+- **It transmits nothing off-device** — with two opt-in exceptions, both off by default and both requests to GitHub's public API that carry no personal data: **Automatic update checks** (once a day, compares version numbers) and **the published learner list** (once a day, downloads the list kept in this repository). Exported files are created locally and go wherever you send them; Catalyst never uploads them.
 - **Permissions are minimal:** `storage`, and host access to `https://www.boot.dev/*` only. Catalyst adds no analytics and no tracking.
 
 ## Attribution / License
@@ -272,6 +281,7 @@ cd bootdev-extension
 node --check src/utils.js
 node --check src/settings-schema.js
 node --check src/settings.js
+node --check src/observed-learners.js
 node --check src/alltime-seed.js
 node --check src/allTimeRoster.js
 node --check src/leaderboard.js
@@ -299,7 +309,11 @@ node ../scripts/check_alltime_roster.mjs
 node ../scripts/check_snapshot_series.mjs
 node ../scripts/check_profile_anchor.mjs
 node ../scripts/check_cross_tab_merge.mjs
+node ../scripts/check_observed_learners.mjs
+node ../scripts/check_personal_self.mjs
 ```
+
+To refresh the bundled seed and the published learner list, export the learners from the options page and run `node scripts/build-observed-seed.mjs <exported-file.json>` from the repo root; it writes `data/observed-learners.json` and `bootdev-extension/src/alltime-seed.js` together.
 
 To build a release zip, run `bash scripts/package-extension.sh` from the repo root. See [CLAUDE.md](CLAUDE.md) for architecture details and agent guidance.
 
