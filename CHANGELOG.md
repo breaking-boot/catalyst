@@ -1,4 +1,21 @@
 # Changelog
+## v0.16.1 - New rank frames
+
+Boot.dev updated its rank tiers and avatar frames. Catalyst now uses the new frames and matches the sizing used by Boot.dev's native leaderboard.
+
+### Fixed
+
+* **Updated rank frames.** Top Observed Learners and Personal Leaderboards now use Boot.dev's new WebP frames and per-tier sizing. The renamed and reordered ranks previously caused six role names to resolve to the wrong frames. Catalyst now selects frames by level when available, with the updated role-name map as a fallback.
+
+### Changed
+
+* **Refreshed learner seed.** The bundled seed and published learner list have been regenerated from a new export of 100 observed learners.
+
+### Notes
+
+* No new permissions, settings, or storage keys.
+* The previous frame-drift check missed the update because Boot.dev kept the old PNG files online. It now compares the frame paths and scales rendered by Boot.dev's leaderboard against Catalyst's bundled values, logging a console warning when they differ or when native frame elements can no longer be detected.
+
 ## v0.16.0 - Shareable observed learners
 
 Top Observed Learners now follows a 100-learner XP roster instead of a few dozen, admits any sighting until the top-100 cut is full, and can be shared: export the learners you have observed, import a list someone sends you, or opt in to a curated list published in this repository. The bundled seed now contains handles, lifetime XP, and read times only. Personal Leaderboards adds you automatically, and Catalyst's leaderboard cells match Boot.dev's new look.
