@@ -100,7 +100,7 @@ check(
 );
 check(
   "a promotion changes the signature",
-  leaderAvatarSignature({ ...afterProfile, Role: "mage" }, afterProfile.name) !==
+  leaderAvatarSignature({ ...afterProfile, Role: "mage", Level: 95 }, afterProfile.name) !==
     leaderAvatarSignature(afterProfile, afterProfile.name),
   true
 );
@@ -118,6 +118,52 @@ check("role resolves its frame index", getRoleFrameIndex({ Role: "archmage" }), 
 check("level-only entry resolves a frame index", getRoleFrameIndex({ Level: 95 }), 8);
 check("level below the first tier resolves none", getRoleFrameIndex({ Level: 4 }), -1);
 check("unknown entry resolves none", getRoleFrameIndex({}), -1);
+// Boot.dev picks the frame from level. The role names were re-ordered when the
+// tiers were replaced (2026-11-13), so a role stored under the old scheme must
+// not override the level, and the name map follows the current order.
+check("level wins over a role name from the old scheme", getRoleFrameIndex({ Role: "Pupil", Level: 25 }), 1);
+check(
+  "current role order resolves when no level is known",
+  ["Pupil", "Apprentice", "Scholar", "Acolyte", "Disciple", "Arcanist", "Evoker", "Sorcerer", "Mage", "Archmage"].map(
+    (Role) => getRoleFrameIndex({ Role })
+  ),
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+);
+// num(null) is 0, which would read a missing level as "below the first tier".
+check("a null level falls through to the role", getRoleFrameIndex({ Role: "Apprentice", Level: null }), 1);
+check("level bands match the tiers", [10, 19, 20, 99, 100, 220].map((Level) => getRoleFrameIndex({ Level })), [0, 0, 1, 8, 9, 9]);
+check("bundled frame is the webp asset", hooks.getRoleFrameUrl({ Level: 100 }), "chrome-extension://catalyst-test/assets/frames/9.webp");
+
+// --- frame drift: native frames compared with the bundled set ----------------
+// Probing Boot.dev's old URLs could not see the 2026-11-13 art change (the old
+// files kept answering 200), so the check reads what the leaderboard renders.
+
+const { findNativeFrameDrift } = hooks;
+const nativeArchmage = { src: "/_nuxt/9.Boakwkj9.webp", transform: "scale(1.25)" };
+check(
+  "frames matching the bundled set report nothing",
+  findNativeFrameDrift([nativeArchmage, { src: "/_nuxt/0.PXCuyib3.webp", transform: "scale(1.65)" }]),
+  []
+);
+check(
+  "an absolute src resolves to the same path",
+  findNativeFrameDrift([{ ...nativeArchmage, src: "https://www.boot.dev/_nuxt/9.Boakwkj9.webp" }]),
+  []
+);
+check(
+  "replaced art is reported once per path",
+  findNativeFrameDrift([
+    { src: "/_nuxt/9.Cmx5X891.png", transform: "scale(1.25)" },
+    { src: "/_nuxt/9.Cmx5X891.png", transform: "scale(1.25)" },
+  ]),
+  ["unrecognized frame /_nuxt/9.Cmx5X891.png"]
+);
+check(
+  "a changed tier scale is reported",
+  findNativeFrameDrift([{ ...nativeArchmage, transform: "scale(1.3)" }]),
+  ["tier 9 scaled 1.3, Catalyst uses 1.25"]
+);
+check("a frame with no inline scale reports nothing", findNativeFrameDrift([{ src: nativeArchmage.src }]), []);
 check(
   "role and equivalent level agree",
   leaderAvatarSignature({ ...afterProfile, Role: undefined }, afterProfile.name) ===

@@ -60,70 +60,66 @@ const DAILY_BOARD_PERSIST_TTL_MS = 5 * 60 * 1000;
 // Boot.dev visual asset used with permission.
 // Not covered by this repository's MIT license. See ATTRIBUTION.md.
 //
-// Avatar role frames, indexed to match ROLE_FRAME_INDEX_BY_ROLE below. Bundled
-// locally (assets/frames/<index>.png) and resolved to extension URLs so the
-// fallback never depends on Boot.dev's build-hashed asset paths, which are
-// regenerated on every redeploy. Only used when the API provides no explicit
-// frame URL (see getExplicitFrameUrl); if Boot.dev redesigns the frames the
-// bundled copies render slightly stale rather than breaking.
+// Avatar role frames, indexed by tier (see getRoleFrameIndex). Bundled
+// locally (assets/frames/<index>.webp, Boot.dev's 160px leaderboard variant)
+// and resolved to extension URLs so the fallback never depends on Boot.dev's
+// build-hashed asset paths, which are regenerated on every redeploy. Only used
+// when the API provides no explicit frame URL (see getExplicitFrameUrl); if
+// Boot.dev redesigns the frames the bundled copies render slightly stale rather
+// than breaking.
 const ROLE_FRAME_URLS = Array.from({ length: 10 }, (_, i) =>
-  chrome.runtime.getURL(`assets/frames/${i}.png`)
+  chrome.runtime.getURL(`assets/frames/${i}.webp`)
 );
-// Dev-only rot-detection baseline (NOT used for rendering). These are the
-// Boot.dev source URLs the bundled assets/frames PNGs were copied from. Nuxt/Vite
-// content-hash asset filenames, so a URL keeps resolving as long as the image
-// bytes are unchanged and 404s once the art changes. checkFrameAssetsForRot()
-// probes these when the be_frame_debug flag is set so the maintainer gets a local
-// heads-up to refresh the bundled copies. Keep in sync if the bundle is updated.
-const FRAME_SOURCE_URLS = [
-  "https://www.boot.dev/_nuxt/0.B6ueYVE9.png",
-  "https://www.boot.dev/_nuxt/1.DnmxFjr3.png",
-  "https://www.boot.dev/_nuxt/2.Cijf5c5Q.png",
-  "https://www.boot.dev/_nuxt/3.CikePfbF.png",
-  "https://www.boot.dev/_nuxt/4.B5xh_zDj.png",
-  "https://www.boot.dev/_nuxt/5.0Do8PVSr.png",
-  "https://www.boot.dev/_nuxt/6.4Va-k18V.png",
-  "https://www.boot.dev/_nuxt/7.BsonWGZg.png",
-  "https://www.boot.dev/_nuxt/8.CJ6g5ANN.png",
-  "https://www.boot.dev/_nuxt/9.Cmx5X891.png",
+// Boot.dev's paths for the frames bundled in assets/frames, by tier. Not used
+// for rendering: checkNativeFrameDrift compares the frames the native
+// leaderboard renders against them. Nuxt content-hashes asset filenames, so
+// new art always arrives under a new path. Keep in sync with assets/frames and
+// FRAME_DISPLAY_SCALE.
+const NATIVE_FRAME_PATHS = [
+  "/_nuxt/0.PXCuyib3.webp",
+  "/_nuxt/1.tmEtMTh8.webp",
+  "/_nuxt/2.8HZaMFXR.webp",
+  "/_nuxt/3.PqTsKOHJ.webp",
+  "/_nuxt/4.DrjZY_GF.webp",
+  "/_nuxt/5.C0Z-R7sl.webp",
+  "/_nuxt/6.BqxoyPw3.webp",
+  "/_nuxt/7.N427JSkj.webp",
+  "/_nuxt/8.BO0A1Od0.webp",
+  "/_nuxt/9.Boakwkj9.webp",
 ];
 const FRAME_DEBUG_KEY = "be_frame_debug";
 let frameDebugEnabled = false;
-let frameRotChecked = false; // probe at most once per page load
+let frameDriftChecked = false; // at most once per page load
 
+// Fallback only, for an entry with a role but no readable level: Boot.dev picks
+// the frame from level (see getRoleFrameIndex). The names were re-ordered as
+// well as renamed when the tiers were replaced (2026-11-13: pupil moved below
+// apprentice, scholar moved down, sage/archsage became arcanist/evoker), so a
+// stored role written under the old scheme can name the wrong tier.
 const ROLE_FRAME_INDEX_BY_ROLE = {
-  apprentice: 0,
-  pupil: 1,
-  acolyte: 2,
-  disciple: 3,
-  scholar: 4,
-  sorcerer: 5,
-  sage: 6,
-  archsage: 7,
+  pupil: 0,
+  apprentice: 1,
+  scholar: 2,
+  acolyte: 3,
+  disciple: 4,
+  arcanist: 5,
+  evoker: 6,
+  sorcerer: 7,
   mage: 8,
   archmage: 9,
 };
 
-// Per-tier avatar geometry, indexed like ROLE_FRAME_URLS. Boot.dev keeps every
-// rank badge the same overall size by varying ring thickness: low tiers have a
-// thin ring in a small footprint, archmage a thick ring filling the frame. The
-// bundled PNGs reflect that — the opaque ring's outer diameter grows from ~146px
-// (apprentice) to ~253px (archmage) within the same 256px canvas, while the
-// transparent hole stays ~42–46%. Scaling every canvas uniformly therefore makes
-// low-tier badges render small. These values (measured from the PNGs) scale each
-// frame so the ring outer lands at a consistent ~49px and size the inner avatar
-// to that frame's hole, so combos match across tiers like the native site.
-// FRAME_DISPLAY_SCALE is the CSS transform scale for the frame <img>;
-// FRAME_INNER_PCT is the inner avatar diameter as a % of the 40px avatar box.
-// Values are trimmed ~10% of the boost above Archmage's 1.25 (Archmage is
-// unchanged, the anchor that already matched native); low tiers were rendering
-// a touch larger than the native ring, so their outer edge is pulled in slightly.
-const FRAME_DISPLAY_SCALE = [2.08, 2.01, 1.73, 1.68, 1.67, 1.54, 1.57, 1.37, 1.33, 1.25];
-// Inner % comes from each frame's fully-opaque hole, but the thick top-tier rings
-// have a soft inner edge, so their true visual hole is a little larger than measured
-// and the avatar left a small gap. Bump the top tiers (archsage, mage, archmage) to
-// close it; the lower tiers already fill their ring cleanly.
-const FRAME_INNER_PCT = [96, 92, 80, 77, 77, 69, 70, 64, 59, 57];
+// Per-tier avatar geometry, indexed like ROLE_FRAME_URLS, copied from Boot.dev's
+// own avatar component (2026-11-13). Native places the frame over the whole box
+// and the avatar at 46% of it, centred, then scales BOTH by the tier's factor —
+// low tiers have a thinner ring, so they are scaled up more to keep every combo
+// the same overall size. The native leaderboard box is 40px like ours, so the
+// values carry over unchanged: FRAME_DISPLAY_SCALE is the CSS transform scale
+// for the frame <img>, and FRAME_INNER_PCT is the inner avatar diameter as a %
+// of the 40px box (which is not itself scaled, so the factor is folded in).
+const FRAME_DISPLAY_SCALE = [1.65, 1.6, 1.5, 1.5, 1.35, 1.35, 1.3, 1.3, 1.25, 1.25];
+const FRAME_HOLE_PCT = 46;
+const FRAME_INNER_PCT = FRAME_DISPLAY_SCALE.map((scale) => Math.round(FRAME_HOLE_PCT * scale * 10) / 10);
 const DEFAULT_INNER_PCT = 62.5; // legacy fixed size, for an unrecognized frame
 
 // Live boards only: each of these holds a response received in this session.
@@ -242,52 +238,95 @@ function getExplicitFrameUrl(entry) {
   return normalizeAssetUrl(url);
 }
 
+// Level first, as Boot.dev's leaderboard row does: one tier per 10 levels from
+// level 10, capped at archmage (100+), and no frame below level 10. The role
+// name is only a fallback because Boot.dev has renamed and re-ordered it.
+// observedNum, not num: a missing level must reach the role fallback rather
+// than read as level 0.
 function getRoleFrameIndex(entry) {
-  const role = normalizeText(readField(entry, "Role") || entry?.User?.Role)
-    .toLowerCase()
-    .replace(/[\s_-]+/g, "");
-  if (ROLE_FRAME_INDEX_BY_ROLE[role] != null) return ROLE_FRAME_INDEX_BY_ROLE[role];
-
-  const level = num(readField(entry, "Level") ?? entry?.User?.Level);
+  const level = observedNum(readField(entry, "Level") ?? entry?.User?.Level);
   if (level != null) {
     const idx = Math.floor(level / 10) - 1;
     if (idx < 0) return -1;
     return Math.min(idx, ROLE_FRAME_URLS.length - 1);
   }
 
+  const role = normalizeText(readField(entry, "Role") || entry?.User?.Role)
+    .toLowerCase()
+    .replace(/[\s_-]+/g, "");
+  if (ROLE_FRAME_INDEX_BY_ROLE[role] != null) return ROLE_FRAME_INDEX_BY_ROLE[role];
+
   return -1;
 }
 
 // ---------------------------------------------------------------------------
-// Frame rot detection (opt-in, maintainer-only)
+// Frame drift detection
 // ---------------------------------------------------------------------------
-// Boot.dev's API never sends a frame URL (the frame is derived from Role/Level),
+// Boot.dev's API never sends a frame URL (the frame is derived from level),
 // so the bundled assets/frames copies are always the source. They can't 404, but
-// they can drift if Boot.dev redesigns the art. This probe lets the maintainer
-// notice that drift locally without ever surfacing anything to ordinary users:
-// it does nothing unless `be_frame_debug` is set to true in chrome.storage.local.
+// they go stale when Boot.dev replaces the art. The check reads the frames the
+// native leaderboard renders, because probing Boot.dev's old URLs cannot see
+// this: superseded files keep resolving after the build stops referencing them
+// (the previous PNG frames still answered 200 when the webp set replaced them
+// on 2026-11-13). It reads attributes only, never data. The console warning
+// is always on, like the other tripwires; the toast needs `be_frame_debug` set
+// to true in chrome.storage.local, so ordinary users never see one.
 async function loadFrameDebugFlag() {
   frameDebugEnabled = Boolean(await chromeGet(FRAME_DEBUG_KEY));
 }
 
-function checkFrameAssetsForRot() {
-  if (!frameDebugEnabled || frameRotChecked || enhancerStopped) return;
-  if (!isLeaderboardPage()) return;
-  frameRotChecked = true;
+// One problem per distinct mismatch between the rendered native frames
+// ({ src, transform }) and the bundled set: a path Catalyst did not bundle, or
+// a tier scaled differently from FRAME_DISPLAY_SCALE.
+function findNativeFrameDrift(frames) {
+  const problems = new Set();
+  for (const { src, transform } of frames) {
+    if (!src) continue;
+    let path;
+    try {
+      path = new URL(src, "https://www.boot.dev").pathname;
+    } catch {
+      continue;
+    }
+    const tier = NATIVE_FRAME_PATHS.indexOf(path);
+    if (tier < 0) {
+      problems.add(`unrecognized frame ${path}`);
+      continue;
+    }
+    const scale = Number(/scale\(\s*([\d.]+)\s*\)/.exec(transform || "")?.[1]);
+    if (Number.isFinite(scale) && scale !== FRAME_DISPLAY_SCALE[tier]) {
+      problems.add(`tier ${tier} scaled ${scale}, Catalyst uses ${FRAME_DISPLAY_SCALE[tier]}`);
+    }
+  }
+  return [...problems];
+}
 
-  FRAME_SOURCE_URLS.forEach((url, index) => {
-    // A same-origin <img> probe: load succeeds while the content hash is intact,
-    // and errors once Boot.dev ships different art under a new hash.
-    const probe = new Image();
-    probe.onerror = () => {
-      console.warn(
-        `[catalyst] role frame ${index} no longer resolves upstream (${url}); ` +
-        "Boot.dev likely changed the art. Re-download assets/frames and update FRAME_SOURCE_URLS."
-      );
-      toast(`Role frame ${index} changed on Boot.dev. Refresh the bundled frames when convenient.`);
-    };
-    probe.src = url;
-  });
+function checkNativeFrameDrift() {
+  if (frameDriftChecked || enhancerStopped || !isLeaderboardPage()) return;
+  const frames = document.querySelectorAll('img[alt="role frame"]');
+  if (!frames.length) {
+    // Native cells render every framed avatar with its frame, so a board's worth
+    // of avatars and no frames means the landmark moved and this check is blind.
+    const avatars = document.querySelectorAll('img[alt="user avatar"]').length;
+    if (avatars >= 10) {
+      frameDriftChecked = true;
+      warnOnce("frames:anchor", "No native rank frames found on the leaderboard, so frame drift can no longer be detected.");
+    }
+    return;
+  }
+  frameDriftChecked = true;
+  const problems = findNativeFrameDrift(
+    [...frames].map((img) => ({ src: img.getAttribute("src"), transform: img.style.transform }))
+  );
+  if (!problems.length) return;
+  warnOnce(
+    "frames:drift",
+    `Boot.dev's leaderboard frames differ from the bundled set (${problems.join("; ")}). ` +
+    "Refresh assets/frames, NATIVE_FRAME_PATHS and FRAME_DISPLAY_SCALE."
+  );
+  if (frameDebugEnabled) {
+    toast("Boot.dev's rank frames changed. Refresh the bundled frames when convenient.");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2601,6 +2640,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     renderLeaderAvatar,
     getRoleFrameIndex,
     getRoleFrameUrl,
+    findNativeFrameDrift,
     getAvatarUrl,
     getLeaderboardEntries,
     getHandle,

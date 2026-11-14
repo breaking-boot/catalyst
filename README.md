@@ -32,7 +32,7 @@ catalyst/
     popup.js               Shared settings UI logic
     popup.css              Shared settings UI styles
     icons/                 Extension toolbar icons
-    assets/frames/         Bundled avatar role frames (0-9.png)
+    assets/frames/         Bundled avatar role frames (0-9.webp)
     src/
       utils.js             Shared helpers (loaded first)
       settings-schema.js   Canonical settings defaults/labels (shared with the settings pages)
