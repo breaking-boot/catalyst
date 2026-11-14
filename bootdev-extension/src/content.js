@@ -380,7 +380,7 @@ function startDomScan() {
     ensureLeaderboardUiState();
     ensureTrainingGroundsUiState();
     ensureProfileUiState();
-    checkFrameAssetsForRot();
+    checkNativeFrameDrift();
   }, 2000);
 }
 

@@ -70,31 +70,26 @@ const DAILY_BOARD_PERSIST_TTL_MS = 5 * 60 * 1000;
 const ROLE_FRAME_URLS = Array.from({ length: 10 }, (_, i) =>
   chrome.runtime.getURL(`assets/frames/${i}.webp`)
 );
-// Dev-only rot-detection baseline (NOT used for rendering). These are the
-// Boot.dev source URLs the bundled assets/frames PNGs were copied from. Nuxt/Vite
-// content-hash asset filenames, so a URL keeps resolving as long as the image
-// bytes are unchanged and 404s once the art changes. checkFrameAssetsForRot()
-// probes these when the be_frame_debug flag is set so the maintainer gets a local
-// heads-up to refresh the bundled copies. Keep in sync if the bundle is updated.
-//
-// A superseded URL can keep resolving after Boot.dev stops referencing it (the
-// previous PNG frames still answered 200 when the webp set replaced them on
-// 2026-11-13), so this catches changed art only once the old file is removed.
-const FRAME_SOURCE_URLS = [
-  "https://www.boot.dev/_nuxt/0.PXCuyib3.webp",
-  "https://www.boot.dev/_nuxt/1.tmEtMTh8.webp",
-  "https://www.boot.dev/_nuxt/2.8HZaMFXR.webp",
-  "https://www.boot.dev/_nuxt/3.PqTsKOHJ.webp",
-  "https://www.boot.dev/_nuxt/4.DrjZY_GF.webp",
-  "https://www.boot.dev/_nuxt/5.C0Z-R7sl.webp",
-  "https://www.boot.dev/_nuxt/6.BqxoyPw3.webp",
-  "https://www.boot.dev/_nuxt/7.N427JSkj.webp",
-  "https://www.boot.dev/_nuxt/8.BO0A1Od0.webp",
-  "https://www.boot.dev/_nuxt/9.Boakwkj9.webp",
+// Boot.dev's paths for the frames bundled in assets/frames, by tier. Not used
+// for rendering: checkNativeFrameDrift compares the frames the native
+// leaderboard renders against them. Nuxt content-hashes asset filenames, so
+// new art always arrives under a new path. Keep in sync with assets/frames and
+// FRAME_DISPLAY_SCALE.
+const NATIVE_FRAME_PATHS = [
+  "/_nuxt/0.PXCuyib3.webp",
+  "/_nuxt/1.tmEtMTh8.webp",
+  "/_nuxt/2.8HZaMFXR.webp",
+  "/_nuxt/3.PqTsKOHJ.webp",
+  "/_nuxt/4.DrjZY_GF.webp",
+  "/_nuxt/5.C0Z-R7sl.webp",
+  "/_nuxt/6.BqxoyPw3.webp",
+  "/_nuxt/7.N427JSkj.webp",
+  "/_nuxt/8.BO0A1Od0.webp",
+  "/_nuxt/9.Boakwkj9.webp",
 ];
 const FRAME_DEBUG_KEY = "be_frame_debug";
 let frameDebugEnabled = false;
-let frameRotChecked = false; // probe at most once per page load
+let frameDriftChecked = false; // at most once per page load
 
 // Fallback only, for an entry with a role but no readable level: Boot.dev picks
 // the frame from level (see getRoleFrameIndex). The names were re-ordered as
@@ -265,35 +260,73 @@ function getRoleFrameIndex(entry) {
 }
 
 // ---------------------------------------------------------------------------
-// Frame rot detection (opt-in, maintainer-only)
+// Frame drift detection
 // ---------------------------------------------------------------------------
 // Boot.dev's API never sends a frame URL (the frame is derived from level),
 // so the bundled assets/frames copies are always the source. They can't 404, but
-// they can drift if Boot.dev redesigns the art. This probe lets the maintainer
-// notice that drift locally without ever surfacing anything to ordinary users:
-// it does nothing unless `be_frame_debug` is set to true in chrome.storage.local.
+// they go stale when Boot.dev replaces the art. The check reads the frames the
+// native leaderboard renders, because probing Boot.dev's old URLs cannot see
+// this: superseded files keep resolving after the build stops referencing them
+// (the previous PNG frames still answered 200 when the webp set replaced them
+// on 2026-11-13). It reads attributes only, never data. The console warning
+// is always on, like the other tripwires; the toast needs `be_frame_debug` set
+// to true in chrome.storage.local, so ordinary users never see one.
 async function loadFrameDebugFlag() {
   frameDebugEnabled = Boolean(await chromeGet(FRAME_DEBUG_KEY));
 }
 
-function checkFrameAssetsForRot() {
-  if (!frameDebugEnabled || frameRotChecked || enhancerStopped) return;
-  if (!isLeaderboardPage()) return;
-  frameRotChecked = true;
+// One problem per distinct mismatch between the rendered native frames
+// ({ src, transform }) and the bundled set: a path Catalyst did not bundle, or
+// a tier scaled differently from FRAME_DISPLAY_SCALE.
+function findNativeFrameDrift(frames) {
+  const problems = new Set();
+  for (const { src, transform } of frames) {
+    if (!src) continue;
+    let path;
+    try {
+      path = new URL(src, "https://www.boot.dev").pathname;
+    } catch {
+      continue;
+    }
+    const tier = NATIVE_FRAME_PATHS.indexOf(path);
+    if (tier < 0) {
+      problems.add(`unrecognized frame ${path}`);
+      continue;
+    }
+    const scale = Number(/scale\(\s*([\d.]+)\s*\)/.exec(transform || "")?.[1]);
+    if (Number.isFinite(scale) && scale !== FRAME_DISPLAY_SCALE[tier]) {
+      problems.add(`tier ${tier} scaled ${scale}, Catalyst uses ${FRAME_DISPLAY_SCALE[tier]}`);
+    }
+  }
+  return [...problems];
+}
 
-  FRAME_SOURCE_URLS.forEach((url, index) => {
-    // A same-origin <img> probe: load succeeds while the content hash is intact,
-    // and errors once Boot.dev ships different art under a new hash.
-    const probe = new Image();
-    probe.onerror = () => {
-      console.warn(
-        `[catalyst] role frame ${index} no longer resolves upstream (${url}); ` +
-        "Boot.dev likely changed the art. Re-download assets/frames and update FRAME_SOURCE_URLS."
-      );
-      toast(`Role frame ${index} changed on Boot.dev. Refresh the bundled frames when convenient.`);
-    };
-    probe.src = url;
-  });
+function checkNativeFrameDrift() {
+  if (frameDriftChecked || enhancerStopped || !isLeaderboardPage()) return;
+  const frames = document.querySelectorAll('img[alt="role frame"]');
+  if (!frames.length) {
+    // Native cells render every framed avatar with its frame, so a board's worth
+    // of avatars and no frames means the landmark moved and this check is blind.
+    const avatars = document.querySelectorAll('img[alt="user avatar"]').length;
+    if (avatars >= 10) {
+      frameDriftChecked = true;
+      warnOnce("frames:anchor", "No native rank frames found on the leaderboard, so frame drift can no longer be detected.");
+    }
+    return;
+  }
+  frameDriftChecked = true;
+  const problems = findNativeFrameDrift(
+    [...frames].map((img) => ({ src: img.getAttribute("src"), transform: img.style.transform }))
+  );
+  if (!problems.length) return;
+  warnOnce(
+    "frames:drift",
+    `Boot.dev's leaderboard frames differ from the bundled set (${problems.join("; ")}). ` +
+    "Refresh assets/frames, NATIVE_FRAME_PATHS and FRAME_DISPLAY_SCALE."
+  );
+  if (frameDebugEnabled) {
+    toast("Boot.dev's rank frames changed. Refresh the bundled frames when convenient.");
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2607,6 +2640,7 @@ if (typeof window !== "undefined" && window.__BOOTDEV_ENHANCER_TEST__) {
     renderLeaderAvatar,
     getRoleFrameIndex,
     getRoleFrameUrl,
+    findNativeFrameDrift,
     getAvatarUrl,
     getLeaderboardEntries,
     getHandle,
