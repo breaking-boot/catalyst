@@ -5,7 +5,7 @@ This repository's source code is licensed under the terms in [LICENSE](LICENSE).
 The following assets bundled with this extension are not covered by that license:
 
 * `assets/maptexture2.webp` — Boot.dev map background
-* `assets/frames/*.png` — Boot.dev rank border images
+* `assets/frames/*.webp` — Boot.dev rank border images
 
 These assets are owned by Boot.dev and are included in this project with permission. They are bundled only so the extension can match the Boot.dev visual style without relying on fragile references to deploy-generated site assets.
 

@@ -100,7 +100,7 @@ check(
 );
 check(
   "a promotion changes the signature",
-  leaderAvatarSignature({ ...afterProfile, Role: "mage" }, afterProfile.name) !==
+  leaderAvatarSignature({ ...afterProfile, Role: "mage", Level: 95 }, afterProfile.name) !==
     leaderAvatarSignature(afterProfile, afterProfile.name),
   true
 );
@@ -118,6 +118,21 @@ check("role resolves its frame index", getRoleFrameIndex({ Role: "archmage" }), 
 check("level-only entry resolves a frame index", getRoleFrameIndex({ Level: 95 }), 8);
 check("level below the first tier resolves none", getRoleFrameIndex({ Level: 4 }), -1);
 check("unknown entry resolves none", getRoleFrameIndex({}), -1);
+// Boot.dev picks the frame from level. The role names were re-ordered when the
+// tiers were replaced (2026-11-13), so a role stored under the old scheme must
+// not override the level, and the name map follows the current order.
+check("level wins over a role name from the old scheme", getRoleFrameIndex({ Role: "Pupil", Level: 25 }), 1);
+check(
+  "current role order resolves when no level is known",
+  ["Pupil", "Apprentice", "Scholar", "Acolyte", "Disciple", "Arcanist", "Evoker", "Sorcerer", "Mage", "Archmage"].map(
+    (Role) => getRoleFrameIndex({ Role })
+  ),
+  [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+);
+// num(null) is 0, which would read a missing level as "below the first tier".
+check("a null level falls through to the role", getRoleFrameIndex({ Role: "Apprentice", Level: null }), 1);
+check("level bands match the tiers", [10, 19, 20, 99, 100, 220].map((Level) => getRoleFrameIndex({ Level })), [0, 0, 1, 8, 9, 9]);
+check("bundled frame is the webp asset", hooks.getRoleFrameUrl({ Level: 100 }), "chrome-extension://catalyst-test/assets/frames/9.webp");
 check(
   "role and equivalent level agree",
   leaderAvatarSignature({ ...afterProfile, Role: undefined }, afterProfile.name) ===
